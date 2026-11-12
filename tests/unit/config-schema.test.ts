@@ -309,6 +309,41 @@ describe('SystematicConfigSchema', () => {
       expect(result.success).toBe(false)
     })
 
+    test('accepts named groups of project paths', () => {
+      const result = SystematicConfigSchema.safeParse({
+        connect: { groups: { 'harness-tools': ['~/a', '~/b'] } },
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.connect?.groups).toEqual({
+          'harness-tools': ['~/a', '~/b'],
+        })
+      }
+    })
+
+    test.each([
+      ['an uppercase group name', { A_b: ['/a'] }],
+      ['a leading-hyphen group name', { '-a': ['/a'] }],
+      ['an empty group name', { '': ['/a'] }],
+      ['a group with no members', { team: [] }],
+      ['a non-string member', { team: [1] }],
+    ])('rejects %s at the connect path', (_label, groups) => {
+      const result = SystematicConfigSchema.safeParse({ connect: { groups } })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(firstIssue(result.error.issues).path[0]).toBe('connect')
+      }
+    })
+
+    test('rejects 33 groups', () => {
+      const groups = Object.fromEntries(
+        Array.from({ length: 33 }, (_, i) => [`g${i}`, ['/a']]),
+      )
+      expect(
+        SystematicConfigSchema.safeParse({ connect: { groups } }).success,
+      ).toBe(false)
+    })
+
     test('the whole block is tagged project-or-higher', () => {
       const connectSchema = unwrapForMeta(SystematicConfigSchema.shape.connect)
       expect(z.globalRegistry.get(connectSchema)?.trust).toBe(

@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "runId": "20261112T040000Z-1a2b3c4d",
+  "createdAt": "2026-11-12T04:00:00.000Z",
+  "outcome": "complete",
+  "degradeReasons": [],
+  "mode": "headless",
+  "host": {
+    "supported": true,
+    "host": "opencode-v2",
+    "version": "2.2.6"
+  },
+  "selection": {
+    "kind": "all"
+  },
+  "projects": [
+    {
+      "name": "acme__source",
+      "root": "/runner/work/connect/checkouts/acme__source",
+      "key": "a654dc9722c3",
+      "repo": "acme/source",
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "files": 3,
+      "citationsUnsupported": false,
+      "citationsChecked": 0,
+      "citationsTruncated": false,
+      "truncated": false
+    },
+    {
+      "name": "acme__target",
+      "root": "/runner/work/connect/checkouts/acme__target",
+      "key": "cf2a193d0b3c",
+      "repo": "acme/target",
+      "commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "files": 3,
+      "citationsUnsupported": false,
+      "citationsChecked": 0,
+      "citationsTruncated": false,
+      "truncated": false
+    }
+  ],
+  "unmatched": [],
+  "unread": [],
+  "counts": {
+    "candidates": 2
+  },
+  "candidateBlock": {
+    "schemaVersion": 1,
+    "candidates": [
+      {
+        "id": "08605611169a43e3d2fa9b28f93b8273b88abf427da8b8add360124adeafd34b",
+        "status": "candidate",
+        "standing": "new",
+        "possibleMatches": [],
+        "kind": "transferable-lesson",
+        "ruleId": "rule-9e028270f09ec746",
+        "target": "/runner/work/connect/checkouts/acme__target",
+        "targetName": "acme__target",
+        "title": "Verify the holder before reclaiming a lock",
+        "summary": "The source recorded the rule; the target reclaims without it.",
+        "nextStep": "compound-learning",
+        "overlapCheck": {
+          "queries": ["reclaim lock"],
+          "result": "none-found"
+        },
+        "sources": [
+          {
+            "project": "/runner/work/connect/checkouts/acme__source",
+            "projectName": "acme__source",
+            "path": "docs/solutions/lock-reclaim.md",
+            "fingerprint": "61a2423b88496669c2dc32d69eb97ebdd881fafbde3e33307562b652db9c179c",
+            "excerpt": "Never reclaim a lock without verifying the holder identity",
+            "cite": "acme__source:docs/solutions/lock-reclaim.md@61a2423b88496669c2dc32d69eb97ebdd881fafbde3e33307562b652db9c179c"
+          }
+        ],
+        "targetEvidence": [
+          {
+            "path": "src/lock.ts",
+            "start": 3,
+            "end": 5,
+            "symbol": "reclaimLock",
+            "fingerprint": "cfb0fdcfa60d0087920f4d6dba718d9dee627501284fd7ff4c1e9aa5592ac882",
+            "excerpt": "export function reclaimLock(path: string): boolean {"
+          }
+        ],
+        "counterevidence": []
+      },
+      {
+        "id": "38786328c4c494965c9aadb0058ab0a49cf3d9202cddfca936befcd692c71385",
+        "status": "candidate",
+        "standing": "new",
+        "possibleMatches": [],
+        "kind": "contradiction",
+        "ruleId": "rule-9e028270f09ec746",
+        "target": "/runner/work/connect/checkouts/acme__target",
+        "targetName": "acme__target",
+        "title": "Two projects disagree on lock reclaim",
+        "summary": "One says verify first; the other says reclaim at once.",
+        "nextStep": "refresh-learning",
+        "overlapCheck": {
+          "queries": ["reclaim"],
+          "result": "none-found"
+        },
+        "sources": [
+          {
+            "project": "/runner/work/connect/checkouts/acme__source",
+            "projectName": "acme__source",
+            "path": "docs/solutions/lock-reclaim.md",
+            "fingerprint": "61a2423b88496669c2dc32d69eb97ebdd881fafbde3e33307562b652db9c179c",
+            "excerpt": "Never reclaim a lock without verifying the holder identity",
+            "cite": "acme__source:docs/solutions/lock-reclaim.md@61a2423b88496669c2dc32d69eb97ebdd881fafbde3e33307562b652db9c179c"
+          },
+          {
+            "project": "/runner/work/connect/checkouts/acme__target",
+            "projectName": "acme__target",
+            "path": "docs/solutions/lock-now.md",
+            "fingerprint": "52397bc5bcb8263a0f1c981b8704faa38f62ab706b0529f33120d423b979644e",
+            "excerpt": "Always reclaim a stale lock immediately after the timeout",
+            "cite": "acme__target:docs/solutions/lock-now.md@52397bc5bcb8263a0f1c981b8704faa38f62ab706b0529f33120d423b979644e"
+          }
+        ],
+        "targetEvidence": [],
+        "counterevidence": []
+      }
+    ]
+  }
+}

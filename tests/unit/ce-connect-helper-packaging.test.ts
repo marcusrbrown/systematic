@@ -27,6 +27,7 @@ import {
   generateHelperContent,
 } from '../../scripts/generate-ce-connect-helper.ts'
 import { generateRegistryContent } from '../../scripts/generate-registry.ts'
+import { decisionLine } from '../../src/lib/connect-ci.js'
 import { ruleIdFor } from '../../src/lib/connect-helper-core.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
@@ -90,9 +91,10 @@ function git(cwd: string, args: string[]): void {
   }
 }
 
-function createProject(files: Record<string, string>): string {
+function createProject(files: Record<string, string>, remote?: string): string {
   const work = makeTempDir('connect-pack-project-')
   git(work, ['init', '-q', '-b', 'main'])
+  if (remote !== undefined) git(work, ['remote', 'add', 'origin', remote])
   git(work, ['config', 'gc.auto', '0'])
   git(work, ['config', 'maintenance.auto', 'false'])
   for (const [rel, content] of Object.entries(files)) {
@@ -406,6 +408,210 @@ function exerciseHelper(scriptPath: string, label: string): void {
     [snapshotTree(scenario.source), snapshotTree(scenario.target)],
     `${label}: an allowed project changed`,
   ).toEqual(before)
+
+  exerciseImport(scriptPath, label)
+  exerciseReportOps(scriptPath, label)
+}
+
+const IMPORT_FIXTURES = path.join(REPO_ROOT, 'tests/fixtures/connect-import')
+
+function fixtureTree(base: string): Record<string, string> {
+  const root = path.join(IMPORT_FIXTURES, 'files', base)
+  const out: Record<string, string> = {}
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else out[path.relative(root, full)] = fs.readFileSync(full, 'utf8')
+    }
+  }
+  walk(root)
+  return out
+}
+
+/** The `import` operation through the real command line, against clones of the recorded repositories. */
+function exerciseImport(scriptPath: string, label: string): void {
+  const source = createProject(
+    fixtureTree('source'),
+    'https://github.com/acme/source.git',
+  )
+  const target = createProject(
+    fixtureTree('target'),
+    'https://github.com/acme/target.git',
+  )
+  const home = makeTempDir('connect-pack-import-home-')
+  const configDir = path.join(home, '.config', 'opencode')
+  fs.mkdirSync(configDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(configDir, 'systematic.json'),
+    JSON.stringify({ connect: { allow_projects: [source, target] } }),
+  )
+  const stateHome = path.join(makeTempDir('connect-pack-import-state-'), 'xdg')
+  const scenario: Scenario = {
+    source,
+    target,
+    stateHome,
+    env: {
+      PATH: process.env.PATH ?? '',
+      HOME: home,
+      XDG_STATE_HOME: stateHome,
+    },
+  }
+  const before = [snapshotTree(source), snapshotTree(target)]
+  const directory = makeTempDir('connect-pack-download-')
+  fs.copyFileSync(
+    path.join(IMPORT_FIXTURES, 'good', 'run.json'),
+    path.join(directory, 'run.json'),
+  )
+  const request = {
+    directory,
+    provenance: { repo: 'marcusrbrown/systematic', runId: '123456789' },
+  }
+
+  const imported = runHelper(scriptPath, ['import'], scenario, request)
+  expect(imported.exitCode, `${label}: import ${imported.stdout}`).toBe(0)
+  expect(imported.json?.outcome).toBe('complete')
+  expect(imported.json?.imported).toBe(2)
+  expect(String(imported.json?.summary)).toContain('candidate-id:')
+
+  const again = runHelper(scriptPath, ['import'], scenario, request)
+  expect(again.exitCode, `${label}: second import ${again.stdout}`).toBe(0)
+  expect(again.json?.imported).toBe(0)
+  expect(again.json?.alreadyImported).toBe(2)
+
+  const missing = runHelper(scriptPath, ['import'], scenario, {
+    ...request,
+    directory: makeTempDir('connect-pack-empty-'),
+  })
+  expect(missing.exitCode).toBe(1)
+  expect(missing.json?.reason).toBe('record-missing')
+  expect(missing.json?.finalLine).toBe('Connect failed')
+
+  expect(
+    [snapshotTree(source), snapshotTree(target)],
+    `${label}: an allowed project changed`,
+  ).toEqual(before)
+}
+
+/** `render-report` and `apply-ticks` through the real command line, against a state root a CI run left behind. */
+function exerciseReportOps(scriptPath: string, label: string): void {
+  const scenario = buildScenario()
+  const stateRoot = path.join(scenario.stateHome, 'systematic', 'connect')
+  const connectRun = '20261112T010000Z-abcd1234'
+  fs.mkdirSync(path.join(stateRoot, 'runs', connectRun), {
+    recursive: true,
+    mode: 0o700,
+  })
+  const ids = [sha256('pack-candidate-1'), sha256('pack-candidate-2')]
+  fs.writeFileSync(
+    path.join(stateRoot, 'ledger.json'),
+    JSON.stringify({
+      version: 2,
+      entries: ids.map((id, index) => ({
+        id,
+        kind: 'transferable-lesson',
+        target: scenario.target,
+        ruleId: 'rule-0123456789abcdef',
+        sources: [
+          {
+            role: 'source',
+            path: `docs/solutions/lesson-${index}.md`,
+            fingerprint: sha256(`fingerprint-${index}`),
+          },
+        ],
+        targetEvidence: [],
+        status: 'candidate',
+        history: [],
+        recordedAt: new Date(Date.UTC(2026, 10, 1, 0, index)).toISOString(),
+      })),
+    }),
+  )
+  fs.writeFileSync(
+    path.join(stateRoot, 'runs', connectRun, 'run.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      runId: connectRun,
+      selection: { kind: 'all' },
+      projects: [],
+      candidateBlock: {
+        schemaVersion: 1,
+        candidates: ids.map((id, index) => ({
+          id,
+          kind: 'transferable-lesson',
+          target: scenario.target,
+          targetName: 'target',
+          title: `Lesson ${index}`,
+          summary: `Summary ${index}.`,
+          nextStep: 'compound-learning',
+          sources: [
+            {
+              projectName: 'source',
+              path: `docs/solutions/lesson-${index}.md`,
+            },
+          ],
+        })),
+      },
+    }),
+  )
+  fs.writeFileSync(
+    path.join(stateRoot, 'invocation.json'),
+    JSON.stringify({
+      version: 1,
+      marker: '900-1',
+      phase: 'terminal',
+      outcome: 'complete',
+      finalLine: 'Connect complete',
+      runId: connectRun,
+      projects: [],
+    }),
+  )
+
+  const rendered = runHelper(scriptPath, ['render-report'], scenario, {
+    date: '2026-11-12',
+    runId: '900',
+    attempt: '1',
+    cacheRestored: true,
+  })
+  expect(rendered.exitCode, `${label}: render ${rendered.stdout}`).toBe(0)
+  expect(rendered.json).toMatchObject({
+    shown: 2,
+    hidden: 0,
+    outcome: 'complete',
+  })
+  const posted = fs
+    .readFileSync(String(rendered.json?.bodyFile), 'utf8')
+    .replace(
+      decisionLine(ids[0] ?? '', 'rejected', false),
+      decisionLine(ids[0] ?? '', 'rejected', true),
+    )
+  const bodyFile = path.join(makeTempDir('connect-pack-body-'), 'body.md')
+  fs.writeFileSync(bodyFile, posted)
+
+  const applied = runHelper(scriptPath, ['apply-ticks'], scenario, {
+    bodyFile,
+    issue: 5,
+  })
+  expect(applied.exitCode, `${label}: apply ${applied.stdout}`).toBe(0)
+  expect(applied.json?.accepted).toEqual([{ id: ids[0], status: 'rejected' }])
+  const again = runHelper(scriptPath, ['apply-ticks'], scenario, {
+    bodyFile,
+    issue: 5,
+  })
+  expect(again.exitCode).toBe(0)
+  expect(again.json?.accepted).toEqual([])
+  expect(again.json?.skipped).toEqual([
+    { id: ids[0], status: 'rejected', reason: 'already-recorded' },
+  ])
+  const shown = runHelper(scriptPath, ['ledger', 'show'], scenario)
+  expect(
+    ((shown.json?.entries ?? []) as Array<Json>).map((entry) => entry.status),
+  ).toEqual(['rejected', 'candidate'])
+
+  const invalid = runHelper(scriptPath, ['render-report'], scenario, {
+    date: 'yesterday',
+  })
+  expect(invalid.exitCode).toBe(1)
+  expect(invalid.json?.reason).toBe('invalid-request')
 }
 
 function assertRunsUnderRealNode(scriptPath: string, label: string): void {

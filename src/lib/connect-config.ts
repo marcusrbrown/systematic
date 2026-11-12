@@ -12,6 +12,11 @@
  * imports the limits from here and tags the same block `trust:
  * 'project-or-higher'`; the dependency runs one way.
  *
+ * The block also holds named `groups` of allow-list-form entries. A group
+ * narrows a run to part of the allow list and never adds a project: nothing
+ * here checks that a member is on the allow list; the selection step does,
+ * on resolved main roots.
+ *
  * Trust: `connect` is user-only. User config, `OPENCODE_CONFIG_DIR` config and
  * the `systematic.local` file beside each may set it. `config.ts` strips it
  * from project config with a warning, and this reader never opens a project
@@ -21,8 +26,9 @@
  * a list over its limit makes that layer's block unreadable, and an
  * unreadable block contributes no entries. A missing, unparseable, oversize
  * or non-regular file contributes none either. No failure can add an entry
- * the user did not write. The four layers merge by union, so a layer that
- * fails drops only its own entries.
+ * the user did not write. The four layers merge, the allow lists by union and
+ * the groups by name (a later layer replaces a same-named group whole), so a
+ * layer that fails drops only its own entries and groups.
  *
  * Warnings name config files and reasons, never an allow-list entry: an entry
  * is a project the user chose to expose, and a warning can reach logs and
@@ -54,53 +60,109 @@ export const MAX_CONNECT_CONFIG_BYTES = 1024 * 1024
 /** Longest file path or reason echoed into a warning. */
 const MAX_DIAGNOSTIC_LENGTH = 200
 
-/** The sole key the `connect` block accepts. */
+/** One config layer holds at most this many groups. */
+export const MAX_CONNECT_GROUPS = 32
+
+/** A group name: lowercase letters, digits and hyphens, one to 64 characters, led by a letter or digit. */
+export const CONNECT_GROUP_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
+
+/** The `connect` block's keys. */
 const ALLOW_PROJECTS_KEY = 'allow_projects'
+const GROUPS_KEY = 'groups'
 
 // ── The block ───────────────────────────────────────────────────────────────
 
+/** Group name to member list. A member has the form of an allow-list entry. */
+export type ConnectGroups = Record<string, string[]>
+
 export interface ConnectSettings {
   allow_projects: string[]
+  groups?: ConnectGroups
 }
 
 export type ConnectBlockValidation =
-  | { readonly ok: true; readonly allowProjects: string[] }
+  | {
+      readonly ok: true
+      readonly allowProjects: string[]
+      readonly groups: ConnectGroups
+    }
   | { readonly ok: false }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/**
- * Validate a `connect` block with plain guards. The block is valid when it is
- * an object whose only key, if any, is `allow_projects`, holding at most
- * `MAX_ALLOW_PROJECTS` non-empty strings of at most `MAX_ALLOW_PROJECT_LENGTH`
- * characters. The zod schema in `config-schema.ts` accepts and rejects the
- * same values; a test pins the two together.
- */
-export function validateConnectBlock(value: unknown): ConnectBlockValidation {
-  if (!isRecord(value)) return { ok: false }
-  if (Object.keys(value).some((key) => key !== ALLOW_PROJECTS_KEY)) {
-    return { ok: false }
+/** Whether `value` is a list of at most `max` non-empty, bounded strings, and not shorter than `min`. */
+function readEntryList(
+  value: unknown,
+  min: number,
+  max: number,
+): string[] | undefined {
+  if (!Array.isArray(value) || value.length < min || value.length > max) {
+    return undefined
   }
-  const list = Object.hasOwn(value, ALLOW_PROJECTS_KEY)
-    ? value[ALLOW_PROJECTS_KEY]
-    : []
-  if (!Array.isArray(list) || list.length > MAX_ALLOW_PROJECTS) {
-    return { ok: false }
-  }
-  const allowProjects: string[] = []
-  for (const entry of list as unknown[]) {
+  const entries: string[] = []
+  for (const entry of value as unknown[]) {
     if (
       typeof entry !== 'string' ||
       entry.length === 0 ||
       entry.length > MAX_ALLOW_PROJECT_LENGTH
     ) {
-      return { ok: false }
+      return undefined
     }
-    allowProjects.push(entry)
+    entries.push(entry)
   }
-  return { ok: true, allowProjects }
+  return entries
+}
+
+/**
+ * Read `groups`: at most `MAX_CONNECT_GROUPS` entries, each named by
+ * `CONNECT_GROUP_NAME_PATTERN` and holding one to `MAX_ALLOW_PROJECTS` members
+ * of the allow-list entry form. Shape only: whether a member is on the allow
+ * list is the caller's question at selection time.
+ */
+function readGroups(value: unknown): ConnectGroups | undefined {
+  if (!isRecord(value)) return undefined
+  const names = Object.keys(value)
+  if (names.length > MAX_CONNECT_GROUPS) return undefined
+  const groups: ConnectGroups = {}
+  for (const name of names) {
+    if (!CONNECT_GROUP_NAME_PATTERN.test(name)) return undefined
+    const members = readEntryList(value[name], 1, MAX_ALLOW_PROJECTS)
+    if (members === undefined) return undefined
+    groups[name] = members
+  }
+  return groups
+}
+
+/**
+ * Validate a `connect` block with plain guards. The block is valid when it is
+ * an object whose only keys, if any, are `allow_projects` and `groups`.
+ * `allow_projects` holds at most `MAX_ALLOW_PROJECTS` non-empty strings of at
+ * most `MAX_ALLOW_PROJECT_LENGTH` characters. `groups` maps names to member
+ * lists as `readGroups` describes. The zod schema in `config-schema.ts`
+ * accepts and rejects the same values; a test pins the two together.
+ */
+export function validateConnectBlock(value: unknown): ConnectBlockValidation {
+  if (!isRecord(value)) return { ok: false }
+  if (
+    Object.keys(value).some(
+      (key) => key !== ALLOW_PROJECTS_KEY && key !== GROUPS_KEY,
+    )
+  ) {
+    return { ok: false }
+  }
+  const allowProjects = readEntryList(
+    Object.hasOwn(value, ALLOW_PROJECTS_KEY) ? value[ALLOW_PROJECTS_KEY] : [],
+    0,
+    MAX_ALLOW_PROJECTS,
+  )
+  if (allowProjects === undefined) return { ok: false }
+  const groups = readGroups(
+    Object.hasOwn(value, GROUPS_KEY) ? value[GROUPS_KEY] : {},
+  )
+  if (groups === undefined) return { ok: false }
+  return { ok: true, allowProjects, groups }
 }
 
 // ── Layer discovery ─────────────────────────────────────────────────────────
@@ -223,11 +285,29 @@ function isInside(child: string, parent: string): boolean {
   )
 }
 
-/** Whether `dir` or any ancestor holds a `.git` entry of any kind. */
+/**
+ * Whether a `.git` entry at `target` marks a checkout: a regular file (a
+ * gitdir pointer), or a directory that holds a `HEAD`. A directory with no
+ * `HEAD` is not a repository (an agent action may leave an empty one in its
+ * workspace). A symlink, any other entry type, and an entry that cannot be
+ * inspected count, because they cannot be shown not to be a checkout.
+ */
+function isGitEntry(target: string): boolean {
+  let stat: fs.Stats
+  try {
+    stat = fs.lstatSync(target)
+  } catch (error) {
+    const code = errorCode(error)
+    return code !== 'ENOENT' && code !== 'ENOTDIR'
+  }
+  return stat.isDirectory() ? entryExists(path.join(target, 'HEAD')) : true
+}
+
+/** Whether `dir` or any ancestor holds a `.git` entry that marks a checkout. */
 function insideCheckout(dir: string): boolean {
   let current = dir
   for (;;) {
-    if (entryExists(path.join(current, '.git'))) return true
+    if (isGitEntry(path.join(current, '.git'))) return true
     const parent = path.dirname(current)
     if (parent === current) return false
     current = parent
@@ -237,8 +317,8 @@ function insideCheckout(dir: string): boolean {
 /**
  * Why `dir` may not hold configuration or state, or `undefined` when it may.
  * A directory is refused when it is, or sits inside, an allowed root
- * (`allowed-root`), or when it or any ancestor holds a `.git` entry
- * (`checkout`). A repository is untrusted input, so what it holds must not
+ * (`allowed-root`), or when it or any ancestor holds a `.git` file, a `.git`
+ * symlink or a `.git` directory with a `HEAD` (`checkout`). A repository is untrusted input, so what it holds must not
  * steer what the helper reads or where it writes. Both sides are compared as
  * realpaths when they exist.
  */
@@ -258,6 +338,11 @@ export function containerRefusal(
 export interface ConnectAllowListLoad {
   /** The union of the readable layers' entries, in layer order, duplicates removed. */
   readonly allowProjects: readonly string[]
+  /**
+   * The readable layers' groups by name. A later layer replaces a same-named
+   * group whole. A member is not checked against the allow list here.
+   */
+  readonly groups: Readonly<Record<string, readonly string[]>>
   /** Some layer's file or block could not be read and contributed nothing. */
   readonly unreadable: boolean
   /** One line per problem. They name files and reasons, never an allow-list entry. */
@@ -269,7 +354,11 @@ export interface ConnectAllowListLoad {
 type BlockRead =
   | { readonly kind: 'absent' }
   | { readonly kind: 'failed'; readonly reason: string }
-  | { readonly kind: 'read'; readonly allowProjects: readonly string[] }
+  | {
+      readonly kind: 'read'
+      readonly allowProjects: readonly string[]
+      readonly groups: ConnectGroups
+    }
 
 /** Make `text` fit on one line of a warning: no control characters, bounded. */
 function displaySafe(text: string): string {
@@ -318,11 +407,15 @@ function readConnectBlock(filePath: string): BlockRead {
     return { kind: 'failed', reason: 'root must be an object' }
   }
   if (!Object.hasOwn(parsed, 'connect')) {
-    return { kind: 'read', allowProjects: [] }
+    return { kind: 'read', allowProjects: [], groups: {} }
   }
   const validation = validateConnectBlock(parsed.connect)
   return validation.ok
-    ? { kind: 'read', allowProjects: validation.allowProjects }
+    ? {
+        kind: 'read',
+        allowProjects: validation.allowProjects,
+        groups: validation.groups,
+      }
     : { kind: 'failed', reason: 'the connect block is not valid' }
 }
 
@@ -370,6 +463,7 @@ export function loadConnectAllowList(
   const selection = selectConnectConfigFiles(dirs)
   const warnings: string[] = []
   const entries = new Set<string>()
+  const groups: ConnectGroups = {}
   let unreadable = false
 
   const readLayer = (file: ConnectConfigFile): void => {
@@ -378,11 +472,14 @@ export function loadConnectAllowList(
     if (read.kind === 'failed') {
       unreadable = true
       warnings.push(
-        `[systematic] connect settings in ${displaySafe(file.path)} could not be read (${read.reason}); the allow list from that file was ignored.`,
+        `[systematic] connect settings in ${displaySafe(file.path)} could not be read (${read.reason}); the allow list and groups from that file were ignored.`,
       )
       return
     }
     for (const entry of read.allowProjects) entries.add(entry)
+    for (const [name, members] of Object.entries(read.groups)) {
+      groups[name] = [...members]
+    }
   }
 
   const isUserLayer = (file: ConnectConfigFile): boolean =>
@@ -407,6 +504,7 @@ export function loadConnectAllowList(
 
   return {
     allowProjects: [...entries],
+    groups,
     unreadable,
     warnings,
     ...(customDirRefused !== undefined && { customDirRefused }),

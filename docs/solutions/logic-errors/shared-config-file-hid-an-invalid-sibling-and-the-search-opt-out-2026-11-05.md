@@ -60,7 +60,7 @@ Each part of the condition covers a different case:
 
 ## Why This Works
 
-- A file that fails validation never becomes a source. `LayeredSources` holds `null` for a layer with no valid file (`src/lib/config.ts:1473-1480`), so such a file adds nothing to the kind's path list. The failure survives only as the kind's `presence: 'invalid'`, which `foldKindMetadata` carries (`src/lib/config.ts:2735-2744`).
+- A file that fails validation never becomes a source. `LayeredSources` holds `null` for a layer with no valid file (`src/lib/config.ts:1474-1481`), so such a file adds nothing to the kind's path list. The failure survives only as the kind's `presence: 'invalid'`, which `foldKindMetadata` carries (`src/lib/config.ts:2748-2757`).
 - `loadSearchSettingsForCli` falls back to the user-level reader when the full load throws or reports an invalid source (`src/cli.ts:560-614`). That fallback keeps `search.enabled: false` when the full loader drops a whole invalid file, as its doc comment explains. Here the load did not throw, so the invalid row was the only signal, and losing it switched the fail-safe off.
 - `foldSiblingSources` keeps every loaded file's canonical path (`src/lib/config.ts:2719-2732`), so aliasing is still recognised for any sibling and the first-round defect stays fixed.
 

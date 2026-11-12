@@ -3,12 +3,20 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  applyTicks,
+  type CiOptions,
+  type RenderRequest,
+  readReportBody,
+  renderReport,
+} from './lib/connect-ci.js'
+import {
   type AllowEntryMissReason,
   type ConnectConfigOptions,
   checkHostSupport,
   HOST_SUPPORT_TABLE,
   type HostSupportRow,
   loadConnectAllowList,
+  resolveAllowEntry,
   resolveAllowList,
 } from './lib/connect-config.js'
 import {
@@ -51,12 +59,16 @@ import {
   removeWorkDir,
   renderDigest,
   renderSummary,
+  resolveSelection,
   resolveStateRoot,
   ruleIdFor,
+  type Selection,
+  type SelectionProject,
   type StaleCitation,
   type Standing,
   type SweepProgress,
   scanProvenance,
+  selectionNamespace,
   sweepBefore,
   sweepProgress,
   toCandidateRecord,
@@ -67,27 +79,54 @@ import {
   writeWorkFile,
 } from './lib/connect-helper-core.js'
 import {
+  type ImportAccepted,
+  type ImportedCandidate,
+  type ImportModel,
+  type ImportProvenance,
+  type ImportRefusal,
+  type LocalCheckout,
+  readImportRecord,
+  renderImportDigest,
+  renderImportSummary,
+  type SkippedCandidate,
+  type Verification,
+  verifyRecord,
+} from './lib/connect-import.js'
+import { readRepoIdentity } from './lib/connect-repo-identity.js'
+import {
   acquireLock,
   type CandidateRecord,
   type CandidateStanding,
+  type CoverageRecord,
   candidateIdentity,
   classifyCandidate,
   clearLedger,
   type DecideInput,
   decideLedgerEntry,
   forceUnlock,
+  type ImportInsertResult,
+  type ImportPlan,
+  type InvocationProject,
+  type InvocationWriteOptions,
+  insertImportRun,
   type Ledger,
+  type LedgerEntry,
   type LockHandle,
   type LockReclaim,
+  newImportRunId,
   newRunId,
   type ProcessTable,
   type PublishOptions,
   prepareStateRoot,
   pruneRuns,
   publishRun,
+  readCiRunMarker,
+  readInvocationRecord,
   readLedger,
+  readRunRecord,
   releaseLock,
   rewriteRunFiles,
+  writeInvocationRecord,
 } from './lib/connect-state.js'
 import { isMainModule } from './lib/main-module.js'
 
@@ -109,7 +148,7 @@ import { isMainModule } from './lib/main-module.js'
  */
 
 export const CE_CONNECT_USAGE =
-  'Usage: node connect.mjs <begin|validate|publish|decide|ledger show [--offset N]|ledger clear|ledger unlock>'
+  'Usage: node connect.mjs <begin|validate|publish|decide|import|apply-ticks|render-report|ledger show [--offset N]|ledger clear|ledger unlock>'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -129,6 +168,8 @@ export interface HelperDeps {
   readonly inspector?: ProcessInspector
   /** Seams in the middle of a publish, for tests of a crash or a failed write. */
   readonly publishHooks?: NonNullable<PublishOptions['hooks']>
+  /** Seams in the write of the invocation record, for tests of a failed write. */
+  readonly invocationHooks?: InvocationWriteOptions
 }
 
 export interface HelperResult {
@@ -143,6 +184,9 @@ const OPS = [
   'validate',
   'publish',
   'decide',
+  'import',
+  'apply-ticks',
+  'render-report',
   'ledger-show',
   'ledger-clear',
   'ledger-unlock',
@@ -287,6 +331,8 @@ interface Environment {
   readonly stateRoot: string
   readonly allowedRoots: readonly string[]
   readonly resolved: ReturnType<typeof resolveAllowList>
+  /** The merged `connect.groups` of the user config. */
+  readonly groups: Readonly<Record<string, readonly string[]>>
   readonly warnings: readonly string[]
   readonly configUnreadable: boolean
 }
@@ -304,6 +350,7 @@ function describeEnvironment(deps: HelperDeps): Environment {
     stateRoot: resolveStateRoot(deps.env ?? process.env, homeDir),
     allowedRoots: resolved.resolved.map((item) => item.mainRoot),
     resolved,
+    groups: load.groups,
     warnings: load.warnings,
     configUnreadable: load.unreadable,
   }
@@ -432,6 +479,10 @@ function parseRunRequest(request: unknown):
 interface SnapshotProject extends DigestProject {
   readonly key: string
   readonly entry: string
+  /** `owner/repo` of the GitHub `origin` remote, when the checkout has one. */
+  readonly repo?: string
+  /** The commit HEAD names, when it can be read. */
+  readonly commit?: string
   /** Citations the check examined. */
   readonly citationsChecked: number
   /** The citation cap stopped the check. Reported, and not a reason to degrade. */
@@ -487,6 +538,8 @@ interface Snapshot {
     /** The key of the rule's project. */
     project?: string
   }>
+  /** What the run was narrowed to. */
+  readonly selection?: Selection
   /** What the run could not see in full, so its coverage is not pruned there. */
   readonly coverageScope?: CoverageScope
   /** What the run was offered, and where the sweep stood when it began. */
@@ -593,6 +646,119 @@ function addUnique(list: string[], value: string): void {
   if (!list.includes(value)) list.push(value)
 }
 
+// ── The invocation record ───────────────────────────────────────────────────
+
+/**
+ * A CI run is a run whose workflow wrote `ci-run.json` into the state root. Its
+ * marker tags `invocation.json`, which the helper writes on every path from
+ * `begin` onward, so the workflow reads the outcome from one file that names
+ * this run and not from whatever else the state root holds. A local run has no
+ * such file and writes no record.
+ */
+function ciRunMarker(deps: HelperDeps): string | undefined {
+  return readCiRunMarker(
+    resolveStateRoot(deps.env ?? process.env, deps.homeDir ?? os.homedir()),
+  )
+}
+
+function invocationProjects(
+  projects: readonly SnapshotProject[],
+): InvocationProject[] {
+  return projects.map((project) => ({
+    key: project.key,
+    name: project.name,
+    ...(project.repo === undefined ? {} : { repo: project.repo }),
+    ...(project.commit === undefined ? {} : { commit: project.commit }),
+  }))
+}
+
+interface InvocationEnd {
+  readonly outcome: 'complete' | 'degraded' | 'busy' | 'failed'
+  readonly reason?: string
+  readonly runId?: string
+  readonly projects?: readonly InvocationProject[]
+}
+
+/** The projects the begun record of this run named, for a record that ends a run without its snapshot. */
+function beganWith(
+  root: string,
+  marker: string,
+  runId: string | undefined,
+): readonly InvocationProject[] | undefined {
+  if (runId === undefined) return undefined
+  const began = readInvocationRecord(root)
+  return began?.marker === marker && began.runId === runId
+    ? began.projects
+    : undefined
+}
+
+function writeTerminal(
+  root: string,
+  marker: string,
+  end: InvocationEnd,
+  deps: HelperDeps,
+): 'written' | 'unwritten' {
+  const projects = end.projects ?? beganWith(root, marker, end.runId)
+  const result = writeInvocationRecord(
+    root,
+    {
+      version: 1,
+      marker,
+      phase: 'terminal',
+      outcome: end.outcome,
+      finalLine: `Connect ${end.outcome}`,
+      ...(end.reason === undefined ? {} : { reason: end.reason }),
+      ...(end.runId === undefined ? {} : { runId: end.runId }),
+      ...(projects === undefined ? {} : { projects }),
+    },
+    deps.invocationHooks,
+  )
+  return result === 'written' ? 'written' : 'unwritten'
+}
+
+/**
+ * End a CI invocation that stopped before or without a publish. The state root
+ * is prepared under its usual refusal rules; no lock is taken and nothing but
+ * the record is written. A record that cannot be written is said so in the
+ * answer, and the workflow then reads the missing or `begun` record as a run
+ * with no final line.
+ */
+function endInvocation(
+  marker: string,
+  result: HelperResult,
+  end: InvocationEnd,
+  deps: HelperDeps,
+): HelperResult {
+  const prepared = prepare('invocation', deps)
+  const written = prepared.ok
+    ? writeTerminal(prepared.root, marker, end, deps)
+    : 'unwritten'
+  return written === 'written'
+    ? result
+    : { ok: result.ok, body: { ...result.body, invocationRecord: 'unwritten' } }
+}
+
+/** The record for a failure answer: busy is its own outcome, and every other stop is failed. */
+function endOfFailure(result: HelperResult, runId?: string): InvocationEnd {
+  const { outcome, reason } = result.body
+  return {
+    outcome: outcome === 'busy' ? 'busy' : 'failed',
+    ...(typeof reason === 'string' ? { reason } : {}),
+    ...(runId === undefined ? {} : { runId }),
+  }
+}
+
+/** The run id a request names, when it is a plain run id. */
+function requestRunId(request: unknown): string | undefined {
+  if (!isRecord(request)) return undefined
+  const { runId } = request
+  return typeof runId === 'string' &&
+    RUN_ID.test(runId) &&
+    !runId.endsWith('.tmp')
+    ? runId
+    : undefined
+}
+
 // ── begin ───────────────────────────────────────────────────────────────────
 
 interface BeginRequest {
@@ -600,11 +766,26 @@ interface BeginRequest {
   readonly version: string | undefined
   readonly mode: 'interactive' | 'headless'
   readonly consent: boolean
+  /** The `group:` and `projects:` words the skill collected, unparsed. */
+  readonly selection: readonly string[]
+}
+
+function parseSelectionWords(value: unknown): readonly string[] | undefined {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) return undefined
+  const words: string[] = []
+  for (const word of value as unknown[]) {
+    if (typeof word !== 'string') return undefined
+    words.push(word)
+  }
+  return words
 }
 
 function parseBeginRequest(request: unknown): BeginRequest | undefined {
   if (!isRecord(request)) return undefined
   const { host, version, mode, consent } = request
+  const selection = parseSelectionWords(request.selection)
+  if (selection === undefined) return undefined
   if (typeof host !== 'string' || host === '' || host.length > MAX_TEXT) {
     return undefined
   }
@@ -616,7 +797,7 @@ function parseBeginRequest(request: unknown): BeginRequest | undefined {
   }
   if (mode !== 'interactive' && mode !== 'headless') return undefined
   if (consent !== undefined && typeof consent !== 'boolean') return undefined
-  return { host, version, mode, consent: consent === true }
+  return { host, version, mode, consent: consent === true, selection }
 }
 
 const CORPUS_PREFIXES = ['docs/solutions/', 'docs/plans/', 'docs/brainstorms/']
@@ -819,6 +1000,7 @@ function scanProject(
       root: inventory.mainRoot,
       key: projectKey(inventory.mainRoot),
       entry,
+      ...readRepoIdentity(inventory.mainRoot),
       files: inventory.files.length,
       citationsUnsupported: report.unsupported,
       citationsChecked: report.citations.length,
@@ -934,9 +1116,15 @@ interface Scans {
   readonly coverageScope: CoverageScope
 }
 
-/** Scan every matched project. One that cannot be read degrades the run. */
+/**
+ * Scan every selected project. One that cannot be read degrades the run. A run
+ * with a selection never prunes a coverage record it cannot attribute to a
+ * project, whether or not its members are the whole allow list.
+ */
 function scanAll(
   environment: Environment,
+  selection: Selection,
+  projects: readonly SelectionProject[],
   deps: HelperDeps,
   limits: ConnectBounds,
   unmatched: ReadonlyArray<{ entry: string; reason: string }>,
@@ -950,7 +1138,7 @@ function scanAll(
   }
   const scans: ScannedProject[] = []
   let allRead = unmatched.length === 0 && !environment.configUnreadable
-  for (const item of environment.resolved.resolved) {
+  for (const item of projects) {
     const scanned = scanProject(item.entry, item.mainRoot, deps, limits)
     if ('failed' in scanned) {
       allRead = false
@@ -967,21 +1155,36 @@ function scanAll(
       .filter((scan) => scan.prunable)
       .map((scan) => scan.digest.key),
     retain: scans.flatMap((scan) => scan.retain),
-    pruneUnattributed: allRead && scans.every((scan) => scan.prunable),
+    pruneUnattributed:
+      selection.kind === 'all' &&
+      allRead &&
+      scans.every((scan) => scan.prunable),
   }
   return { scans, degradeReasons, unread, coverageScope }
+}
+
+/** `{ selection }` for a run with a selection, so its coverage is kept apart. */
+function selectionOf(selection: Selection): { selection?: string } {
+  const id = selectionNamespace(selection)
+  return id === undefined ? {} : { selection: id }
 }
 
 interface RunSetup {
   readonly parsed: BeginRequest
   readonly verdict: ReturnType<typeof checkHostSupport>
   readonly environment: Environment
+  readonly selection: Selection
+  /** The projects the run reads: the selection, or the whole resolved allow list. */
+  readonly projects: readonly SelectionProject[]
+  /** Allow-list entries that matched no project. Empty for a run with a selection. */
   readonly unmatched: ReadonlyArray<{ entry: string; reason: string }>
   readonly root: string
   readonly now: () => number
   readonly holder: HolderChoice
   readonly lock: LockHandle
   readonly reclaimed: LockReclaim | undefined
+  /** The marker of the CI run, when the workflow wrote one. */
+  readonly ciMarker: string | undefined
 }
 
 function prunedCounts(
@@ -1024,6 +1227,7 @@ function beginResponse(
     ...(setup.reclaimed === undefined ? {} : { reclaimed: setup.reclaimed }),
     host: snapshot.host,
     mode: setup.parsed.mode,
+    selection: setup.selection,
     projects: scans.map((scan) => ({
       root: scan.digest.root,
       name: scan.digest.name,
@@ -1064,6 +1268,8 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
   const limits = bounds(deps)
   const { scans, degradeReasons, unread, coverageScope } = scanAll(
     setup.environment,
+    setup.selection,
+    setup.projects,
     deps,
     limits,
     setup.unmatched,
@@ -1084,6 +1290,7 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
       rules,
       coverage: ledger.ledger.coverage ?? [],
       size: limits.maxFamiliesPerRun * limits.maxRulesPerFamily,
+      ...selectionOf(setup.selection),
     })
     const { parsed, verdict } = setup
     const snapshot: Snapshot = {
@@ -1105,6 +1312,7 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
       unmatched: setup.unmatched,
       degradeReasons,
       unread,
+      selection: setup.selection,
       ruleIds: rules.map((rule) => rule.id),
       ruleVersions: rules.map((rule) => ({
         id: rule.id,
@@ -1131,24 +1339,110 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
     )
     writeWorkFile(workDir, 'files.tsv', fingerprintIndex(snapshot.projects))
     writeWorkFile(workDir, 'rules.tsv', rulesOverview(rules, offer))
+    if (setup.ciMarker !== undefined) {
+      const recorded = writeInvocationRecord(
+        root,
+        {
+          version: 1,
+          marker: setup.ciMarker,
+          phase: 'begun',
+          runId,
+          projects: invocationProjects(snapshot.projects),
+        },
+        deps.invocationHooks,
+      )
+      if (recorded === 'failed') {
+        return releaseAndFail(
+          'begin',
+          lock,
+          root,
+          runId,
+          'invocation-write-failed',
+        )
+      }
+    }
     return beginResponse(setup, snapshot, scans, workDir, limits)
   } catch {
     return releaseAndFail('begin', lock, root, runId, 'internal-error')
   }
 }
 
+/**
+ * Narrow the allow list to what the request selected, or refuse. A refusal
+ * names its reason and what it concerns. Nothing is locked or written yet.
+ */
+function selectProjects(
+  words: readonly string[],
+  environment: Environment,
+):
+  | {
+      readonly ok: true
+      readonly selection: Selection
+      readonly projects: readonly SelectionProject[]
+    }
+  | { readonly ok: false; readonly result: HelperResult } {
+  const resolution = resolveSelection({
+    words,
+    groups: environment.groups,
+    allowed: environment.resolved.resolved,
+    resolveMember: (entry) =>
+      resolveAllowEntry(entry, { homeDir: environment.homeDir }),
+  })
+  if (resolution.status === 'invalid') {
+    return { ok: false, result: failure('begin', 'invalid-request') }
+  }
+  if (resolution.status === 'refused') {
+    const { reason, ...detail } = resolution.refusal
+    return { ok: false, result: failure('begin', reason, detail) }
+  }
+  return {
+    ok: true,
+    selection: resolution.selection,
+    projects: resolution.projects,
+  }
+}
+
 function begin(request: unknown, deps: HelperDeps): HelperResult {
+  const ciMarker = ciRunMarker(deps)
+  const result = beginRun(request, deps, ciMarker)
+  // A consent request is a question, not an end: the same call comes again.
+  if (
+    ciMarker === undefined ||
+    result.ok ||
+    result.body.outcome === 'consent-required'
+  ) {
+    return result
+  }
+  return endInvocation(ciMarker, result, endOfFailure(result), deps)
+}
+
+function beginRun(
+  request: unknown,
+  deps: HelperDeps,
+  ciMarker: string | undefined,
+): HelperResult {
   const parsed = parseBeginRequest(request)
   if (parsed === undefined) return failure('begin', 'invalid-request')
+
+  const environment = describeEnvironment(deps)
+  // A bad selection is refused before the host gate, so a user is never asked
+  // for consent to a run that cannot start.
+  const chosen = selectProjects(parsed.selection, environment)
+  if (!chosen.ok) return chosen.result
   const verdict = gateHost(parsed, deps)
   if (isResult(verdict)) return verdict
 
-  const environment = describeEnvironment(deps)
-  const unmatched = environment.resolved.unmatched.map((item) => ({
-    entry: item.entry,
-    reason: item.reason as AllowEntryMissReason,
-  }))
-  if (environment.resolved.resolved.length === 0) {
+  const { selection, projects } = chosen
+  // An allow-list entry the selection does not name is not touched, so one
+  // that matches nothing does not degrade a narrowed run.
+  const unmatched =
+    selection.kind === 'all'
+      ? environment.resolved.unmatched.map((item) => ({
+          entry: item.entry,
+          reason: item.reason as AllowEntryMissReason,
+        }))
+      : []
+  if (projects.length === 0) {
     return failure('begin', 'no-allowed-projects', {
       unmatched,
       configWarnings: environment.warnings,
@@ -1186,12 +1480,15 @@ function begin(request: unknown, deps: HelperDeps): HelperResult {
     parsed,
     verdict,
     environment,
+    selection,
+    projects,
     unmatched,
     root: state.root,
     now,
     holder,
     lock: acquired.lock,
     reclaimed: acquired.reclaimed,
+    ciMarker,
   }
   try {
     return indexRun(setup, deps)
@@ -1719,6 +2016,26 @@ function refuseValidate(request: unknown, deps: HelperDeps): HelperResult {
 }
 
 function validate(request: unknown, deps: HelperDeps): HelperResult {
+  const ciMarker = ciRunMarker(deps)
+  const result = validateRun(request, deps)
+  // A failure that released the lock ended the run; one that did not leaves
+  // the lock to its holder, and the run is still going.
+  if (
+    ciMarker === undefined ||
+    result.ok ||
+    result.body.lockReleased !== true
+  ) {
+    return result
+  }
+  return endInvocation(
+    ciMarker,
+    result,
+    endOfFailure(result, requestRunId(request)),
+    deps,
+  )
+}
+
+function validateRun(request: unknown, deps: HelperDeps): HelperResult {
   const parsed = parseValidateRequest(request)
   if (parsed === undefined) return refuseValidate(request, deps)
   const root = resolveStateRoot(
@@ -1807,6 +2124,9 @@ function digestModel(
     mode: snapshot.mode,
     hostSupport: snapshot.host,
     degradeReasons,
+    ...(snapshot.selection === undefined
+      ? {}
+      : { selection: snapshot.selection }),
     sweep: state.sweep,
     projects,
     unmatched: snapshot.unmatched,
@@ -1841,10 +2161,13 @@ function runRecord(
       ? {}
       : { lockReclaim: snapshot.reclaimed }),
     pruned: snapshot.pruned,
+    selection: snapshot.selection ?? { kind: 'all' },
     projects: snapshot.projects.map((project) => ({
       name: project.name,
       root: project.root,
       key: project.key,
+      ...(project.repo === undefined ? {} : { repo: project.repo }),
+      ...(project.commit === undefined ? {} : { commit: project.commit }),
       files: project.files,
       citationsUnsupported: project.citationsUnsupported,
       citationsChecked: project.citationsChecked,
@@ -1933,6 +2256,7 @@ function commitRun(
   handle: LockHandle,
   root: string,
   deps: HelperDeps,
+  ciMarker: string | undefined,
 ): HelperResult {
   const degradeReasons = [...state.degradeReasons]
   const outcome = degradeReasons.length > 0 ? 'degraded' : 'complete'
@@ -1956,6 +2280,9 @@ function commitRun(
           ...(rule.project === undefined ? {} : { project: rule.project }),
         })),
         covered: state.coveredRuleIds,
+        ...(snapshot.selection === undefined
+          ? {}
+          : selectionOf(snapshot.selection)),
         ...(scope === undefined
           ? {}
           : {
@@ -2001,6 +2328,21 @@ function commitRun(
   removeWorkDir(root, snapshot.runId)
   const finalOutcome = ledgerWritten ? outcome : 'degraded'
   const digestPath = path.join(published.runDir, 'digest.md')
+  // The run is committed and the lock is gone, so this is the last write. If
+  // it fails, the begun record stays and reads as a run with no final line.
+  const recorded =
+    ciMarker === undefined
+      ? 'written'
+      : writeTerminal(
+          root,
+          ciMarker,
+          {
+            outcome: finalOutcome,
+            runId: snapshot.runId,
+            projects: invocationProjects(snapshot.projects),
+          },
+          deps,
+        )
   return success('publish', {
     outcome: finalOutcome,
     finalLine: `Connect ${finalOutcome}`,
@@ -2010,6 +2352,7 @@ function commitRun(
     runRecordPath: path.join(published.runDir, 'run.json'),
     ledger: published.ledger,
     ...(recordsCurrent ? {} : { runRecordCurrent: false }),
+    ...(recorded === 'written' ? {} : { invocationRecord: 'unwritten' }),
     lockReleased: released === 'released',
     degradeReasons,
     candidates: state.accepted.length,
@@ -2023,6 +2366,33 @@ function commitRun(
 }
 
 function publish(request: unknown, deps: HelperDeps): HelperResult {
+  const ciMarker = ciRunMarker(deps)
+  const result = publishRunOp(request, deps, ciMarker)
+  if (ciMarker === undefined) return result
+  const runId = requestRunId(request)
+  // A published run recorded itself. An abort is the one other way to end a
+  // run well; a failure that released the lock ended it badly. A failure that
+  // did not release the lock leaves the lock, and the run, to its holder.
+  if (result.ok) {
+    return result.body.outcome === 'aborted'
+      ? endInvocation(
+          ciMarker,
+          result,
+          { outcome: 'failed', reason: 'aborted', runId },
+          deps,
+        )
+      : result
+  }
+  return result.body.lockReleased === true
+    ? endInvocation(ciMarker, result, endOfFailure(result, runId), deps)
+    : result
+}
+
+function publishRunOp(
+  request: unknown,
+  deps: HelperDeps,
+  ciMarker: string | undefined,
+): HelperResult {
   const parsed = parseRunRequest(request)
   if (parsed === undefined) return failure('publish', 'invalid-request')
   const root = resolveStateRoot(
@@ -2055,7 +2425,7 @@ function publish(request: unknown, deps: HelperDeps): HelperResult {
         'not-validated',
       )
     }
-    return commitRun(snapshot, state, handle, root, deps)
+    return commitRun(snapshot, state, handle, root, deps, ciMarker)
   } catch {
     return releaseAndFail(
       'publish',
@@ -2141,6 +2511,87 @@ function parseShowRequest(request: unknown): { offset: number } | undefined {
   return { offset }
 }
 
+/** Namespaces listed by `ledger show`; the rest are counted. */
+const MAX_COVERAGE_NAMESPACES_SHOWN = 50
+const MAX_LABEL_PICKS = 32
+const MAX_LABEL_TEXT = 100
+const LABEL_FORBIDDEN = /[\p{Cc}\p{Cf}]/u
+
+function labelText(value: unknown): string | undefined {
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= MAX_LABEL_TEXT &&
+    !LABEL_FORBIDDEN.test(value)
+    ? value
+    : undefined
+}
+
+/** `group:<name>` or `projects:<a>,<b>` from the selection a run record names, if it names one well. */
+function selectionLabel(record: unknown): string | undefined {
+  if (!isRecord(record) || !isRecord(record.selection)) return undefined
+  const { kind, name, picks } = record.selection
+  if (kind === 'group') {
+    const text = labelText(name)
+    return text === undefined ? undefined : `group:${text}`
+  }
+  if (kind !== 'projects' || !Array.isArray(picks)) return undefined
+  if (picks.length === 0 || picks.length > MAX_LABEL_PICKS) return undefined
+  const texts = picks.map(labelText)
+  return texts.every((text) => text !== undefined)
+    ? `projects:${texts.join(',')}`
+    : undefined
+}
+
+interface NamespaceTally {
+  readonly selection: string
+  rules: number
+  newest: CoverageRecord
+}
+
+/**
+ * The coverage records counted per selection: the no-selection namespace
+ * first, then the most recently covered. A selection is labelled from the run
+ * record of its newest record when that run is still kept.
+ */
+function coverageNamespaces(
+  root: string,
+  coverage: readonly CoverageRecord[],
+): { listed: Json[]; omitted: number } {
+  const tallies = new Map<string, NamespaceTally>()
+  for (const record of coverage) {
+    const key = record.selection ?? 'all'
+    const tally = tallies.get(key)
+    if (tally === undefined) {
+      tallies.set(key, { selection: key, rules: 1, newest: record })
+      continue
+    }
+    tally.rules++
+    const newer =
+      record.at > tally.newest.at ||
+      (record.at === tally.newest.at && record.runId > tally.newest.runId)
+    if (newer) tally.newest = record
+  }
+  const ordered = [...tallies.values()].sort((a, b) => {
+    if (a.selection === 'all' || b.selection === 'all') {
+      return a.selection === 'all' ? -1 : 1
+    }
+    if (a.newest.at !== b.newest.at) return a.newest.at < b.newest.at ? 1 : -1
+    return a.selection < b.selection ? -1 : 1
+  })
+  const shown = ordered.slice(0, MAX_COVERAGE_NAMESPACES_SHOWN)
+  const listed = shown.map((tally): Json => {
+    if (tally.selection === 'all')
+      return { selection: 'all', rules: tally.rules }
+    const label = selectionLabel(readRunRecord(root, tally.newest.runId))
+    return {
+      selection: tally.selection,
+      rules: tally.rules,
+      ...(label === undefined ? {} : { label }),
+    }
+  })
+  return { listed, omitted: ordered.length - shown.length }
+}
+
 function ledgerShow(request: unknown, deps: HelperDeps): HelperResult {
   const page = parseShowRequest(request)
   if (page === undefined) return failure('ledger-show', 'invalid-request')
@@ -2153,11 +2604,19 @@ function ledgerShow(request: unknown, deps: HelperDeps): HelperResult {
   const total = read.ledger.entries.length
   const end = page.offset + MAX_LEDGER_ENTRIES_SHOWN
   const entries = read.ledger.entries.slice(page.offset, end)
+  const records = read.ledger.coverage ?? []
+  const namespaces = coverageNamespaces(prepared.root, records)
   return success('ledger-show', {
     total,
     offset: page.offset,
     nextOffset: end < total ? end : null,
-    coverage: { rules: read.ledger.coverage?.length ?? 0 },
+    coverage: {
+      rules: records.length,
+      namespaces: namespaces.listed,
+      ...(namespaces.omitted > 0
+        ? { namespacesOmitted: namespaces.omitted }
+        : {}),
+    },
     entries: entries.map((entry) => ({
       id: entry.id,
       kind: entry.kind,
@@ -2217,6 +2676,672 @@ function ledgerUnlock(deps: HelperDeps): HelperResult {
   })
 }
 
+// ── import ──────────────────────────────────────────────────────────────────
+
+const GITHUB_REPO = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/
+const GITHUB_RUN_ID = /^[0-9]{1,20}$/
+const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+const MAX_DIRECTORY_LENGTH = 4096
+
+interface ImportRequest {
+  readonly directory: string
+  readonly provenance: ImportProvenance
+}
+
+/** The downloaded directory and where the run came from. The skill supplies both; neither comes from the record. */
+function parseImportRequest(request: unknown): ImportRequest | undefined {
+  if (!isRecord(request)) return undefined
+  const { directory, provenance } = request
+  if (
+    typeof directory !== 'string' ||
+    directory === '' ||
+    directory.length > MAX_DIRECTORY_LENGTH ||
+    CONTROL_IN_PATH.test(directory) ||
+    !path.isAbsolute(directory)
+  ) {
+    return undefined
+  }
+  if (!isRecord(provenance)) return undefined
+  const { repo, runId, commit } = provenance
+  if (typeof repo !== 'string' || !GITHUB_REPO.test(repo)) return undefined
+  if (typeof runId !== 'string' || !GITHUB_RUN_ID.test(runId)) return undefined
+  if (
+    commit !== undefined &&
+    !(typeof commit === 'string' && COMMIT_ID.test(commit))
+  ) {
+    return undefined
+  }
+  return {
+    directory,
+    provenance: {
+      repo,
+      runId,
+      ...(commit === undefined ? {} : { commit }),
+    },
+  }
+}
+
+function importFailure(reason: string, extra: Json = {}): HelperResult {
+  return failure('import', reason, { finalLine: 'Connect failed', ...extra })
+}
+
+function importLocals(environment: Environment): LocalCheckout[] {
+  return environment.resolved.resolved.map(({ mainRoot }) => ({
+    root: mainRoot,
+    key: projectKey(mainRoot),
+    name: projectName(mainRoot),
+    ...readRepoIdentity(mainRoot),
+  }))
+}
+
+/** The tracked files of a local checkout, or nothing when it cannot be read. */
+function importFacts(
+  deps: HelperDeps,
+): (root: string) => ProjectFacts | undefined {
+  const limits = bounds(deps)
+  return (root) => {
+    // A root with such a character cannot be cited from, as in a local run.
+    if (UNSAFE_PATH_CHARACTER.test(root)) return undefined
+    const inventory = inventoryProject(root, {
+      bounds: limits,
+      ...(deps.gitBinary === undefined ? {} : { gitBinary: deps.gitBinary }),
+    })
+    return inventory.status === 'ok'
+      ? toProjectFacts(inventory.mainRoot, inventory.files)
+      : undefined
+  }
+}
+
+/** A candidate to be written into the new import run. */
+interface Fresh extends AcceptedCandidate {
+  readonly kind: 'fresh'
+  readonly record: CandidateRecord
+}
+
+/** A candidate already open in the ledger, with the import run that holds it. */
+interface Open {
+  readonly kind: 'open'
+  readonly accepted: ImportAccepted
+  readonly runRecordPath: string
+}
+
+interface Placement {
+  readonly fresh: readonly Fresh[]
+  readonly open: readonly Open[]
+  readonly skipped: readonly SkippedCandidate[]
+  /** The accepted candidates in record order. */
+  readonly order: ReadonlyArray<Fresh | Open>
+}
+
+const NO_PLACEMENT: Placement = {
+  fresh: [],
+  open: [],
+  skipped: [],
+  order: [],
+}
+
+/**
+ * What a candidate stands on: its target, sources, target evidence and
+ * counterevidence. A kept record is the same candidate only when this matches,
+ * because the id is the same across changed fingerprints.
+ */
+function evidenceOf(candidate: {
+  readonly target?: unknown
+  readonly sources?: unknown
+  readonly targetEvidence?: unknown
+  readonly counterevidence?: unknown
+}): string {
+  return JSON.stringify([
+    candidate.target,
+    candidate.sources,
+    candidate.targetEvidence,
+    candidate.counterevidence,
+  ])
+}
+
+/** The evidence of each candidate a kept import run holds, by id, newest run first. */
+function keptImportRuns(
+  root: string,
+  runs: readonly string[],
+): Array<{ runId: string; evidence: ReadonlyMap<string, string> }> {
+  const out: Array<{ runId: string; evidence: ReadonlyMap<string, string> }> =
+    []
+  for (const runId of runs) {
+    const record = readRunRecord(root, runId)
+    if (!isRecord(record) || record.kind !== 'import') continue
+    const block = record.candidateBlock
+    if (!isRecord(block) || !Array.isArray(block.candidates)) continue
+    const evidence = new Map<string, string>()
+    for (const item of block.candidates as unknown[]) {
+      if (isRecord(item) && typeof item.id === 'string') {
+        evidence.set(item.id, evidenceOf(item))
+      }
+    }
+    out.push({ runId, evidence })
+  }
+  return out
+}
+
+function freshOf(
+  item: ImportAccepted,
+  standing: Standing,
+  extra: {
+    refreshPointer?: string
+    possibleMatches?: readonly string[]
+  } = {},
+): Fresh {
+  return {
+    kind: 'fresh',
+    id: item.id,
+    standing,
+    ...(extra.refreshPointer === undefined
+      ? {}
+      : { refreshPointer: extra.refreshPointer }),
+    possibleMatches: extra.possibleMatches ?? [],
+    candidate: item.candidate,
+    record: item.record,
+  }
+}
+
+/** A candidate decided here, named so it is skipped; a promoted one carries where it lives. */
+function skippedOf(
+  item: ImportAccepted,
+  entry: LedgerEntry | undefined,
+): SkippedCandidate | undefined {
+  const title = item.candidate.title
+  if (entry?.status === 'rejected') {
+    return { id: item.id, title, reason: 'rejected-locally' }
+  }
+  if (entry?.status !== 'promoted') return undefined
+  return {
+    id: item.id,
+    title,
+    reason: 'promoted-locally',
+    ...(entry.destination === undefined
+      ? {}
+      : { refreshPointer: entry.destination }),
+  }
+}
+
+type Placed =
+  | { readonly placed: Fresh | Open }
+  | { readonly skipped: SkippedCandidate }
+
+function placeOne(
+  item: ImportAccepted,
+  ledger: Ledger,
+  heldIn: (item: ImportAccepted) => string | undefined,
+): Placed {
+  const outcome = classifyCandidate(ledger, item.record)
+  if (outcome.standing === 'new') {
+    return {
+      placed: freshOf(item, 'new', {
+        possibleMatches: [
+          ...new Set([
+            ...outcome.possibleMatches,
+            ...findRenamedEntries(ledger, item.record, item.id),
+          ]),
+        ],
+      }),
+    }
+  }
+  if (outcome.standing === 'reopened') {
+    return {
+      placed: freshOf(
+        item,
+        outcome.reason,
+        outcome.refreshPointer === undefined
+          ? {}
+          : { refreshPointer: outcome.refreshPointer },
+      ),
+    }
+  }
+  const skipped = skippedOf(
+    item,
+    ledger.entries.find((known) => known.id === item.id),
+  )
+  if (skipped !== undefined) return { skipped }
+  const held = heldIn(item)
+  return {
+    placed:
+      held === undefined
+        ? freshOf(item, 'new')
+        : { kind: 'open', accepted: item, runRecordPath: held },
+  }
+}
+
+/**
+ * Sort the accepted candidates by what the ledger says about each. A new or
+ * reopened one is written. One decided here is skipped and named. One already
+ * open is listed again with the import run that holds it; when no kept run
+ * holds it with the evidence just verified it is written again, and its ledger
+ * entry stays as it is.
+ */
+function placeCandidates(
+  accepted: readonly ImportAccepted[],
+  ledger: Ledger,
+  root: string,
+  runs: readonly string[],
+): Placement {
+  let kept: ReturnType<typeof keptImportRuns> | undefined
+  const heldIn = (item: ImportAccepted): string | undefined => {
+    kept ??= keptImportRuns(root, runs)
+    const current = evidenceOf(item.candidate)
+    const holder = kept.find((run) => run.evidence.get(item.id) === current)
+    return holder === undefined
+      ? undefined
+      : path.join(root, 'runs', holder.runId, 'run.json')
+  }
+  const fresh: Fresh[] = []
+  const open: Open[] = []
+  const skipped: SkippedCandidate[] = []
+  const order: Array<Fresh | Open> = []
+  for (const item of accepted) {
+    const result = placeOne(item, ledger, heldIn)
+    if ('skipped' in result) {
+      skipped.push(result.skipped)
+      continue
+    }
+    order.push(result.placed)
+    if (result.placed.kind === 'fresh') fresh.push(result.placed)
+    else open.push(result.placed)
+  }
+  return { fresh, open, skipped, order }
+}
+
+function countByReason(
+  refused: readonly ImportRefusal[],
+): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const item of refused) count(counts, item.reason)
+  return counts
+}
+
+function importRunRecord(
+  model: ImportModel,
+  createdAt: string,
+  verified: Verification,
+  placement: Placement,
+): Json {
+  return {
+    schemaVersion: 1,
+    runId: model.runId,
+    createdAt,
+    kind: 'import',
+    outcome: model.outcome,
+    degradeReasons: model.degradeReasons,
+    provenance: model.provenance,
+    source: { runId: model.sourceRunId },
+    projects: verified.projects,
+    counts: {
+      candidates: placement.fresh.length,
+      alreadyImported: placement.open.length,
+      skipped: placement.skipped.length,
+      refused: model.refused.length,
+    },
+    refused: model.refused,
+    skipped: placement.skipped,
+    candidateBlock: buildCandidateBlock(placement.fresh),
+  }
+}
+
+/** What the answer and the digest say, with the run record each candidate sits in. */
+function importModel(
+  parsed: ImportRequest,
+  sourceRunId: string,
+  verified: Verification,
+  placement: Placement,
+  runId: string | undefined,
+  newRecordPath: string,
+): ImportModel {
+  const candidates: ImportedCandidate[] = placement.order.map((entry) =>
+    entry.kind === 'fresh'
+      ? { item: entry, runRecordPath: newRecordPath }
+      : {
+          item: {
+            id: entry.accepted.id,
+            standing: 'new',
+            possibleMatches: [],
+            candidate: entry.accepted.candidate,
+          },
+          runRecordPath: entry.runRecordPath,
+        },
+  )
+  return {
+    runId,
+    outcome: verified.refused.length > 0 ? 'degraded' : 'complete',
+    degradeReasons: verified.refused.length > 0 ? ['candidates-refused'] : [],
+    provenance: parsed.provenance,
+    sourceRunId,
+    projects: verified.projects,
+    imported: placement.fresh.length,
+    candidates,
+    skipped: placement.skipped,
+    refused: verified.refused,
+  }
+}
+
+function importAnswer(
+  model: ImportModel,
+  verified: Verification,
+  written: { runDir: string } | undefined,
+): HelperResult {
+  const runRecordPath =
+    written === undefined ? undefined : path.join(written.runDir, 'run.json')
+  const digestPath =
+    written === undefined ? undefined : path.join(written.runDir, 'digest.md')
+  return success('import', {
+    outcome: model.outcome,
+    finalLine: `Connect ${model.outcome}`,
+    ...(written === undefined || model.runId === undefined
+      ? {}
+      : {
+          runId: model.runId,
+          runDir: written.runDir,
+          runRecordPath,
+          digestPath,
+        }),
+    imported: model.imported,
+    alreadyImported: model.candidates.length - model.imported,
+    candidates: model.candidates.map(({ item, runRecordPath: held }) => ({
+      id: item.id,
+      kind: item.candidate.kind,
+      title: item.candidate.title,
+      standing: item.standing,
+      runRecordPath: held,
+    })),
+    skipped: model.skipped,
+    refused: model.refused,
+    refusedBy: countByReason(model.refused),
+    projects: verified.projects,
+    provenance: model.provenance,
+    degradeReasons: model.degradeReasons,
+    summary: renderImportSummary(model, digestPath),
+  })
+}
+
+/** The busy lock, a failed insert and a ledger that was not written, each as the answer. */
+function insertFailure(inserted: ImportInsertResult): HelperResult | undefined {
+  if (inserted.status === 'busy') {
+    return {
+      ok: false,
+      body: {
+        ok: false,
+        op: 'import',
+        outcome: 'busy',
+        reason: inserted.reason,
+        finalLine: 'Connect busy',
+        hint: 'Another run holds the lock. If no run is active, `ledger unlock` clears it.',
+      },
+    }
+  }
+  if (inserted.status === 'failed') {
+    return importFailure(
+      inserted.reason === 'lock-failed' ||
+        inserted.reason === 'ledger-unreadable'
+        ? inserted.reason
+        : `publish-${inserted.reason}`,
+    )
+  }
+  if (inserted.status === 'published' && !inserted.ledger.written) {
+    return importFailure('ledger-write-failed', {
+      runDir: inserted.runDir,
+      ...(inserted.runRecordCurrent === false
+        ? { runRecordCurrent: false }
+        : {}),
+    })
+  }
+  return undefined
+}
+
+/** Place the verified candidates under the lock and write the import run, if there is one to write. */
+function importWrite(
+  parsed: ImportRequest,
+  sourceRunId: string,
+  verified: Verification,
+  root: string,
+  deps: HelperDeps,
+): HelperResult {
+  const now = deps.now ?? Date.now
+  let placement: Placement = NO_PLACEMENT
+  let localRunId: string | undefined
+  const inserted = insertImportRun(
+    root,
+    (view): ImportPlan => {
+      placement = placeCandidates(
+        verified.accepted,
+        view.ledger,
+        root,
+        view.importRuns,
+      )
+      if (placement.fresh.length === 0) return { publish: false }
+      const runId = newImportRunId(now())
+      localRunId = runId
+      const createdAt = new Date(now()).toISOString()
+      const model = importModel(
+        parsed,
+        sourceRunId,
+        verified,
+        placement,
+        runId,
+        path.join(root, 'runs', runId, 'run.json'),
+      )
+      const filesOf = (shown: ImportModel): Record<string, string> => ({
+        'digest.md': renderImportDigest(shown, placement.fresh, createdAt),
+        'run.json': `${JSON.stringify(importRunRecord(shown, createdAt, verified, placement), null, 2)}\n`,
+      })
+      return {
+        publish: true,
+        runId,
+        files: filesOf(model),
+        candidates: placement.fresh.map((item) => item.record),
+        // The run is committed before the ledger is written, so a ledger that
+        // cannot be written leaves a run that must not say it is complete.
+        onLedgerWriteFailed: () =>
+          filesOf({
+            ...model,
+            outcome: 'degraded',
+            degradeReasons: [...model.degradeReasons, 'ledger-write-failed'],
+          }),
+      }
+    },
+    {
+      now,
+      ...(deps.processes === undefined ? {} : { processes: deps.processes }),
+      ...(deps.publishHooks === undefined ? {} : { hooks: deps.publishHooks }),
+    },
+  )
+  const failed = insertFailure(inserted)
+  if (failed !== undefined) return failed
+  const written =
+    inserted.status === 'published' ? { runDir: inserted.runDir } : undefined
+  return importAnswer(
+    importModel(
+      parsed,
+      sourceRunId,
+      verified,
+      placement,
+      localRunId,
+      written === undefined ? '' : path.join(written.runDir, 'run.json'),
+    ),
+    verified,
+    written,
+  )
+}
+
+/**
+ * Import the candidates of a scheduled run's record. Everything before the
+ * lock only reads: the record, then the local checkouts. A request or a record
+ * that cannot be used changes no state, and neither does an import that has
+ * nothing to write.
+ */
+function importRun(request: unknown, deps: HelperDeps): HelperResult {
+  const parsed = parseImportRequest(request)
+  if (parsed === undefined) return importFailure('invalid-request')
+  const read = readImportRecord(parsed.directory)
+  if (read.status === 'failed') return importFailure(read.reason)
+  const environment = describeEnvironment(deps)
+  if (environment.resolved.resolved.length === 0) {
+    return importFailure('no-allowed-projects', {
+      unmatched: environment.resolved.unmatched,
+      configWarnings: environment.warnings,
+    })
+  }
+  const verified = verifyRecord({
+    record: read.record,
+    locals: importLocals(environment),
+    factsFor: importFacts(deps),
+  })
+  const sourceRunId = read.record.runId
+  if (verified.accepted.length === 0) {
+    return importAnswer(
+      importModel(parsed, sourceRunId, verified, NO_PLACEMENT, undefined, ''),
+      verified,
+      undefined,
+    )
+  }
+
+  const state = prepareStateRoot(environment.stateRoot, {
+    allowedRoots: environment.allowedRoots,
+  })
+  if (state.status === 'refused') {
+    return importFailure('state-root-refused', { detail: state.reason })
+  }
+  return importWrite(parsed, sourceRunId, verified, state.root, deps)
+}
+
+// ── apply-ticks and render-report ───────────────────────────────────────────
+
+const ISSUE_DIGITS = /^[0-9]{1,10}$/
+
+interface TicksRequest {
+  readonly bodyFile: string
+  readonly issue: number
+}
+
+/** The report body as a file and the report's issue number, as a number or a string of digits. */
+function parseTicksRequest(request: unknown): TicksRequest | undefined {
+  if (!isRecord(request)) return undefined
+  const { bodyFile, issue } = request
+  if (
+    typeof bodyFile !== 'string' ||
+    bodyFile === '' ||
+    bodyFile.length > MAX_DIRECTORY_LENGTH ||
+    CONTROL_IN_PATH.test(bodyFile) ||
+    !path.isAbsolute(bodyFile)
+  ) {
+    return undefined
+  }
+  const number =
+    typeof issue === 'string' && ISSUE_DIGITS.test(issue)
+      ? Number(issue)
+      : issue
+  if (typeof number !== 'number' || !Number.isSafeInteger(number)) {
+    return undefined
+  }
+  return number < 1 ? undefined : { bodyFile, issue: number }
+}
+
+/** The date, the GitHub run and attempt, and whether a cache came back. Their values are checked by the renderer. */
+function parseRenderRequest(request: unknown): RenderRequest | undefined {
+  if (!isRecord(request)) return undefined
+  const { date, runId, attempt, cacheRestored } = request
+  if (
+    typeof date !== 'string' ||
+    typeof runId !== 'string' ||
+    typeof attempt !== 'string' ||
+    typeof cacheRestored !== 'boolean'
+  ) {
+    return undefined
+  }
+  return { date, runId, attempt, cacheRestored }
+}
+
+function ciOptions(deps: HelperDeps): CiOptions {
+  return {
+    ...(deps.processes === undefined ? {} : { processes: deps.processes }),
+    ...(deps.now === undefined ? {} : { now: deps.now }),
+  }
+}
+
+function busyAnswer(
+  op: string,
+  reason: string,
+  extra: Json = {},
+): HelperResult {
+  return {
+    ok: false,
+    body: { ok: false, op, outcome: 'busy', reason, ...extra },
+  }
+}
+
+/**
+ * Record the ticks of a posted report body. The body is a file the workflow
+ * fetched; the manifest it names is looked up in the state root. A tick that
+ * cannot be matched to it is reported, never fatal, and nothing is recorded
+ * from a body that does not name a stored manifest.
+ */
+function applyTicksOp(request: unknown, deps: HelperDeps): HelperResult {
+  const parsed = parseTicksRequest(request)
+  if (parsed === undefined) return failure('apply-ticks', 'invalid-request')
+  const read = readReportBody(parsed.bodyFile)
+  if (read.status === 'failed') return failure('apply-ticks', read.reason)
+  const prepared = prepare('apply-ticks', deps)
+  if (!prepared.ok) return prepared.result
+  const result = applyTicks(
+    prepared.root,
+    { body: read.body, issue: parsed.issue },
+    ciOptions(deps),
+  )
+  if (result.status === 'busy') {
+    return busyAnswer('apply-ticks', result.reason, {
+      accepted: result.accepted,
+    })
+  }
+  if (result.status === 'failed') {
+    return failure('apply-ticks', result.reason, { accepted: result.accepted })
+  }
+  return success('apply-ticks', {
+    report: parsed.issue,
+    section: result.section,
+    accepted: result.accepted,
+    skipped: result.skipped,
+    unresolved: result.unresolved,
+  })
+}
+
+/**
+ * Render the report body into `report.md` in the state root. The answer holds
+ * the facts about the body (counts, the manifest hash, the outcome, whether
+ * the job should end red and whether the stores were updated) and never the
+ * body itself.
+ */
+function renderReportOp(request: unknown, deps: HelperDeps): HelperResult {
+  const parsed = parseRenderRequest(request)
+  if (parsed === undefined) return failure('render-report', 'invalid-request')
+  const prepared = prepare('render-report', deps)
+  if (!prepared.ok) return prepared.result
+  const result = renderReport(prepared.root, parsed, ciOptions(deps))
+  if (result.status === 'busy')
+    return busyAnswer('render-report', result.reason)
+  if (result.status === 'failed') {
+    return failure('render-report', result.reason)
+  }
+  return success('render-report', {
+    bodyFile: result.bodyFile,
+    bodyChars: result.body.length,
+    manifest: result.manifest,
+    open: result.open,
+    shown: result.shown,
+    hidden: result.hidden,
+    fresh: result.fresh,
+    runs: result.runs,
+    outcome: result.outcome,
+    red: result.red,
+    stateUpdated: result.stateUpdated,
+  })
+}
+
 // ── Dispatch ────────────────────────────────────────────────────────────────
 
 /**
@@ -2239,6 +3364,12 @@ export function runHelperOp(
         return publish(request, deps)
       case 'decide':
         return decide(request, deps)
+      case 'import':
+        return importRun(request, deps)
+      case 'apply-ticks':
+        return applyTicksOp(request, deps)
+      case 'render-report':
+        return renderReportOp(request, deps)
       case 'ledger-show':
         return ledgerShow(request, deps)
       case 'ledger-clear':
@@ -2301,7 +3432,15 @@ export interface CliOptions {
   readonly errorSink?: (line: string) => void
 }
 
-const REQUEST_OPS = new Set<Op>(['begin', 'validate', 'publish', 'decide'])
+const REQUEST_OPS = new Set<Op>([
+  'begin',
+  'validate',
+  'publish',
+  'decide',
+  'import',
+  'apply-ticks',
+  'render-report',
+])
 
 function resolveCliOp(argv: readonly string[]): Op | undefined {
   const [first, second] = argv
@@ -2329,6 +3468,19 @@ type CliRequest =
   | { readonly ok: true; readonly request: unknown }
   | { readonly ok: false; readonly exitCode: 2 }
 
+/**
+ * The answer for a `begin` whose request could not be read. A CI run still
+ * ends with a terminal `failed` record, as every other stop of `begin` does;
+ * a local run has no run file and writes nothing.
+ */
+function refusedBegin(result: HelperResult, options: CliOptions): HelperResult {
+  const deps = options.deps ?? {}
+  const marker = ciRunMarker(deps)
+  return marker === undefined
+    ? result
+    : endInvocation(marker, result, endOfFailure(result), deps)
+}
+
 /** Read the request of an operation that takes one: JSON on stdin, bounded. */
 function readCliRequest(
   op: Op,
@@ -2341,19 +3493,23 @@ function readCliRequest(
     err(
       `${op} reads one JSON request from stdin; interactive input is not supported`,
     )
+    if (op === 'begin') {
+      refusedBegin(failure(op, 'request-interactive'), options)
+    }
     return { ok: false, exitCode: 2 }
   }
   const text = (options.readRequest ?? readStdinBounded)()
   const refuse = (reason: string): CliRequest => {
+    // The request is the only place the lock handle is, and it was not read.
+    const refused = failure(
+      op,
+      reason,
+      op === 'validate' ? { lockReleased: false } : {},
+    )
     out(
-      JSON.stringify({
-        ok: false,
-        op,
-        outcome: 'failed',
-        reason,
-        // The request is the only place the lock handle is, and it was not read.
-        ...(op === 'validate' ? { lockReleased: false } : {}),
-      }),
+      JSON.stringify(
+        (op === 'begin' ? refusedBegin(refused, options) : refused).body,
+      ),
     )
     return { ok: false, exitCode: 2 }
   }

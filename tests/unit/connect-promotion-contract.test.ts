@@ -449,6 +449,63 @@ describe('ce:compound candidate input: the contract it reads', () => {
   })
 })
 
+describe('the run record gains the portable identity without a new schema version', () => {
+  const recordProducer = helperSource.slice(
+    helperSource.indexOf('function runRecord'),
+    helperSource.indexOf('function abortRun'),
+  )
+  const projectEntry = recordProducer.slice(
+    recordProducer.indexOf('projects: snapshot.projects.map'),
+    recordProducer.indexOf('unmatched: snapshot.unmatched'),
+  )
+
+  test('the run record stays at schema version 1', () => {
+    expect(recordProducer).toMatch(/schemaVersion: 1,\s+runId: snapshot\.runId/)
+  })
+
+  test('each project entry carries repo and commit only when they are known', () => {
+    expect(projectEntry).toMatch(/project\.repo === undefined/)
+    expect(projectEntry).toMatch(/project\.commit === undefined/)
+  })
+
+  test('the consumer reads the candidate block and does not depend on the new fields', () => {
+    expect(candidateInputText).toMatch(/`candidateBlock`/)
+    expect(candidateInputText).not.toMatch(/`repo`|`commit`/)
+  })
+})
+
+describe('an import run record is read through the same candidate input', () => {
+  const importProducer = helperSource.slice(
+    helperSource.indexOf('function importRunRecord'),
+    helperSource.indexOf('function importModel'),
+  )
+
+  test('stays at schema version 1 and builds its candidate block with the local run builder', () => {
+    expect(importProducer).toMatch(/schemaVersion: 1,\s+runId: model\.runId/)
+    expect(importProducer).toMatch(
+      /candidateBlock: buildCandidateBlock\(placement\.fresh\)/,
+    )
+  })
+
+  test('marks itself with a kind and a provenance that the consumer does not read', () => {
+    expect(importProducer).toContain("kind: 'import'")
+    expect(importProducer).toContain('provenance: model.provenance')
+    expect(candidateInputText).not.toMatch(/`provenance`|`kind: import`/)
+    expect(candidateInputText).toMatch(/`candidateBlock`/)
+  })
+
+  test('writes only what the import checked: local roots, never a recorded one', () => {
+    const importSource = fs.readFileSync(
+      path.join(ROOT, 'src/lib/connect-import.ts'),
+      'utf8',
+    )
+    // The candidate that reaches the block comes out of `checkCandidate` on
+    // the candidate rewritten with local roots.
+    expect(importSource).toMatch(/checkCandidate\(\s*localRaw\(/)
+    expect(importSource).not.toMatch(/toCandidateRecord\(raw\)/)
+  })
+})
+
 describe('ce:compound candidate input: rules that do not bend', () => {
   const rules = `${candidateSection}\n${candidateInputText}`
 

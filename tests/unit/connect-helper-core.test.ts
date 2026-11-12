@@ -18,9 +18,14 @@ import {
   projectName,
   renderDigest,
   renderSummary,
+  resolveSelection,
   resolveStateRoot,
   ruleIdFor,
+  type Selection,
+  type SelectionRequest,
+  type SelectionResult,
   scanProvenance,
+  selectionIdFor,
   toCandidateRecord,
   toProjectFacts,
   type ValidationContext,
@@ -1504,5 +1509,390 @@ describe('renderSummary', () => {
       text.split('\n').filter((line) => line.startsWith('candidate:')),
     ).toHaveLength(10)
     expect(text).toContain('2 more candidates are in the digest')
+  })
+})
+
+// ── Selection ──────────────────────────────────────────────────────────────
+
+describe('resolveSelection', () => {
+  const ROOTS = [
+    '/w/metacogs',
+    '/w/dev-like',
+    '/w/systematic',
+    '/w/alpha',
+    '/w/0123456789ab',
+  ]
+  const OUTSIDER = '/w/outsider'
+  const GROUPS: Record<string, string[]> = {
+    'harness-tools': ['/w/metacogs', '/w/dev-like'],
+    'harness-tools-reversed': ['/w/dev-like', '/w/metacogs'],
+    'same-members': ['/w/metacogs', '/w/dev-like'],
+    dup: ['/w/metacogs', '/w/metacogs/.'],
+    off: ['/w/metacogs', OUTSIDER],
+    stale: ['/w/metacogs', '/w/gone'],
+    a: ['/w/alpha'],
+  }
+  const ALIASES: Record<string, string> = { '/w/metacogs/.': '/w/metacogs' }
+
+  function request(
+    words: readonly string[],
+    over: Partial<SelectionRequest> = {},
+  ): SelectionRequest {
+    const allowed = ROOTS.map((root) => ({ entry: root, mainRoot: root }))
+    return {
+      words,
+      groups: GROUPS,
+      allowed,
+      resolveMember: (entry) => {
+        const mainRoot = ALIASES[entry] ?? entry
+        return [...ROOTS, OUTSIDER].includes(mainRoot)
+          ? { status: 'resolved', mainRoot }
+          : { status: 'unmatched', reason: 'stale' }
+      },
+      ...over,
+    }
+  }
+
+  function selected(result: ReturnType<typeof resolveSelection>): string[] {
+    if (result.status !== 'ok') throw new Error(JSON.stringify(result))
+    return result.projects.map((project) => project.mainRoot)
+  }
+
+  const keysOf = (roots: readonly string[]): string[] => roots.map(projectKey)
+
+  it('reads the whole allow list for no word at all', () => {
+    const result = resolveSelection(request([]))
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') return
+    expect(result.selection).toEqual({ kind: 'all' })
+    expect(selected(result)).toEqual(ROOTS)
+  })
+
+  it('resolves a group to its members, in allow-list order, and names the group and the id', () => {
+    const result = resolveSelection(request(['group:harness-tools']))
+    expect(selected(result)).toEqual(['/w/metacogs', '/w/dev-like'])
+    if (result.status !== 'ok') return
+    expect(result.selection).toEqual({
+      kind: 'group',
+      name: 'harness-tools',
+      id: selectionIdFor(keysOf(['/w/metacogs', '/w/dev-like'])),
+    })
+  })
+
+  it('selects the same projects and the same id however the members are ordered or the group is named', () => {
+    const forward = resolveSelection(request(['group:harness-tools']))
+    const reversed = resolveSelection(request(['group:harness-tools-reversed']))
+    const twin = resolveSelection(request(['group:same-members']))
+    expect(selected(reversed)).toEqual(selected(forward))
+    if (
+      forward.status !== 'ok' ||
+      reversed.status !== 'ok' ||
+      twin.status !== 'ok'
+    ) {
+      throw new Error('expected ok')
+    }
+    const idOf = (selection: Selection): string =>
+      selection.kind === 'all' ? '' : selection.id
+    expect(idOf(reversed.selection)).toBe(idOf(forward.selection))
+    expect(idOf(twin.selection)).toBe(idOf(forward.selection))
+  })
+
+  it('reads a group word that repeats identically once', () => {
+    const once = resolveSelection(request(['group:harness-tools']))
+    const twice = resolveSelection(
+      request(['group:harness-tools', 'group:harness-tools']),
+    )
+    expect(twice).toEqual(once)
+  })
+
+  it('counts two group members that resolve to one main root once', () => {
+    expect(selected(resolveSelection(request(['group:dup'])))).toEqual([
+      '/w/metacogs',
+    ])
+  })
+
+  it('resolves picks by name, names them in allow-list order, and collapses repeats', () => {
+    const result = resolveSelection(
+      request(['projects:dev-like,metacogs,dev-like']),
+    )
+    expect(selected(result)).toEqual(['/w/metacogs', '/w/dev-like'])
+    if (result.status !== 'ok') return
+    expect(result.selection).toEqual({
+      kind: 'projects',
+      picks: ['metacogs', 'dev-like'],
+      id: selectionIdFor(keysOf(['/w/metacogs', '/w/dev-like'])),
+    })
+  })
+
+  it('gives a group and a pick of the same projects one selection id', () => {
+    const group = resolveSelection(request(['group:harness-tools']))
+    const picks = resolveSelection(request(['projects:metacogs,dev-like']))
+    if (group.status !== 'ok' || picks.status !== 'ok') {
+      throw new Error('expected ok')
+    }
+    expect(picks.selection.kind === 'projects' && picks.selection.id).toBe(
+      group.selection.kind === 'group' && group.selection.id,
+    )
+  })
+
+  it('resolves a 12-hex pick as a key', () => {
+    const key = projectKey('/w/alpha')
+    expect(selected(resolveSelection(request([`projects:${key}`])))).toEqual([
+      '/w/alpha',
+    ])
+  })
+
+  it('falls back to a name when a 12-hex pick is no key', () => {
+    expect(
+      selected(resolveSelection(request(['projects:0123456789ab']))),
+    ).toEqual(['/w/0123456789ab'])
+  })
+
+  it('tries a 12-hex pick as a key before a name', () => {
+    const key = projectKey('/w/alpha')
+    const decoy = `/w/${key}`
+    const result = resolveSelection(
+      request([`projects:${key}`], {
+        allowed: [...ROOTS, decoy].map((root) => ({
+          entry: root,
+          mainRoot: root,
+        })),
+      }),
+    )
+    expect(selected(result)).toEqual(['/w/alpha'])
+  })
+
+  it('is case sensitive about names', () => {
+    expect(resolveSelection(request(['projects:Metacogs']))).toEqual({
+      status: 'refused',
+      refusal: { reason: 'unknown-project', project: 'Metacogs' },
+    })
+  })
+
+  describe('refusals', () => {
+    const conflict = (detail: string): SelectionResult => ({
+      status: 'refused',
+      refusal: { reason: 'conflicting-selection', detail },
+    })
+
+    it('refuses two different group words', () => {
+      expect(
+        resolveSelection(request(['group:harness-tools', 'group:a'])),
+      ).toEqual(conflict('two different group: words'))
+    })
+
+    it('refuses two different projects words, even when they name the same projects', () => {
+      expect(
+        resolveSelection(request(['projects:alpha', 'projects:metacogs'])),
+      ).toEqual(conflict('two different projects: words'))
+      expect(
+        resolveSelection(
+          request(['projects:metacogs,dev-like', 'projects:dev-like,metacogs']),
+        ),
+      ).toEqual(conflict('two different projects: words'))
+    })
+
+    it('refuses a group word with a projects word, repeats or not', () => {
+      expect(
+        resolveSelection(request(['group:harness-tools', 'projects:metacogs'])),
+      ).toEqual(conflict('group: and projects: words together'))
+      expect(
+        resolveSelection(request(['group:a', 'group:a', 'projects:metacogs'])),
+      ).toEqual(conflict('group: and projects: words together'))
+    })
+
+    it('finds a conflict before it looks anything up', () => {
+      expect(resolveSelection(request(['group:zzz', 'group:yyy'])).status).toBe(
+        'refused',
+      )
+      expect(resolveSelection(request(['group:zzz', 'group:yyy']))).toEqual(
+        conflict('two different group: words'),
+      )
+    })
+
+    it('refuses a group that is not defined, whatever Object.prototype holds', () => {
+      for (const name of ['zzz', 'constructor', 'toString', '__proto__']) {
+        expect(resolveSelection(request([`group:${name}`]))).toEqual({
+          status: 'refused',
+          refusal: { reason: 'unknown-group', group: name },
+        })
+      }
+    })
+
+    it('refuses a project that matches no name and no key', () => {
+      expect(resolveSelection(request(['projects:metacogs,nope']))).toEqual({
+        status: 'refused',
+        refusal: { reason: 'unknown-project', project: 'nope' },
+      })
+    })
+
+    it('refuses a name two allowed projects share, listing both keys, and accepts a key', () => {
+      const allowed = [...ROOTS, '/x/alpha'].map((root) => ({
+        entry: root,
+        mainRoot: root,
+      }))
+      expect(
+        resolveSelection(request(['projects:alpha'], { allowed })),
+      ).toEqual({
+        status: 'refused',
+        refusal: {
+          reason: 'ambiguous-project',
+          project: 'alpha',
+          keys: keysOf(['/w/alpha', '/x/alpha']),
+        },
+      })
+      expect(
+        selected(
+          resolveSelection(
+            request([`projects:${projectKey('/x/alpha')}`], { allowed }),
+          ),
+        ),
+      ).toEqual(['/x/alpha'])
+    })
+
+    it('names a group member that resolves but is not on the allow list', () => {
+      expect(resolveSelection(request(['group:off']))).toEqual({
+        status: 'refused',
+        refusal: {
+          reason: 'group-member-not-allowed',
+          group: 'off',
+          member: OUTSIDER,
+        },
+      })
+    })
+
+    it('names a group member that does not resolve, with the reason', () => {
+      expect(resolveSelection(request(['group:stale']))).toEqual({
+        status: 'refused',
+        refusal: {
+          reason: 'group-member-not-allowed',
+          group: 'stale',
+          member: '/w/gone',
+          memberReason: 'stale',
+        },
+      })
+    })
+
+    it('shows a long name in one bounded line', () => {
+      const result = resolveSelection(request([`group:${'x'.repeat(500)}`]))
+      if (result.status !== 'refused') throw new Error('expected a refusal')
+      const refusal = result.refusal
+      expect(refusal.reason).toBe('unknown-group')
+      if (refusal.reason !== 'unknown-group') return
+      expect(refusal.group.length).toBeLessThanOrEqual(100)
+    })
+  })
+
+  describe('words that are not a request', () => {
+    const invalid = { status: 'invalid' } as const
+    const cases: Array<[string, readonly string[]]> = [
+      ['an empty group value', ['group:']],
+      ['an empty projects value', ['projects:']],
+      ['a trailing comma', ['projects:metacogs,']],
+      ['a leading comma', ['projects:,metacogs']],
+      ['an empty entry between commas', ['projects:metacogs,,dev-like']],
+      ['a word with another prefix', ['mode:headless']],
+      ['a prefix in the wrong case', ['Group:harness-tools']],
+      ['a word with a space', ['projects:metacogs, dev-like']],
+      ['a word with a control character', ['group:a\u0001']],
+      ['a value over the length cap', [`group:${'x'.repeat(2043)}`]],
+      [
+        'more than 32 words',
+        Array.from({ length: 33 }, () => 'group:harness-tools'),
+      ],
+    ]
+    for (const [title, words] of cases) {
+      it(`refuses ${title}`, () => {
+        expect(resolveSelection(request(words))).toEqual(invalid)
+      })
+    }
+
+    it('accepts a word of exactly the length cap and exactly 32 words', () => {
+      const edge = `group:${'x'.repeat(2042)}`
+      expect(edge).toHaveLength(2048)
+      expect(resolveSelection(request([edge])).status).toBe('refused')
+      const thirtyTwo = Array.from({ length: 32 }, () => 'group:harness-tools')
+      expect(resolveSelection(request(thirtyTwo)).status).toBe('ok')
+    })
+
+    it('calls a malformed word invalid before it looks for a conflict', () => {
+      expect(resolveSelection(request(['group:', 'projects:alpha']))).toEqual(
+        invalid,
+      )
+    })
+  })
+})
+
+describe('selectionIdFor', () => {
+  it('is 16 hex characters, stable, and independent of the order of the keys', () => {
+    const a = projectKey('/w/a')
+    const b = projectKey('/w/b')
+    expect(selectionIdFor([a, b])).toMatch(/^[0-9a-f]{16}$/)
+    expect(selectionIdFor([b, a])).toBe(selectionIdFor([a, b]))
+  })
+
+  it('changes with the membership', () => {
+    const a = projectKey('/w/a')
+    const b = projectKey('/w/b')
+    const c = projectKey('/w/c')
+    expect(selectionIdFor([a, b])).not.toBe(selectionIdFor([a, c]))
+    expect(selectionIdFor([a])).not.toBe(selectionIdFor([a, b]))
+  })
+})
+
+describe('renderDigest selection line', () => {
+  it('names a group and its id', () => {
+    const text = renderDigest(
+      digestModel({
+        selection: {
+          kind: 'group',
+          name: 'harness-tools',
+          id: 'abcdef0123456789',
+        },
+      }),
+    )
+    expect(text).toContain(
+      'Selection: group `harness-tools` (id abcdef0123456789)',
+    )
+  })
+
+  it('names the picked projects and the id', () => {
+    const text = renderDigest(
+      digestModel({
+        selection: {
+          kind: 'projects',
+          picks: ['metacogs', 'dev-like'],
+          id: 'abcdef0123456789',
+        },
+      }),
+    )
+    expect(text).toContain(
+      'Selection: projects `metacogs`, `dev-like` (id abcdef0123456789)',
+    )
+  })
+
+  it('says a run with no selection read all allowed projects, and names no group', () => {
+    const text = renderDigest(digestModel({ selection: { kind: 'all' } }))
+    expect(text).toContain('Selection: all allowed projects')
+    expect(text).not.toContain('group')
+  })
+
+  it('prints no selection line for a model that carries none', () => {
+    expect(renderDigest(digestModel())).not.toContain('Selection:')
+  })
+
+  it('shows a group name on one safe line', () => {
+    const text = renderDigest(
+      digestModel({
+        selection: {
+          kind: 'group',
+          name: 'a\nSelection: all',
+          id: 'abcdef0123456789',
+        },
+      }),
+    )
+    expect(
+      text.split('\n').filter((l) => l.startsWith('Selection:')),
+    ).toHaveLength(1)
   })
 })

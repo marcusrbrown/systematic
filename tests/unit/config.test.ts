@@ -6614,6 +6614,83 @@ describe('connect config field', () => {
     expect(loaded).toEqual([...read])
   })
 
+  describe('groups', () => {
+    test('groups of user, user.local and custom merge by name, a later layer replacing a same-named group whole', () => {
+      const t = setup()
+      t.user({
+        connect: {
+          allow_projects: ['/work/a'],
+          groups: { x: ['/work/1', '/work/2'], early: ['/work/3'] },
+        },
+      })
+      t.userLocal({ connect: { groups: { x: ['/work/4'] } } })
+      t.custom({ connect: { groups: { y: ['/work/5'] } } })
+      expect(t.load(true).config.connect).toEqual({
+        allow_projects: ['/work/a'],
+        groups: { x: ['/work/4'], early: ['/work/3'], y: ['/work/5'] },
+      })
+      expect(t.warnings).toEqual([])
+    })
+
+    test('a connect block without groups leaves no groups key', () => {
+      const t = setup()
+      t.user({ connect: { allow_projects: ['/work/a'] } })
+      expect(t.load().config.connect).toEqual({ allow_projects: ['/work/a'] })
+    })
+
+    test('the full loader and the helper reader agree on the groups', () => {
+      const t = setup()
+      t.user({ connect: { groups: { x: ['/work/1'], keep: ['/work/2'] } } })
+      t.userLocal({ connect: { groups: { x: ['/work/3', '/work/4'] } } })
+      t.custom({ connect: { groups: { y: ['/work/5'] } } })
+      const loaded = t.load(true).config.connect?.groups
+      const read = loadConnectAllowList({
+        homeDir: t.paths.homeDir,
+        userConfigDir: t.paths.userDir,
+        customConfigDir: t.paths.customDir,
+      }).groups
+      expect(read).toEqual(loaded ?? {})
+      expect(loaded).toEqual({
+        x: ['/work/3', '/work/4'],
+        keep: ['/work/2'],
+        y: ['/work/5'],
+      })
+    })
+
+    test('a project connect.groups is stripped with the named warning and contributes nothing', () => {
+      const t = setup()
+      t.user({ connect: { groups: { team: ['/work/app'] } } })
+      t.project({ connect: { groups: { evil: ['/work/evil'], team: ['/x'] } } })
+      const { config } = t.load()
+      expect(config.connect).toEqual({
+        allow_projects: [],
+        groups: { team: ['/work/app'] },
+      })
+      expect(JSON.stringify(config)).not.toContain('/work/evil')
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain('`connect`')
+      expect(t.warnings.join('\n')).not.toContain('evil')
+    })
+
+    test('the helper reader ignores groups in the same project file', () => {
+      const t = setup()
+      t.user({ connect: { groups: { team: ['/work/app'] } } })
+      t.project({ connect: { groups: { evil: ['/work/evil'] } } })
+      const previous = process.cwd()
+      process.chdir(t.paths.projectDir)
+      try {
+        const read = loadConnectAllowList({
+          homeDir: t.paths.homeDir,
+          userConfigDir: t.paths.userDir,
+          customConfigDir: null,
+        })
+        expect(read.groups).toEqual({ team: ['/work/app'] })
+      } finally {
+        process.chdir(previous)
+      }
+    })
+  })
+
   test('CONFIG_PROTECTED_FIELD_PATHS lists connect', () => {
     expect(CONFIG_PROTECTED_FIELD_PATHS).toContain('connect')
   })

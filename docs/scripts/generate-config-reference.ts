@@ -128,7 +128,7 @@ const SEARCH_SUB_FIELDS = [
 ] as const
 
 /** `connect` sub-fields, in display order. */
-const CONNECT_SUB_FIELDS = ['allow_projects'] as const
+const CONNECT_SUB_FIELDS = ['allow_projects', 'groups'] as const
 
 /** Fields of one `search.sources[]` entry, in display order. */
 const SEARCH_SOURCE_ENTRY_FIELDS = [
@@ -425,7 +425,7 @@ function renderTopLevelSection(
   // the fields of one `sources[]` entry one heading level deeper.
   if (key === 'search') subFields = renderSearchSubFields(propSchema)
 
-  // connect sub-field (`allow_projects`).
+  // connect sub-fields (`allow_projects`, `groups`).
   if (key === 'connect') subFields = renderConnectSubFields(propSchema)
 
   // Cross-reference for agent/category overlay sections.

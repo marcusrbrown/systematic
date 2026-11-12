@@ -22,8 +22,10 @@ import {
   BUNDLED_SKILL_NAMES,
 } from './bundled-names.js'
 import {
+  CONNECT_GROUP_NAME_PATTERN,
   MAX_ALLOW_PROJECT_LENGTH,
   MAX_ALLOW_PROJECTS,
+  MAX_CONNECT_GROUPS,
 } from './connect-config.js'
 import {
   REMOVED_BUNDLED_AGENT_NAMES,
@@ -519,13 +521,42 @@ const ConnectSettingsSchema = trustProtected(
           description: `Main repository roots that \`ce:connect\` may read for contradictions and transferable lessons. Each entry is an absolute or \`~\`-prefixed path to the root of a repository checkout, not a subdirectory and not a linked worktree. At most ${MAX_ALLOW_PROJECTS} entries; an entry that matches no repository is reported by the run and does not widen the list. The lists in user, user.local, custom and custom.local config are merged as a union. Omitted or empty, it allows no project.`,
           examples: [['~/src/github.com/me/app', '/srv/checkouts/shared-lib']],
         }),
+      groups: z
+        .record(
+          z.string().regex(CONNECT_GROUP_NAME_PATTERN),
+          z
+            .array(z.string().min(1).max(MAX_ALLOW_PROJECT_LENGTH))
+            .min(1)
+            .max(MAX_ALLOW_PROJECTS),
+        )
+        .refine((groups) => Object.keys(groups).length <= MAX_CONNECT_GROUPS)
+        .optional()
+        .meta({
+          description: `Named subsets of the allow list that \`ce:connect\` can be narrowed to with \`group:<name>\`. A group name is 1 to 64 characters of lowercase letters, digits and hyphens, led by a letter or digit (\`${CONNECT_GROUP_NAME_PATTERN.source}\`). Each group lists at least one and at most ${MAX_ALLOW_PROJECTS} members in the same form as an \`allow_projects\` entry. At most ${MAX_CONNECT_GROUPS} groups per file. A group never adds a project: a member that is not on the allow list stops the run that selects the group. Groups merge by name across user, user.local, custom and custom.local config, and a later file replaces a same-named group whole.`,
+          examples: [
+            {
+              'harness-tools': [
+                '~/src/github.com/me/app',
+                '/srv/checkouts/shared-lib',
+              ],
+            },
+          ],
+          maxProperties: MAX_CONNECT_GROUPS,
+        }),
     })
     .strict()
     .meta({
       description:
-        'Cross-project connections. User-owned only: valid in user config or OPENCODE_CONFIG_DIR config, and a project config setting it has the whole block ignored with a warning, because a repository cannot grant itself access to other projects. A block with an unknown key or a bad value is unreadable and counts as an empty allow list.',
+        'Cross-project connections. User-owned only: valid in user config or OPENCODE_CONFIG_DIR config, and a project config setting it has the whole block ignored with a warning, because a repository cannot grant itself access to other projects. A block with an unknown key or a bad value is unreadable and counts as an empty allow list and no groups.',
       examples: [
         { allow_projects: ['~/src/github.com/me/app'] },
+        {
+          allow_projects: [
+            '~/src/github.com/me/app',
+            '~/src/github.com/me/lib',
+          ],
+          groups: { 'harness-tools': ['~/src/github.com/me/app'] },
+        },
         { allow_projects: [] },
       ],
     }),

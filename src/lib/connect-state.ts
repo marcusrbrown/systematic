@@ -13,6 +13,8 @@
  *     runs/<id>/            a published run
  *     runs/<id>.tmp/        a run being staged
  *     ledger.json           the ledger
+ *     ci-run.json           written by a CI workflow before the run: its marker
+ *     invocation.json       written by the helper on a CI run: marker, phase, outcome
  *
  * Staging and publishing: a run is built in `runs/<id>.tmp/` and the rename to
  * `runs/<id>/` is the commit. The ledger is rewritten after it, with a
@@ -38,7 +40,11 @@ import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { type ContainerRefusal, containerRefusal } from './connect-config.js'
+import {
+  type ContainerRefusal,
+  containerRefusal,
+  MAX_ALLOW_PROJECTS,
+} from './connect-config.js'
 import { readContainedFile } from './connect-evidence.js'
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -839,14 +845,27 @@ export interface CoverageRecord {
    * rule a record is. Absent on a record written before it was kept.
    */
   readonly project?: string
+  /**
+   * The id of the selection (a group or picked projects) whose run covered the
+   * rule. Absent for a run with no selection, which is the namespace every
+   * version 1 record belongs to. A rule is covered once per namespace.
+   */
+  readonly selection?: string
 }
 
+/**
+ * The ledger as it is held in memory. Version 2 adds the `selection` of a
+ * coverage record. A version 1 file is read as version 2 with the same records,
+ * and is replaced by a version 2 file the next time the ledger is written.
+ */
 export interface Ledger {
-  readonly version: 1
+  readonly version: 2
   readonly entries: readonly LedgerEntry[]
   /** Absent when no committed run has covered a rule. */
   readonly coverage?: readonly CoverageRecord[]
 }
+
+const LEDGER_VERSION = 2
 
 const LEDGER_STATUSES: readonly LedgerStatus[] = [
   'candidate',
@@ -927,6 +946,11 @@ function isRuleId(value: unknown): value is string {
 
 const SHA256 = /^[0-9a-f]{64}$/
 const PROJECT_KEY = /^[0-9a-f]{12}$/
+const SELECTION_ID = /^[0-9a-f]{16}$/
+
+function isSelectionId(value: unknown): value is string {
+  return typeof value === 'string' && SELECTION_ID.test(value)
+}
 
 function isProjectKey(value: unknown): value is string {
   return typeof value === 'string' && PROJECT_KEY.test(value)
@@ -943,8 +967,14 @@ function isCoverageRecord(value: unknown): value is CoverageRecord {
     isSha256(value.hash) &&
     plainText(value.runId, MAX_STRING_LENGTH) &&
     plainText(value.at, MAX_STRING_LENGTH) &&
-    (value.project === undefined || isProjectKey(value.project))
+    (value.project === undefined || isProjectKey(value.project)) &&
+    (value.selection === undefined || isSelectionId(value.selection))
   )
+}
+
+/** A record is unique by the rule and the selection it belongs to. */
+function coverageKey(record: CoverageRecord): string {
+  return `${record.selection ?? ''}\0${record.ruleId}`
 }
 
 function isCoverage(value: unknown): value is CoverageRecord[] {
@@ -952,7 +982,7 @@ function isCoverage(value: unknown): value is CoverageRecord[] {
     Array.isArray(value) &&
     value.length <= MAX_COVERAGE &&
     value.every(isCoverageRecord) &&
-    new Set(value.map((item) => item.ruleId)).size === value.length
+    new Set(value.map(coverageKey)).size === value.length
   )
 }
 
@@ -963,14 +993,18 @@ function parseLedger(text: string): Ledger | undefined {
   } catch {
     return undefined
   }
-  if (!isRecord(value) || value.version !== 1) return undefined
+  // Version 1 has the layout of version 2 with every record in the
+  // no-selection namespace. Any other version is not this helper's to read.
+  if (!isRecord(value) || (value.version !== 1 && value.version !== 2)) {
+    return undefined
+  }
   const { entries, coverage } = value
   if (!Array.isArray(entries) || !entries.every(isLedgerEntry)) return undefined
-  if (coverage === undefined) return { version: 1, entries }
+  if (coverage === undefined) return { version: LEDGER_VERSION, entries }
   if (!isCoverage(coverage)) return undefined
   return coverage.length === 0
-    ? { version: 1, entries }
-    : { version: 1, entries, coverage }
+    ? { version: LEDGER_VERSION, entries }
+    : { version: LEDGER_VERSION, entries, coverage }
 }
 
 export type LedgerRead =
@@ -991,7 +1025,7 @@ export function readLedger(root: string): LedgerRead {
   })
   if (read.kind === 'refused') {
     if (read.reason === 'missing') {
-      return { status: 'ok', ledger: { version: 1, entries: [] } }
+      return { status: 'ok', ledger: { version: LEDGER_VERSION, entries: [] } }
     }
     return {
       status: 'unreadable',
@@ -1197,7 +1231,10 @@ function applyCandidates(
   let entries = [...ledger.entries]
   const outcomes: CandidateStanding[] = []
   for (const candidate of candidates) {
-    const outcome = classifyCandidate({ version: 1, entries }, candidate)
+    const outcome = classifyCandidate(
+      { version: LEDGER_VERSION, entries },
+      candidate,
+    )
     outcomes.push(outcome)
     if (outcome.standing === 'new') {
       entries.push({
@@ -1230,7 +1267,7 @@ function applyCandidates(
       )
     }
   }
-  return { ledger: { version: 1, entries }, outcomes }
+  return { ledger: { version: LEDGER_VERSION, entries }, outcomes }
 }
 
 // ── Publishing ──────────────────────────────────────────────────────────────
@@ -1242,6 +1279,12 @@ function applyCandidates(
  */
 export interface CoverageUpdate {
   readonly runId: string
+  /**
+   * The id of the run's selection. The update reads and changes only the
+   * records of that selection; the records of every other selection stay as
+   * they are. Left out, the update is for the no-selection namespace.
+   */
+  readonly selection?: string
   /** Every rule the run indexed, with the hash of its learning and its project's key. */
   readonly indexed: ReadonlyArray<{
     readonly ruleId: string
@@ -1325,6 +1368,9 @@ function validCoverageUpdate(update: CoverageUpdate): boolean {
   if (!isRunId(update.runId) || update.indexed.length > MAX_COVERAGE) {
     return false
   }
+  if (update.selection !== undefined && !isSelectionId(update.selection)) {
+    return false
+  }
   const hashes = new Map<string, string>()
   for (const item of update.indexed) {
     if (!isRuleId(item.ruleId) || !isSha256(item.hash)) return false
@@ -1337,18 +1383,23 @@ function validCoverageUpdate(update: CoverageUpdate): boolean {
 }
 
 /**
- * Fold a run's coverage into the ledger's. A record survives when the run
- * indexed its rule, kept it on purpose (`retain`), or could not see its project
- * in full. Everything else is a rule that is gone from a project that was read
- * in full, and is dropped. Then the covered rules are recorded at their
- * current hash. The records of rules the run did not index are the first to go
- * if the ledger would hold more than it accepts.
+ * Fold a run's coverage into the ledger's. Only the records of the run's own
+ * selection are looked at: a record survives when the run indexed its rule,
+ * kept it on purpose (`retain`), or could not see its project in full.
+ * Everything else is a rule that is gone from a project that was read in full,
+ * and is dropped. The records of every other selection are kept as they are.
+ * Then the covered rules are recorded at their current hash. The records the
+ * run did not just record, of any selection, are the first to go if the
+ * ledger would hold more than it accepts, oldest first.
  */
 function applyCoverage(
-  prior: readonly CoverageRecord[],
+  allPrior: readonly CoverageRecord[],
   update: CoverageUpdate,
   at: string,
 ): CoverageRecord[] {
+  const own = (record: CoverageRecord): boolean =>
+    record.selection === update.selection
+  const prior = allPrior.filter(own)
   const hashes = new Map(update.indexed.map((item) => [item.ruleId, item.hash]))
   const projects = new Map(
     update.indexed.map((item) => [item.ruleId, item.project]),
@@ -1370,9 +1421,11 @@ function applyCoverage(
       )
       .map((record) => [record.ruleId, record]),
   )
+  const recorded = new Set<string>()
   for (const ruleId of update.covered) {
     const hash = hashes.get(ruleId)
     if (hash !== undefined) {
+      recorded.add(ruleId)
       const project = projects.get(ruleId)
       kept.set(ruleId, {
         ruleId,
@@ -1380,22 +1433,31 @@ function applyCoverage(
         runId: update.runId,
         at,
         ...(project === undefined ? {} : { project }),
+        ...(update.selection === undefined
+          ? {}
+          : { selection: update.selection }),
       })
     }
   }
-  const records = [...kept.values()]
+  const records = [
+    ...allPrior.filter((record) => !own(record)),
+    ...kept.values(),
+  ]
+  const byRule = (a: CoverageRecord, b: CoverageRecord): number =>
+    codepointOrder(a.ruleId, b.ruleId) ||
+    codepointOrder(a.selection ?? '', b.selection ?? '')
   const overflow = records.length - MAX_COVERAGE
   if (overflow > 0) {
     const stale = records
-      .filter((record) => !hashes.has(record.ruleId))
+      .filter((record) => !(own(record) && recorded.has(record.ruleId)))
       .sort((a, b) => codepointOrder(a.at, b.at))
       .slice(0, overflow)
-    const gone = new Set(stale.map((record) => record.ruleId))
+    const gone = new Set(stale.map(coverageKey))
     return records
-      .filter((record) => !gone.has(record.ruleId))
-      .sort((a, b) => codepointOrder(a.ruleId, b.ruleId))
+      .filter((record) => !gone.has(coverageKey(record)))
+      .sort(byRule)
   }
-  return records.sort((a, b) => codepointOrder(a.ruleId, b.ruleId))
+  return records.sort(byRule)
 }
 
 /** The ledger after a committed run: its candidates folded in and its coverage updated. */
@@ -1419,8 +1481,8 @@ function foldRun(
 /** The ledger with its entries replaced and its coverage carried over. */
 function withEntries(ledger: Ledger, entries: readonly LedgerEntry[]): Ledger {
   return ledger.coverage === undefined
-    ? { version: 1, entries }
-    : { version: 1, entries, coverage: ledger.coverage }
+    ? { version: LEDGER_VERSION, entries }
+    : { version: LEDGER_VERSION, entries, coverage: ledger.coverage }
 }
 
 /** Build `runs/<id>.tmp/`, returning the failure if it could not be built. */
@@ -1554,6 +1616,384 @@ export function rewriteRunFiles(
   }
 }
 
+const MAX_RUN_RECORD_BYTES = 2 * 1024 * 1024
+
+/**
+ * The parsed `run.json` of a published run, or nothing when the run is gone,
+ * pruned, not a plain run id, or not readable as one bounded regular file. The
+ * content is whatever the file holds: a caller checks the fields it uses.
+ */
+export function readRunRecord(root: string, runId: string): unknown {
+  if (!isRunId(runId)) return undefined
+  const read = readContainedFile(root, `${RUNS_DIR}/${runId}/run.json`, {
+    maxBytes: MAX_RUN_RECORD_BYTES,
+  })
+  if (read.kind === 'refused') return undefined
+  try {
+    return JSON.parse(read.bytes.toString('utf8'))
+  } catch {
+    return undefined
+  }
+}
+
+// ── Import runs ─────────────────────────────────────────────────────────────
+
+/** The name every import run directory starts with. */
+export const IMPORT_RUN_PREFIX = 'import-'
+
+/** Import runs a view lists, newest first. */
+const MAX_IMPORT_RUNS_LISTED = 50
+
+/** A sortable, unique id for an import run. */
+export function newImportRunId(now: number = Date.now()): string {
+  return `${IMPORT_RUN_PREFIX}${newRunId(now)}`
+}
+
+/** The ids of the import runs that are kept, newest first. Symlinks, files and staging directories are ignored. */
+function listImportRuns(root: string): string[] {
+  let names: string[]
+  try {
+    names = fs.readdirSync(path.join(root, RUNS_DIR))
+  } catch {
+    return []
+  }
+  return names
+    .filter((name) => name.startsWith(IMPORT_RUN_PREFIX) && isRunId(name))
+    .filter((name) =>
+      lstatMaybe(path.join(root, RUNS_DIR, name))?.isDirectory(),
+    )
+    .sort((a, b) => codepointOrder(b, a))
+    .slice(0, MAX_IMPORT_RUNS_LISTED)
+}
+
+/** What an import sees once it holds the lock. */
+export interface ImportView {
+  readonly ledger: Ledger
+  /** The import runs that are kept, newest first. */
+  readonly importRuns: readonly string[]
+}
+
+/** What an import decides to write. */
+export type ImportPlan =
+  | { readonly publish: false }
+  | {
+      readonly publish: true
+      readonly runId: string
+      readonly files: Readonly<Record<string, string>>
+      readonly candidates: readonly CandidateRecord[]
+      /**
+       * The files that replace the committed ones when the ledger could not be
+       * written after the commit, so the run says what happened to it.
+       */
+      readonly onLedgerWriteFailed?: () => Readonly<Record<string, string>>
+    }
+
+export type ImportInsertResult =
+  | { readonly status: 'busy'; readonly reason: LockBusyReason }
+  | {
+      readonly status: 'failed'
+      readonly reason: 'lock-failed' | 'ledger-unreadable' | PublishFailure
+    }
+  /** The plan wrote nothing. */
+  | { readonly status: 'unchanged' }
+  | {
+      readonly status: 'published'
+      readonly runDir: string
+      readonly ledger:
+        | { readonly written: true }
+        | { readonly written: false; readonly error: string }
+      /** False when the replacement files for a failed ledger write could not be written. */
+      readonly runRecordCurrent?: false
+    }
+
+/** Replace the files of a committed run with those `build` makes. False if they could not be made or written. */
+function replaced(
+  root: string,
+  lock: LockHandle,
+  runId: string,
+  build: () => Readonly<Record<string, string>>,
+): boolean {
+  try {
+    return rewriteRunFiles(root, lock, runId, build()) === 'rewritten'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Insert an import run under the lock. `plan` sees the ledger and the kept
+ * import runs, and returns the run to write or nothing. A plan that returns
+ * nothing leaves the state root as it was. The run is published the way a
+ * local run is (staged, renamed, then the ledger is rewritten), with no
+ * coverage, so an import never changes what a sweep has covered. When the
+ * ledger cannot be written after the commit, the plan's replacement files are
+ * written over the committed ones before the lock is released. A busy lock
+ * writes nothing, and the lock is always released.
+ */
+export function insertImportRun(
+  root: string,
+  plan: (view: ImportView) => ImportPlan,
+  options: LockOptions & PublishOptions = {},
+): ImportInsertResult {
+  const acquired = acquireLock(root, options)
+  if (acquired.status === 'busy') return acquired
+  if (acquired.status === 'failed') {
+    return { status: 'failed', reason: 'lock-failed' }
+  }
+  try {
+    const read = readLedger(root)
+    if (read.status !== 'ok') {
+      return { status: 'failed', reason: 'ledger-unreadable' }
+    }
+    const decision = plan({
+      ledger: read.ledger,
+      importRuns: listImportRuns(root),
+    })
+    if (!decision.publish) return { status: 'unchanged' }
+    if (!decision.runId.startsWith(IMPORT_RUN_PREFIX)) {
+      return { status: 'failed', reason: 'invalid-run-id' }
+    }
+    const published = publishRun(
+      root,
+      acquired.lock,
+      {
+        runId: decision.runId,
+        files: decision.files,
+        candidates: decision.candidates,
+      },
+      options,
+    )
+    if (published.status === 'failed') {
+      return { status: 'failed', reason: published.reason }
+    }
+    const current =
+      published.ledger.written ||
+      decision.onLedgerWriteFailed === undefined ||
+      replaced(
+        root,
+        acquired.lock,
+        decision.runId,
+        decision.onLedgerWriteFailed,
+      )
+    return {
+      status: 'published',
+      runDir: published.runDir,
+      ledger: published.ledger,
+      ...(current ? {} : { runRecordCurrent: false as const }),
+    }
+  } finally {
+    releaseLock(acquired.lock)
+  }
+}
+
+// ── Invocation record ───────────────────────────────────────────────────────
+
+/** Written by a CI workflow into the state root before the run; its marker tags the invocation record. */
+export const CI_RUN_FILE = 'ci-run.json'
+
+/** Written by the helper on every path of a CI run from `begin` onward. */
+export const INVOCATION_FILE = 'invocation.json'
+
+export interface InvocationProject {
+  readonly key: string
+  readonly name: string
+  readonly repo?: string
+  readonly commit?: string
+}
+
+export type InvocationRecord =
+  | {
+      readonly version: 1
+      readonly marker: string
+      readonly phase: 'begun'
+      readonly runId: string
+      readonly projects: readonly InvocationProject[]
+    }
+  | {
+      readonly version: 1
+      readonly marker: string
+      readonly phase: 'terminal'
+      readonly outcome: 'complete' | 'degraded' | 'busy' | 'failed'
+      readonly finalLine: string
+      readonly reason?: string
+      readonly runId?: string
+      readonly projects?: readonly InvocationProject[]
+    }
+
+export interface InvocationWriteOptions {
+  /** Runs before the write. A test seam: throwing here is a failed write that leaves the previous file. */
+  readonly beforeWrite?: (record: InvocationRecord) => void
+}
+
+const MAX_CI_RUN_BYTES = 1024
+const MAX_INVOCATION_BYTES = 1024 * 1024
+const MAX_INVOCATION_NAME_LENGTH = 200
+const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+const REPO_SLUG = /^[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9._-]{1,100}$/
+const INVOCATION_OUTCOMES: readonly InvocationOutcome[] = [
+  'complete',
+  'degraded',
+  'busy',
+  'failed',
+]
+
+type InvocationOutcome = 'complete' | 'degraded' | 'busy' | 'failed'
+
+function isInvocationOutcome(value: unknown): value is InvocationOutcome {
+  return (INVOCATION_OUTCOMES as readonly unknown[]).includes(value)
+}
+
+/**
+ * The marker a CI workflow wrote to `ci-run.json` in the state root, or
+ * nothing. The file must be exactly `{"version":1,"marker":"<name>"}` and small;
+ * a root or file that is a symlink, a missing root or file, and every other
+ * shape or read failure mean no CI run. Creates nothing and never throws.
+ */
+export function readCiRunMarker(root: string): string | undefined {
+  try {
+    const stat = lstatMaybe(root)
+    if (stat === undefined || !stat.isDirectory()) return undefined
+    const read = readContainedFile(root, CI_RUN_FILE, {
+      maxBytes: MAX_CI_RUN_BYTES,
+    })
+    if (read.kind === 'refused') return undefined
+    const value: unknown = JSON.parse(read.bytes.toString('utf8'))
+    if (!isRecord(value) || Object.keys(value).length !== 2) return undefined
+    const { version, marker } = value
+    return version === 1 && typeof marker === 'string' && SAFE_NAME.test(marker)
+      ? marker
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function optionalMatch(value: unknown, pattern: RegExp): boolean {
+  return (
+    value === undefined || (typeof value === 'string' && pattern.test(value))
+  )
+}
+
+function parseInvocationProject(item: unknown): InvocationProject | undefined {
+  if (!isRecord(item)) return undefined
+  const { key, name, repo, commit } = item
+  if (!isProjectKey(key) || !plainText(name, MAX_INVOCATION_NAME_LENGTH)) {
+    return undefined
+  }
+  if (!optionalMatch(repo, REPO_SLUG) || !optionalMatch(commit, OBJECT_ID)) {
+    return undefined
+  }
+  return {
+    key,
+    name,
+    ...(typeof repo === 'string' ? { repo } : {}),
+    ...(typeof commit === 'string' ? { commit } : {}),
+  }
+}
+
+function parseInvocationProjects(
+  value: unknown,
+): InvocationProject[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_ALLOW_PROJECTS) {
+    return undefined
+  }
+  const projects: InvocationProject[] = []
+  for (const item of value as unknown[]) {
+    const project = parseInvocationProject(item)
+    if (project === undefined) return undefined
+    projects.push(project)
+  }
+  return projects
+}
+
+type TerminalInvocation = Extract<InvocationRecord, { phase: 'terminal' }>
+
+function parseTerminal(
+  value: Record<string, unknown>,
+  marker: string,
+  runId: string | undefined,
+  projects: InvocationProject[] | undefined,
+): TerminalInvocation | undefined {
+  const { outcome, finalLine, reason } = value
+  if (!isInvocationOutcome(outcome) || finalLine !== `Connect ${outcome}`) {
+    return undefined
+  }
+  if (reason !== undefined && !plainText(reason, MAX_REASON_LENGTH)) {
+    return undefined
+  }
+  return {
+    version: 1,
+    marker,
+    phase: 'terminal',
+    outcome,
+    finalLine,
+    ...(reason === undefined ? {} : { reason }),
+    ...(runId === undefined ? {} : { runId }),
+    ...(projects === undefined ? {} : { projects }),
+  }
+}
+
+/** The record with named fields only, or nothing when any field is out of shape. */
+function parseInvocation(value: unknown): InvocationRecord | undefined {
+  if (!isRecord(value) || value.version !== 1) return undefined
+  const { marker, phase, runId } = value
+  if (typeof marker !== 'string' || !SAFE_NAME.test(marker)) return undefined
+  if (runId !== undefined && !(typeof runId === 'string' && isRunId(runId))) {
+    return undefined
+  }
+  const projects =
+    value.projects === undefined
+      ? undefined
+      : parseInvocationProjects(value.projects)
+  if (value.projects !== undefined && projects === undefined) return undefined
+  if (phase === 'terminal') return parseTerminal(value, marker, runId, projects)
+  if (phase !== 'begun') return undefined
+  if (runId === undefined || projects === undefined) return undefined
+  return { version: 1, marker, phase, runId, projects }
+}
+
+/**
+ * Replace `invocation.json` with a temporary file and a rename, owner-only.
+ * Only named fields are written, so a field outside the record never reaches
+ * the file. A record out of shape, a root that is not a real directory and any
+ * write failure are `failed`, and the previous file is left as it was.
+ */
+export function writeInvocationRecord(
+  root: string,
+  record: InvocationRecord,
+  options: InvocationWriteOptions = {},
+): 'written' | 'failed' {
+  try {
+    const clean = parseInvocation(record)
+    if (clean === undefined) return 'failed'
+    options.beforeWrite?.(clean)
+    const stat = lstatMaybe(root)
+    if (stat === undefined || !stat.isDirectory()) return 'failed'
+    writeFileAtomic(
+      path.join(root, INVOCATION_FILE),
+      `${JSON.stringify(clean, null, 2)}\n`,
+    )
+    return 'written'
+  } catch {
+    return 'failed'
+  }
+}
+
+/** The invocation record, or nothing when it is missing, oversize, not a regular file or out of shape. */
+export function readInvocationRecord(
+  root: string,
+): InvocationRecord | undefined {
+  try {
+    const read = readContainedFile(root, INVOCATION_FILE, {
+      maxBytes: MAX_INVOCATION_BYTES,
+    })
+    if (read.kind === 'refused') return undefined
+    return parseInvocation(JSON.parse(read.bytes.toString('utf8')))
+  } catch {
+    return undefined
+  }
+}
+
 // ── Prune ───────────────────────────────────────────────────────────────────
 
 export type PruneResult =
@@ -1631,6 +2071,12 @@ export interface DecideInput {
   readonly reason: string
   /** Where a promoted learning was written. Ignored for `rejected`. */
   readonly destination?: string
+  /**
+   * Apply the decision only if the entry is still a `candidate` when the lock
+   * is held. A caller that read the ledger earlier uses this so a decision
+   * made in between is not overwritten.
+   */
+  readonly onlyIfOpen?: boolean
 }
 
 export type DecideResult =
@@ -1641,6 +2087,7 @@ export type DecideResult =
       readonly reason:
         | 'invalid-input'
         | 'unknown-candidate'
+        | 'not-open'
         | 'lock-failed'
         | 'ledger-unreadable'
         | 'write-failed'
@@ -1656,7 +2103,8 @@ function validDecision(input: DecideInput): boolean {
 /**
  * Record a decision on a ledger entry. It takes the lock, so a busy lock makes
  * it fail without writing, and rewrites the ledger by temp-and-rename. Both
- * statuses need a reason.
+ * statuses need a reason. With `onlyIfOpen`, an entry that is no longer a
+ * candidate is left as it is and the answer is `not-open`.
  */
 export function decideLedgerEntry(
   root: string,
@@ -1678,6 +2126,9 @@ export function decideLedgerEntry(
     const prior = read.ledger.entries.find((entry) => entry.id === input.id)
     if (prior === undefined) {
       return { status: 'failed', reason: 'unknown-candidate' }
+    }
+    if (input.onlyIfOpen === true && prior.status !== 'candidate') {
+      return { status: 'failed', reason: 'not-open' }
     }
     const decided: LedgerEntry = {
       id: prior.id,

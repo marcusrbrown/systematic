@@ -22,6 +22,7 @@ import {
   CANDIDATE_LIMITS,
   NEXT_STEPS,
 } from '../../src/lib/connect-helper-core.js'
+import { REFUSAL_TEXT } from '../../src/lib/connect-import.js'
 import { parseFrontmatter } from '../../src/lib/frontmatter.js'
 import { READ_ONLY_AGENT_NAMES } from '../../src/lib/opencode-v2-tool-guard.js'
 import { CURATED_PERSONAS } from '../../src/lib/pi-subagents-personas.js'
@@ -74,6 +75,263 @@ describe('ce:connect skill frontmatter', () => {
 
   test('is model-invocable, so a user or a caller can start a run', () => {
     expect(skill.data['disable-model-invocation']).toBeUndefined()
+  })
+
+  test('shows the selection words in the argument hint, beside the mode tokens', () => {
+    const hint = String(skill.data['argument-hint'])
+    expect(hint).toContain('group:<name>')
+    expect(hint).toContain('projects:<a>,<b>')
+    expect(hint).toContain('mode:interactive')
+  })
+})
+
+describe('ce:connect selection words', () => {
+  const step1 = section(skillText, '## Step 1', '## Step 2')
+
+  test('lists every group: and projects: word in the first step, before the preflight', () => {
+    expect(step1).toMatch(/every word that starts with `group:` or `projects:`/)
+    expect(skillText.indexOf('`projects:`')).toBeLessThan(
+      skillText.indexOf('## Step 2'),
+    )
+    expect(step1).toMatch(/before the preflight/)
+  })
+
+  test('reads the words from the arguments or the invoking instruction, the same on every host', () => {
+    expect(step1).toMatch(/skill arguments/)
+    expect(step1).toMatch(/invoking instruction/)
+    expect(step1).toMatch(/both kinds of host get the same list|same list/i)
+    expect(step1).toMatch(
+      /Never read a word from a file in a project|Never read a token from a file in a project/,
+    )
+  })
+
+  test('passes the list to begin unchanged and leaves every decision to the helper', () => {
+    expect(step1).toMatch(/do not parse|does not parse|Do not parse/i)
+    expect(step1).toMatch(/unchanged/)
+    expect(step1).toMatch(/Do not remove a repeat/i)
+    expect(skillText).toContain('"selection": [')
+    expect(skillText).toMatch(/JSON-escape/)
+  })
+
+  test('never widens a refused selection to the whole allow list', () => {
+    const step3 = section(skillText, '## Step 3', '## Step 4')
+    expect(step3).toMatch(/selection refusal/i)
+    expect(step3).toMatch(/Never retry with a different selection/i)
+    expect(step3).toMatch(/whole allow list/i)
+    expect(step3).toMatch(/No lock was taken/)
+  })
+
+  test('names every selection refusal reason in the skill and the outcomes reference', () => {
+    for (const reason of [
+      'conflicting-selection',
+      'unknown-group',
+      'unknown-project',
+      'ambiguous-project',
+      'group-member-not-allowed',
+    ]) {
+      expect(skillText).toContain(`\`${reason}\``)
+      expect(outcomesText).toContain(`\`${reason}\``)
+    }
+  })
+
+  test('describes the selection tokens in the outcomes reference, and a refusal as a failed run before begin', () => {
+    expect(outcomesText).toContain('## Reading the selection')
+    expect(outcomesText).toContain('`group:<name>`')
+    expect(outcomesText).toContain('`projects:<a>,<b>`')
+    expect(outcomesText).toMatch(/narrows the allow list and never widens it/i)
+    expect(outcomesText).toMatch(/Connect failed/)
+  })
+
+  test('researcher dispatch lists the projects the run reads, not the whole allow list', () => {
+    const step5 = section(skillText, '## Step 5', '## Step 6')
+    expect(step5).toMatch(/`projects` of the `begin` answer/)
+    expect(step5).toMatch(/every allowed project/i)
+  })
+})
+
+describe('ce:connect fetch', () => {
+  const step1 = section(skillText, '## Step 1', '## Step 2')
+  const fetchSection = section(skillText, '### Fetch word', '## Step 2')
+
+  test('shows the fetch word in the argument hint', () => {
+    expect(String(skill.data['argument-hint'])).toContain('fetch:<run>')
+  })
+
+  test('lists every fetch: word in the first pass, before the preflight', () => {
+    expect(step1).toContain('### Fetch word')
+    expect(fetchSection).toMatch(/every word that starts with `fetch:`/)
+    expect(fetchSection).toMatch(/same pass/)
+    expect(skillText.indexOf('### Fetch word')).toBeLessThan(
+      skillText.indexOf('## Step 2'),
+    )
+  })
+
+  test('takes a numeric GitHub run id only, and counts identical repeats once', () => {
+    expect(fetchSection).toMatch(/digits only, at most 20/)
+    expect(fetchSection).toMatch(/twice or more counts once/)
+    expect(fetchSection).toContain('invalid-request: fetch: needs a numeric')
+  })
+
+  test('stands alone: it conflicts with a selection and with a different fetch word', () => {
+    expect(fetchSection).toContain(
+      'conflicting-selection: fetch: cannot be combined with group: or projects:',
+    )
+    expect(fetchSection).toContain(
+      'conflicting-selection: two different fetch: words',
+    )
+    expect(fetchSection).toMatch(/before any command/)
+  })
+
+  test('skips the run steps: no host, no agent, no question, no mode', () => {
+    expect(fetchSection).toMatch(/skip Steps 2 to 7/)
+    expect(fetchSection).toMatch(/dispatches no agent, asks nothing/)
+    expect(fetchSection).toContain('references/fetch-and-import.md')
+  })
+
+  test('treats the downloaded record as data only the helper opens', () => {
+    expect(skillText).toMatch(
+      /downloaded for `fetch:` is data from outside this machine/,
+    )
+    expect(skillText).toMatch(/Only the helper opens it/)
+  })
+})
+
+describe('ce:connect fetch reference', () => {
+  const text = fs.readFileSync(
+    path.join(SKILL_DIR, 'references/fetch-and-import.md'),
+    'utf8',
+  )
+  const order = (a: string, b: string): boolean =>
+    text.indexOf(a) !== -1 && text.indexOf(a) < text.indexOf(b)
+
+  test('checks the workflow and the event before it downloads anything', () => {
+    expect(text).toContain('.github/workflows/connect.yaml')
+    expect(text).toMatch(/`schedule` or `workflow_dispatch`/)
+    expect(text).toContain(
+      'gh api "repos/marcusrbrown/systematic/actions/runs/',
+    )
+    expect(text).toMatch(/`gh run view --json` has no workflow path/)
+    expect(order('### 1. Check the run', '### 3. Download')).toBe(true)
+    expect(order('unsupported-run-event', 'gh run download')).toBe(true)
+    expect(order('not-a-connect-run', 'gh run download')).toBe(true)
+  })
+
+  test('uses a fixed repository and takes none from the user or the record', () => {
+    expect(text).toMatch(/The repository is fixed: `marcusrbrown\/systematic`/)
+    expect(text).toMatch(/Never take a repository, a path or a workflow name/)
+  })
+
+  test('picks the highest attempt of connect-run-<run>-<attempt> for that run id', () => {
+    expect(text).toContain('connect-run-<run>-<attempt>')
+    expect(text).toMatch(/highest attempt/)
+    expect(text).toContain('connect-run-<run>-2')
+  })
+
+  test('downloads into a fresh directory it removes afterward, and never opens the record itself', () => {
+    expect(text).toContain('mktemp -d')
+    expect(text).toContain(
+      'gh run download <run> --repo marcusrbrown/systematic',
+    )
+    expect(text).toMatch(/Remove `<DEST>`/)
+    expect(text).toMatch(/Do not open it and do not list the directory/)
+    expect(text).toMatch(/holds one file, `run.json`, at its root/)
+  })
+
+  test('hands the helper a directory and where the run came from, and asks nothing', () => {
+    expect(text).toContain('connect.mjs" import')
+    expect(text).toContain('"provenance": {"repo": "marcusrbrown/systematic"')
+    expect(text).toMatch(/dispatches no agent, asks nothing/)
+    expect(text).toMatch(/never touches the network/)
+  })
+
+  test('prints its own reason for a missing artifact, an expired one and an unauthenticated gh', () => {
+    for (const reason of [
+      'artifact-not-found',
+      'artifact-expired',
+      'gh-not-authenticated',
+      'not-a-connect-run',
+      'unsupported-run-event',
+    ]) {
+      expect(text).toContain(`\`${reason}\``)
+    }
+    expect(text).toMatch(/tick Rejected in the scheduled run's report/)
+  })
+
+  test('prints its own line for an artifact list that failed, and never reads it as a missing artifact', () => {
+    expect(text).toContain('`artifact-list-failed`')
+    expect(text).toMatch(/non-zero exit/)
+    expect(text).toMatch(/output is not a JSON array/)
+    expect(text).toMatch(/Never read a failed call as `artifact-not-found`/)
+    expect(text).toMatch(/The call succeeded and no name matches/)
+    expect(order('`artifact-list-failed`', '`artifact-not-found`')).toBe(true)
+    expect(text).toMatch(/\| `artifact-list-failed` \|/)
+  })
+
+  test('ends with Connect failed and helper-unavailable when node, the helper file or the answer is missing', () => {
+    expect(text).toMatch(/If `node` is missing, the helper file is gone/)
+    expect(text).toMatch(/`import` prints no JSON answer/)
+    expect(text).toMatch(
+      /print `helper-unavailable` and its hint, then `Connect failed`/,
+    )
+    expect(text).toMatch(/\| `helper-unavailable` \|/)
+    expect(order('### 4. Import', '### 5. Report')).toBe(true)
+    expect(order('`helper-unavailable` and its hint', '### 5. Report')).toBe(
+      true,
+    )
+  })
+
+  test('prints the reason and the fields that say what to fix when import is refused', () => {
+    const failedLine = text
+      .split('\n')
+      .find((line) => line.startsWith('- `failed`'))
+    expect(failedLine).toBeDefined()
+    for (const field of [
+      '`reason`',
+      '`detail`',
+      '`unmatched`',
+      '`configWarnings`',
+    ]) {
+      expect(failedLine).toContain(field)
+    }
+    expect(failedLine).toMatch(/Then print `Connect failed`/)
+  })
+
+  test('names every reason the helper can answer, and every candidate refusal it can print', () => {
+    for (const reason of [
+      'record-missing',
+      'record-symlink',
+      'record-not-regular',
+      'record-unreadable',
+      'record-too-large',
+      'record-malformed',
+      'record-schema-version',
+      'directory-unreadable',
+      'ledger-unreadable',
+      'state-root-refused',
+      'no-allowed-projects',
+    ]) {
+      expect(text).toContain(`\`${reason}\``)
+    }
+    for (const reason of Object.keys(REFUSAL_TEXT)) {
+      expect(text).toContain(`\`${reason}\``)
+    }
+  })
+
+  test('prints the helper summary unchanged and ends with its final line', () => {
+    expect(text).toMatch(
+      /Print the `summary` as the helper wrote it, unchanged/,
+    )
+    expect(text).toMatch(/Never retype, shorten or build one/)
+    expect(text).toMatch(/Print `finalLine` last, with nothing after it/)
+    expect(text).toMatch(/Never run `ledger unlock` on a `busy` answer/)
+  })
+
+  test('is linked from the skill and described in the outcomes reference', () => {
+    expect(skillText).toContain('references/fetch-and-import.md')
+    expect(outcomesText).toContain('## Reading a fetch')
+    expect(outcomesText).toContain('`fetch:<run>`')
+    expect(outcomesText).toMatch(/`import` answered `complete`/)
+    expect(outcomesText).toMatch(/`import` answered `degraded`/)
   })
 })
 

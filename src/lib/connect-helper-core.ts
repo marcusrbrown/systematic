@@ -497,7 +497,10 @@ function roundRobin(rules: readonly RuleEntry[]): RuleEntry[] {
 
 export interface OfferInput {
   readonly rules: readonly RuleEntry[]
+  /** The ledger's coverage, of every selection. Only the records of `selection` count. */
   readonly coverage: readonly CoverageRecord[]
+  /** The run's selection id; left out, the run has no selection. */
+  readonly selection?: string
   /** Rules one run is offered: families per run times rules per family. */
   readonly size: number
 }
@@ -523,11 +526,16 @@ export interface Offer {
  * each of those groups the order is round-robin across projects, then by path,
  * so a slice spans projects. The order depends on the index and the coverage
  * records only, never on the model, so repeated runs sweep the whole index
- * and then start over at the oldest.
+ * and then start over at the oldest. Coverage belongs to a selection: a rule
+ * that only another selection covered is not covered here.
  */
 export function planOffer(input: OfferInput): Offer {
   const size = Math.max(1, Math.floor(input.size))
-  const covered = new Map(input.coverage.map((item) => [item.ruleId, item]))
+  const covered = new Map(
+    input.coverage
+      .filter((item) => item.selection === input.selection)
+      .map((item) => [item.ruleId, item]),
+  )
   const groups = new Map<string, RuleEntry[]>()
   let coveredBefore = 0
   for (const rule of input.rules) {
@@ -834,7 +842,7 @@ function parseOverlap(value: unknown): OverlapCheck | Drop {
   return { queries: checked, result, note: text }
 }
 
-function pathProblem(rel: unknown): DropReason | undefined {
+export function pathProblem(rel: unknown): DropReason | undefined {
   if (typeof rel !== 'string' || rel === '') return 'malformed-candidate'
   if (rel.length > CANDIDATE_LIMITS.pathLength || CONTROL.test(rel)) {
     return 'malformed-candidate'
@@ -1368,6 +1376,8 @@ export interface DigestModel {
     readonly consented?: boolean
   }
   readonly degradeReasons: readonly string[]
+  /** What the run was narrowed to. */
+  readonly selection?: Selection
   /** Where the sweep over the rule index stands after this run. */
   readonly sweep?: SweepProgress
   readonly projects: readonly DigestProject[]
@@ -1438,7 +1448,7 @@ export function nameDropped(
 }
 
 /** Render untrusted prose as a block quote, so it cannot become a heading or a list. */
-function quote(text: string): string {
+export function quote(text: string): string {
   return sanitizeText(text)
     .split('\n')
     .map((line) => (line === '' ? '>' : `> ${line}`))
@@ -1462,7 +1472,7 @@ function fenced(text: string): string {
   return `${fence}\n${clean}\n${fence}`
 }
 
-function inline(text: string): string {
+export function inline(text: string): string {
   const clean = sanitizeText(text).replaceAll('\n', ' ')
   const fence = '`'.repeat(longestRun(clean, '`') + 1)
   const pad = clean.startsWith('`') || clean.endsWith('`') ? ' ' : ''
@@ -1493,7 +1503,10 @@ function renderSourceBlock(
   return out
 }
 
-function renderCandidate(item: DigestCandidate, index: number): string[] {
+export function renderCandidate(
+  item: DigestCandidate,
+  index: number,
+): string[] {
   const { candidate } = item
   const out = [
     `### Candidate ${index + 1}: ${candidate.kind} (${item.standing})`,
@@ -1596,6 +1609,7 @@ function renderHeader(model: DigestModel): string[] {
     `Mode: ${model.mode}`,
     `Generated: ${model.generatedAt}`,
     hostLine(model),
+    ...(model.selection === undefined ? [] : [selectionLine(model.selection)]),
   ]
   const sweep = model.sweep === undefined ? '' : renderSweepLine(model.sweep)
   if (sweep !== '') out.push(sweep)
@@ -1716,7 +1730,7 @@ export function renderDigest(model: DigestModel): string {
 const MAX_SUMMARY_TITLES = 10
 
 /** A run record path that can be pasted as one `candidate:` token: no whitespace, no control character. */
-function isPasteablePath(file: string): boolean {
+export function isPasteablePath(file: string): boolean {
   return !/\s/.test(file) && sanitizeText(file) === file
 }
 
@@ -1755,7 +1769,7 @@ const REFRESH_PATH = /^docs\/solutions\/[A-Za-z0-9._/-]+\.md$/
  * target's own learning, which `ce:compound` refuses. A candidate to
  * investigate has nothing to promote yet.
  */
-function handoffLine(
+export function handoffLine(
   item: DigestModel['candidates'][number],
   runRecordPath: string,
   pasteable: boolean,
@@ -1940,3 +1954,280 @@ export const BATCH_BOUNDS = Object.freeze({
   maxRulesPerFamily: CONNECT_BOUNDS.maxRulesPerFamily,
   maxFamiliesPerRun: CONNECT_BOUNDS.maxFamiliesPerRun,
 })
+
+// ── Selection ───────────────────────────────────────────────────────────────
+
+/** The most words one request may carry. */
+export const MAX_SELECTION_WORDS = 32
+/** The most characters in one word. */
+export const MAX_SELECTION_WORD_LENGTH = 2048
+
+const GROUP_PREFIX = 'group:'
+const PROJECTS_PREFIX = 'projects:'
+const PROJECT_KEY = /^[0-9a-f]{12}$/
+const WORD_FORBIDDEN = /[\s\p{Cc}\p{Cf}]/u
+const MAX_SHOWN_SELECTION_TEXT = 100
+
+/** What a run reads: the whole allow list, a named group, or picked projects. */
+export type Selection =
+  | { readonly kind: 'all' }
+  | { readonly kind: 'group'; readonly name: string; readonly id: string }
+  | {
+      readonly kind: 'projects'
+      readonly picks: readonly string[]
+      readonly id: string
+    }
+
+/** An allow-list entry that resolved to a project. */
+export interface SelectionProject {
+  readonly entry: string
+  readonly mainRoot: string
+}
+
+export type MemberResolution =
+  | { readonly status: 'resolved'; readonly mainRoot: string }
+  | { readonly status: 'unmatched'; readonly reason: string }
+
+export interface SelectionRequest {
+  /** The `group:` and `projects:` words, as the skill collected them. */
+  readonly words: readonly string[]
+  /** The merged `connect.groups` of the user config, by name. */
+  readonly groups: Readonly<Record<string, readonly string[]>>
+  /** The resolved allow list, in its own order. */
+  readonly allowed: readonly SelectionProject[]
+  /** Resolve one group member the way an allow-list entry resolves. */
+  readonly resolveMember: (entry: string) => MemberResolution
+}
+
+export type SelectionRefusal =
+  | { readonly reason: 'conflicting-selection'; readonly detail: string }
+  | { readonly reason: 'unknown-group'; readonly group: string }
+  | { readonly reason: 'unknown-project'; readonly project: string }
+  | {
+      readonly reason: 'ambiguous-project'
+      readonly project: string
+      readonly keys: readonly string[]
+    }
+  | {
+      readonly reason: 'group-member-not-allowed'
+      readonly group: string
+      readonly member: string
+      readonly memberReason?: string
+    }
+
+export type SelectionResult =
+  | {
+      readonly status: 'ok'
+      readonly selection: Selection
+      /** The selected projects, in allow-list order. */
+      readonly projects: readonly SelectionProject[]
+    }
+  /** The words are not a well-formed request. */
+  | { readonly status: 'invalid' }
+  | { readonly status: 'refused'; readonly refusal: SelectionRefusal }
+
+/**
+ * The coverage namespace of a selection: its id, or nothing for a run with no
+ * selection, whose coverage carries no selection field.
+ */
+export function selectionNamespace(selection: Selection): string | undefined {
+  return selection.kind === 'all' ? undefined : selection.id
+}
+
+/** The id of a selection: a hash of the sorted project keys, so only membership counts. */
+export function selectionIdFor(keys: readonly string[]): string {
+  return createHash('sha256')
+    .update(`connect-selection-v1\0${[...keys].sort().join(',')}`)
+    .digest('hex')
+    .slice(0, 16)
+}
+
+/** Text from a request, made safe to show on one line. */
+function shownSelectionText(text: string): string {
+  const flat = text.replace(/[\p{Cc}\p{Cf}]+/gu, ' ').trim()
+  return flat.length > MAX_SHOWN_SELECTION_TEXT
+    ? flat.slice(0, MAX_SHOWN_SELECTION_TEXT)
+    : flat
+}
+
+function isWellFormedWord(word: string): boolean {
+  if (word.length > MAX_SELECTION_WORD_LENGTH) return false
+  if (WORD_FORBIDDEN.test(word)) return false
+  const value = word.startsWith(GROUP_PREFIX)
+    ? word.slice(GROUP_PREFIX.length)
+    : word.startsWith(PROJECTS_PREFIX)
+      ? word.slice(PROJECTS_PREFIX.length)
+      : undefined
+  if (value === undefined || value === '') return false
+  return word.startsWith(GROUP_PREFIX) || !value.split(',').includes('')
+}
+
+function conflict(detail: string): SelectionResult {
+  return {
+    status: 'refused',
+    refusal: { reason: 'conflicting-selection', detail },
+  }
+}
+
+function selectAllowed(
+  allowed: readonly SelectionProject[],
+  roots: ReadonlySet<string>,
+): SelectionProject[] {
+  return allowed.filter((item) => roots.has(item.mainRoot))
+}
+
+function resolveGroup(
+  name: string,
+  request: SelectionRequest,
+): SelectionResult {
+  if (!Object.hasOwn(request.groups, name)) {
+    return {
+      status: 'refused',
+      refusal: { reason: 'unknown-group', group: shownSelectionText(name) },
+    }
+  }
+  const members = request.groups[name] ?? []
+  const allowedRoots = new Set(request.allowed.map((item) => item.mainRoot))
+  const roots = new Set<string>()
+  for (const member of members) {
+    const resolution = request.resolveMember(member)
+    if (resolution.status === 'unmatched') {
+      return {
+        status: 'refused',
+        refusal: {
+          reason: 'group-member-not-allowed',
+          group: shownSelectionText(name),
+          member: shownSelectionText(member),
+          memberReason: resolution.reason,
+        },
+      }
+    }
+    if (!allowedRoots.has(resolution.mainRoot)) {
+      return {
+        status: 'refused',
+        refusal: {
+          reason: 'group-member-not-allowed',
+          group: shownSelectionText(name),
+          member: shownSelectionText(member),
+        },
+      }
+    }
+    roots.add(resolution.mainRoot)
+  }
+  const projects = selectAllowed(request.allowed, roots)
+  return {
+    status: 'ok',
+    projects,
+    selection: {
+      kind: 'group',
+      name,
+      id: selectionIdFor(projects.map((item) => projectKey(item.mainRoot))),
+    },
+  }
+}
+
+/** The allowed projects a pick names: by key when it looks like one, else by name. */
+function matchPick(
+  pick: string,
+  allowed: readonly SelectionProject[],
+): SelectionProject[] {
+  if (PROJECT_KEY.test(pick)) {
+    const byKey = allowed.filter((item) => projectKey(item.mainRoot) === pick)
+    if (byKey.length > 0) return byKey
+  }
+  return allowed.filter((item) => projectName(item.mainRoot) === pick)
+}
+
+function resolvePicks(
+  picks: readonly string[],
+  request: SelectionRequest,
+): SelectionResult {
+  const roots = new Set<string>()
+  for (const pick of picks) {
+    const matches = matchPick(pick, request.allowed)
+    const [only, ...rest] = matches
+    if (only === undefined) {
+      return {
+        status: 'refused',
+        refusal: {
+          reason: 'unknown-project',
+          project: shownSelectionText(pick),
+        },
+      }
+    }
+    if (rest.length > 0) {
+      return {
+        status: 'refused',
+        refusal: {
+          reason: 'ambiguous-project',
+          project: shownSelectionText(pick),
+          keys: matches.map((item) => projectKey(item.mainRoot)),
+        },
+      }
+    }
+    roots.add(only.mainRoot)
+  }
+  const projects = selectAllowed(request.allowed, roots)
+  return {
+    status: 'ok',
+    projects,
+    selection: {
+      kind: 'projects',
+      picks: projects.map((item) => projectName(item.mainRoot)),
+      id: selectionIdFor(projects.map((item) => projectKey(item.mainRoot))),
+    },
+  }
+}
+
+/**
+ * Turn the selection words of a request into the projects a run reads. Pure:
+ * the caller supplies the groups, the resolved allow list and the member
+ * resolver. A selection only narrows the allow list; a project that is not on
+ * it is refused, never added.
+ *
+ * Order of checks: a malformed word, then a conflict, then the lookups. Words
+ * that repeat identically count once; `projects:a,b` and `projects:b,a` are
+ * different words and conflict.
+ */
+export function resolveSelection(request: SelectionRequest): SelectionResult {
+  const { words } = request
+  if (words.length > MAX_SELECTION_WORDS) return { status: 'invalid' }
+  if (!words.every(isWellFormedWord)) return { status: 'invalid' }
+
+  const distinct = [...new Set(words)]
+  const groupWords = distinct.filter((word) => word.startsWith(GROUP_PREFIX))
+  const pickWords = distinct.filter((word) => word.startsWith(PROJECTS_PREFIX))
+  if (groupWords.length > 0 && pickWords.length > 0) {
+    return conflict('group: and projects: words together')
+  }
+  if (groupWords.length > 1) return conflict('two different group: words')
+  if (pickWords.length > 1) return conflict('two different projects: words')
+
+  const [groupWord] = groupWords
+  if (groupWord !== undefined) {
+    return resolveGroup(groupWord.slice(GROUP_PREFIX.length), request)
+  }
+  const [pickWord] = pickWords
+  if (pickWord !== undefined) {
+    return resolvePicks(
+      pickWord.slice(PROJECTS_PREFIX.length).split(','),
+      request,
+    )
+  }
+  return {
+    status: 'ok',
+    selection: { kind: 'all' },
+    projects: request.allowed,
+  }
+}
+
+function selectionLine(selection: Selection): string {
+  switch (selection.kind) {
+    case 'all':
+      return 'Selection: all allowed projects'
+    case 'group':
+      return `Selection: group ${inline(selection.name)} (id ${selection.id})`
+    case 'projects':
+      return `Selection: projects ${selection.picks.map(inline).join(', ')} (id ${selection.id})`
+  }
+}

@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it, spyOn } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
   planOffer,
+  projectKey,
   type RuleEntry,
   renderSweepLine,
   sweepProgress,
@@ -636,5 +637,582 @@ describe('coverage in the ledger', () => {
       JSON.stringify({ version: 1, entries: [] }),
     )
     expect(coverageOf(root)).toEqual([])
+  })
+})
+
+// ── A sweep with no selection ───────────────────────────────────────────────
+
+/** Plan an offer from the ledger's coverage, then publish a run that covers all of it. */
+function sweepRun(
+  root: string,
+  runId: string,
+  rules: readonly RuleEntry[],
+  size: number,
+  selection?: string,
+): ReturnType<typeof planOffer> {
+  const offer = planOffer({
+    rules,
+    coverage: coverageOf(root),
+    size,
+    ...(selection === undefined ? {} : { selection }),
+  })
+  publish(root, runId, {
+    runId,
+    indexed: rules.map((item) => ({
+      ruleId: item.id,
+      hash: item.sha256,
+      project: projectKey(item.project),
+    })),
+    covered: offer.offered,
+    ...(selection === undefined ? {} : { selection }),
+  })
+  return offer
+}
+
+describe('a sweep with no selection', () => {
+  it('covers every rule once across runs, then starts again with the oldest', () => {
+    const root = newRoot()
+    const rules = corpus()
+    const first = sweepRun(root, '20261101T010000Z-aaaa0001', rules, 5)
+    const second = sweepRun(root, '20261101T020000Z-aaaa0002', rules, 5)
+    const third = sweepRun(root, '20261101T030000Z-aaaa0003', rules, 5)
+    const fourth = sweepRun(root, '20261101T040000Z-aaaa0004', rules, 5)
+
+    const seen = new Set<string>()
+    for (const offer of [first, second]) {
+      for (const id of offer.offered) {
+        expect(seen.has(id)).toBe(false)
+        seen.add(id)
+      }
+    }
+    expect(first.fresh).toEqual(first.offered)
+    expect(second.fresh).toEqual(second.offered)
+    // The third run finishes the sweep: two never-covered rules, then the oldest.
+    expect(third.fresh).toHaveLength(2)
+    expect(coverageOf(root)).toHaveLength(12)
+    expect(fourth.coveredBefore).toBe(12)
+    expect(fourth.fresh).toEqual([])
+    // The rules the third run did not offer again are the least recently covered.
+    const leftFromFirst = first.offered.filter(
+      (id) => !third.offered.includes(id),
+    )
+    expect(leftFromFirst).toHaveLength(2)
+    expect(new Set(fourth.offered.slice(0, 2))).toEqual(new Set(leftFromFirst))
+  })
+
+  it('writes coverage records that carry no selection field', () => {
+    const root = newRoot()
+    sweepRun(root, '20261101T010000Z-aaaa0001', corpus(), 5)
+
+    for (const item of coverageOf(root)) {
+      expect(Object.keys(item).sort()).toEqual([
+        'at',
+        'hash',
+        'project',
+        'ruleId',
+        'runId',
+      ])
+    }
+  })
+})
+
+// ── planOffer and a selection ───────────────────────────────────────────────
+
+const SEL_A = 'a1b2c3d4e5f60718'
+const SEL_B = '0123456789abcdef'
+
+function inSelection(
+  selection: string,
+  item: CoverageRecord,
+): CoverageRecord & { selection: string } {
+  return { ...item, selection }
+}
+
+describe('planOffer within a selection', () => {
+  it('counts only the records of its own selection as covered', () => {
+    const rules = corpus()
+    const coverage = [
+      record(1, '2026-11-01T00:00:00Z'),
+      inSelection(SEL_A, record(2, '2026-11-01T00:00:00Z')),
+      inSelection(SEL_B, record(3, '2026-11-01T00:00:00Z')),
+    ]
+
+    expect(planOffer({ rules, coverage, size: 12 }).coveredBefore).toBe(1)
+    expect(
+      planOffer({ rules, coverage, size: 12, selection: SEL_A }).coveredBefore,
+    ).toBe(1)
+    expect(
+      planOffer({ rules, coverage, size: 12, selection: SEL_B }).coveredBefore,
+    ).toBe(1)
+    expect(
+      planOffer({ rules, coverage, size: 12, selection: 'f'.repeat(16) })
+        .coveredBefore,
+    ).toBe(0)
+  })
+
+  it('still offers a rule that only a selection covered when there is no selection', () => {
+    const rules = corpus()
+    const coverage = [inSelection(SEL_A, record(1, '2026-11-01T00:00:00Z'))]
+    const offer = planOffer({ rules, coverage, size: 12 })
+
+    expect(offer.coveredBefore).toBe(0)
+    expect(offer.fresh).toContain(ruleId(1))
+    expect(offer.fresh).toHaveLength(12)
+  })
+
+  it('does not let a record of no selection stand in for a selection', () => {
+    const rules = corpus()
+    const coverage = [record(1, '2026-11-01T00:00:00Z')]
+    const offer = planOffer({ rules, coverage, size: 12, selection: SEL_A })
+
+    expect(offer.coveredBefore).toBe(0)
+    expect(offer.fresh).toHaveLength(12)
+  })
+})
+
+// ── Coverage per selection in the ledger ────────────────────────────────────
+
+function ledgerPath(root: string): string {
+  return path.join(root, 'ledger.json')
+}
+
+function writeLedgerFile(root: string, body: unknown): string {
+  const text = `${JSON.stringify(body, null, 2)}\n`
+  fs.writeFileSync(ledgerPath(root), text)
+  return text
+}
+
+function selectionUpdate(
+  runId: string,
+  selection: string,
+  ids: readonly number[],
+  covered: readonly number[],
+  hash = HASH_A,
+): CoverageUpdate {
+  return { ...update(runId, ids, covered, hash), selection }
+}
+
+function summary(root: string): Array<[string, string, string]> {
+  return coverageOf(root).map((item) => [
+    item.ruleId,
+    item.selection ?? 'all',
+    item.runId,
+  ])
+}
+
+describe('coverage per selection', () => {
+  it('records a selection run under its own selection and leaves the others alone', () => {
+    const root = newRoot()
+    publish(root, 'run-one', update('run-one', [1, 2], [1, 2]))
+    publish(root, 'run-two', selectionUpdate('run-two', SEL_A, [1, 3], [1, 3]))
+
+    expect(summary(root)).toEqual([
+      [ruleId(1), 'all', 'run-one'],
+      [ruleId(1), SEL_A, 'run-two'],
+      [ruleId(2), 'all', 'run-one'],
+      [ruleId(3), SEL_A, 'run-two'],
+    ])
+  })
+
+  it('updates a rule only inside the selection of the run that covers it', () => {
+    const root = newRoot()
+    publish(root, 'run-one', update('run-one', [1], [1]))
+    publish(root, 'run-two', selectionUpdate('run-two', SEL_A, [1], [1]))
+    publish(root, 'run-three', selectionUpdate('run-three', SEL_A, [1], [1]))
+    publish(root, 'run-four', update('run-four', [1], [1]))
+
+    expect(summary(root)).toEqual([
+      [ruleId(1), 'all', 'run-four'],
+      [ruleId(1), SEL_A, 'run-three'],
+    ])
+  })
+
+  it('drops a rule that is gone from the index only in the selection that indexed it', () => {
+    const root = newRoot()
+    publish(root, 'run-one', update('run-one', [1, 2], [1, 2]))
+    publish(root, 'run-two', selectionUpdate('run-two', SEL_A, [1, 2], [1, 2]))
+    publish(root, 'run-three', selectionUpdate('run-three', SEL_A, [1], [1]))
+
+    expect(summary(root)).toEqual([
+      [ruleId(1), 'all', 'run-one'],
+      [ruleId(1), SEL_A, 'run-three'],
+      [ruleId(2), 'all', 'run-one'],
+    ])
+  })
+
+  it('leaves the record of another selection as it is when a run indexes the rule and does not cover it', () => {
+    const root = newRoot()
+    publish(root, 'run-one', update('run-one', [1], [1]))
+    publish(root, 'run-two', selectionUpdate('run-two', SEL_A, [1], []))
+    publish(root, 'run-three', update('run-three', [1], []))
+
+    expect(summary(root)).toEqual([[ruleId(1), 'all', 'run-one']])
+    expect(readLedger(root).status).toBe('ok')
+  })
+
+  it('keeps every selection when a run with no selection prunes its own', () => {
+    const root = newRoot()
+    publish(root, 'run-one', update('run-one', [1, 2], [1, 2]))
+    publish(root, 'run-two', selectionUpdate('run-two', SEL_A, [2], [2]))
+    publish(root, 'run-three', update('run-three', [1], [1]))
+
+    expect(summary(root)).toEqual([
+      [ruleId(1), 'all', 'run-three'],
+      [ruleId(2), SEL_A, 'run-two'],
+    ])
+  })
+
+  it('refuses a malformed selection id before anything is staged', () => {
+    const root = newRoot()
+    for (const selection of ['', 'A1B2C3D4E5F60718', 'abc', 'g'.repeat(16)]) {
+      expect(
+        publish(
+          root,
+          'run-one',
+          selectionUpdate('run-one', selection, [1], [1]),
+        ),
+      ).toEqual({ status: 'failed', reason: 'invalid-coverage' })
+    }
+    expect(fs.existsSync(path.join(root, 'runs', 'run-one'))).toBe(false)
+  })
+
+  it('drops the oldest records of any selection when the ledger would hold too many', () => {
+    const root = newRoot()
+    const cap = 20_000
+    const seeded = Array.from({ length: cap }, (_, i) => ({
+      ruleId: ruleId(i + 1),
+      hash: HASH_A,
+      runId: 'seed',
+      at: new Date(Date.UTC(2026, 9, 1) + i * 1000).toISOString(),
+    }))
+    writeLedgerFile(root, { version: 2, entries: [], coverage: seeded })
+
+    publish(
+      root,
+      'run-new',
+      selectionUpdate(
+        'run-new',
+        SEL_A,
+        [30_001, 30_002, 30_003],
+        [30_001, 30_002, 30_003],
+      ),
+    )
+
+    const kept = coverageOf(root)
+    expect(kept).toHaveLength(cap)
+    const ids = new Set(kept.map((item) => item.ruleId))
+    for (const n of [1, 2, 3]) expect(ids.has(ruleId(n))).toBe(false)
+    expect(ids.has(ruleId(4))).toBe(true)
+    expect(kept.filter((item) => item.selection === SEL_A)).toHaveLength(3)
+  })
+
+  it('drops an older indexed record of the active selection before a newer record of another selection', () => {
+    const root = newRoot()
+    const cap = 20_000
+    const at = (i: number) =>
+      new Date(Date.UTC(2026, 9, 1) + i * 1000).toISOString()
+    const seeded = [
+      {
+        ruleId: ruleId(1),
+        hash: HASH_A,
+        runId: 'seed',
+        at: at(0),
+        selection: SEL_A,
+      },
+      ...Array.from({ length: cap - 1 }, (_, i) => ({
+        ruleId: ruleId(i + 2),
+        hash: HASH_A,
+        runId: 'seed',
+        at: at(i + 1),
+        selection: SEL_B,
+      })),
+    ]
+    writeLedgerFile(root, { version: 2, entries: [], coverage: seeded })
+
+    publish(
+      root,
+      'run-new',
+      selectionUpdate('run-new', SEL_A, [1, 30_001], [30_001]),
+    )
+
+    const kept = coverageOf(root)
+    expect(kept).toHaveLength(cap)
+    const keys = new Set(kept.map((item) => `${item.ruleId}:${item.selection}`))
+    expect(keys.has(`${ruleId(1)}:${SEL_A}`)).toBe(false)
+    expect(keys.has(`${ruleId(2)}:${SEL_B}`)).toBe(true)
+    expect(keys.has(`${ruleId(30_001)}:${SEL_A}`)).toBe(true)
+  })
+
+  it('keeps the coverage a run records even when every other record is newer', () => {
+    const root = newRoot()
+    const cap = 20_000
+    const seeded = Array.from({ length: cap }, (_, i) => ({
+      ruleId: ruleId(i + 1),
+      hash: HASH_A,
+      runId: 'seed',
+      at: new Date(Date.UTC(2027, 0, 1) + i * 1000).toISOString(),
+      selection: SEL_B,
+    }))
+    writeLedgerFile(root, { version: 2, entries: [], coverage: seeded })
+
+    publish(
+      root,
+      'run-new',
+      selectionUpdate('run-new', SEL_A, [30_001, 30_002], [30_001, 30_002]),
+    )
+
+    const kept = coverageOf(root)
+    expect(kept).toHaveLength(cap)
+    expect(kept.filter((item) => item.selection === SEL_A)).toHaveLength(2)
+    const ids = new Set(kept.map((item) => item.ruleId))
+    expect(ids.has(ruleId(1))).toBe(false)
+    expect(ids.has(ruleId(2))).toBe(false)
+  })
+
+  it('removes every selection with the ledger', () => {
+    const root = newRoot()
+    publish(root, 'run-one', update('run-one', [1], [1]))
+    publish(root, 'run-two', selectionUpdate('run-two', SEL_A, [1], [1]))
+
+    expect(clearLedger(root, { pid: 7001, processes: PROCS })).toEqual({
+      status: 'cleared',
+      removed: true,
+    })
+    expect(coverageOf(root)).toEqual([])
+  })
+})
+
+// ── Ledger version 2 ────────────────────────────────────────────────────────
+
+const V1_ENTRY = {
+  id: 'cand-1',
+  kind: 'transferable-lesson',
+  target: '/p/alpha',
+  ruleId: ruleId(1),
+  sources: [
+    { role: 'solution', path: 'docs/solutions/a.md', fingerprint: HASH_A },
+  ],
+  targetEvidence: [{ path: 'src/x.ts', fingerprint: HASH_B }],
+  status: 'candidate' as const,
+  history: [],
+  recordedAt: '2026-10-01T00:00:00.000Z',
+}
+
+const V1_COVERAGE = [
+  {
+    ruleId: ruleId(1),
+    hash: HASH_A,
+    runId: 'run-old',
+    at: '2026-10-01T00:00:00.000Z',
+  },
+  {
+    ruleId: ruleId(2),
+    hash: HASH_A,
+    runId: 'run-old',
+    at: '2026-10-01T00:00:00.000Z',
+    project: 'aaaaaaaaaaaa',
+  },
+]
+
+function versionOneLedger(): Record<string, unknown> {
+  return { version: 1, entries: [V1_ENTRY], coverage: V1_COVERAGE }
+}
+
+function ledgerOnDisk(root: string): {
+  version: unknown
+  entries: unknown
+  coverage?: unknown
+} {
+  return JSON.parse(fs.readFileSync(ledgerPath(root), 'utf8'))
+}
+
+describe('ledger version 2', () => {
+  it('reads a version 1 ledger with its coverage as the no-selection namespace', () => {
+    const root = newRoot()
+    writeLedgerFile(root, versionOneLedger())
+
+    const read = readLedger(root)
+    if (read.status !== 'ok') throw new Error(`ledger ${read.reason}`)
+    expect(read.ledger.version).toBe(2)
+    expect(read.ledger.entries).toEqual([V1_ENTRY])
+    expect(read.ledger.coverage).toEqual(V1_COVERAGE)
+    expect(
+      read.ledger.coverage?.every((item) => item.selection === undefined),
+    ).toBe(true)
+  })
+
+  it('writes a new ledger as version 2', () => {
+    const root = newRoot()
+    publish(root, 'run-one', update('run-one', [1], [1]))
+    expect(ledgerOnDisk(root).version).toBe(2)
+  })
+
+  it('migrates a version 1 ledger on the first publish and keeps its entries and coverage as they were', () => {
+    const root = newRoot()
+    writeLedgerFile(root, versionOneLedger())
+
+    publish(root, 'run-new', update('run-new', [1, 2, 3], [3]))
+
+    const after = ledgerOnDisk(root)
+    expect(after.version).toBe(2)
+    expect(after.entries).toEqual([V1_ENTRY])
+    const byRule = new Map(coverageOf(root).map((c) => [c.ruleId, c]))
+    expect(byRule.get(ruleId(1))).toEqual(V1_COVERAGE[0])
+    expect(byRule.get(ruleId(2))).toEqual(V1_COVERAGE[1])
+    expect(byRule.get(ruleId(3))?.runId).toBe('run-new')
+  })
+
+  it('migrates a version 1 ledger when a decision is recorded', () => {
+    const root = newRoot()
+    writeLedgerFile(root, versionOneLedger())
+
+    const decided = decideLedgerEntry(
+      root,
+      { id: 'cand-1', status: 'rejected', reason: 'not a fit' },
+      { pid: 7001, processes: PROCS },
+    )
+
+    expect(decided.status).toBe('decided')
+    const after = ledgerOnDisk(root)
+    expect(after.version).toBe(2)
+    expect(after.coverage).toEqual(V1_COVERAGE)
+  })
+
+  it('leaves a version 1 ledger as it was when the run dies before the ledger is rewritten, and migrates on the next run', () => {
+    const root = newRoot()
+    const before = writeLedgerFile(root, versionOneLedger())
+
+    expect(() =>
+      publish(root, 'run-one', update('run-one', [3], [3]), {
+        afterCommit: () => {
+          throw new Error('crash')
+        },
+      }),
+    ).toThrow('crash')
+    expect(fs.readFileSync(ledgerPath(root), 'utf8')).toBe(before)
+
+    publish(root, 'run-two', update('run-two', [1, 2, 3], [3]))
+    expect(ledgerOnDisk(root).version).toBe(2)
+    expect(coverageOf(root).map((item) => item.ruleId)).toEqual([
+      ruleId(1),
+      ruleId(2),
+      ruleId(3),
+    ])
+  })
+
+  it('leaves a version 1 ledger as it was when the rename of the new ledger fails', () => {
+    const root = newRoot()
+    const before = writeLedgerFile(root, versionOneLedger())
+    const real = fs.renameSync
+    const spy = spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      if (String(to).endsWith('ledger.json')) throw new Error('rename failed')
+      real(from, to)
+    })
+    let result: ReturnType<typeof publish>
+    try {
+      result = publish(root, 'run-one', update('run-one', [3], [3]))
+    } finally {
+      spy.mockRestore()
+    }
+
+    expect(result).toMatchObject({
+      status: 'published',
+      ledger: { written: false },
+    })
+    expect(fs.readFileSync(ledgerPath(root), 'utf8')).toBe(before)
+    expect(fs.readdirSync(root).sort()).toEqual(['ledger.json', 'runs'])
+  })
+
+  it('reads the same rule in two selections, and a duplicate within one selection as unreadable', () => {
+    const root = newRoot()
+    const base = { hash: HASH_A, runId: 'r', at: 't' }
+    writeLedgerFile(root, {
+      version: 2,
+      entries: [],
+      coverage: [
+        { ruleId: ruleId(1), ...base },
+        { ruleId: ruleId(1), ...base, selection: SEL_A },
+        { ruleId: ruleId(1), ...base, selection: SEL_B },
+      ],
+    })
+    expect(coverageOf(root)).toHaveLength(3)
+
+    writeLedgerFile(root, {
+      version: 2,
+      entries: [],
+      coverage: [
+        { ruleId: ruleId(1), ...base, selection: SEL_A },
+        { ruleId: ruleId(1), ...base, selection: SEL_A },
+      ],
+    })
+    expect(readLedger(root)).toEqual({
+      status: 'unreadable',
+      reason: 'invalid',
+    })
+  })
+
+  it.each([
+    ['uppercase hex', 'A1B2C3D4E5F60718'],
+    ['too short', 'abc'],
+    ['not hex', 'g'.repeat(16)],
+    ['empty', ''],
+    ['a number', 7],
+  ])(
+    'reads a record with a selection that is %s as unreadable',
+    (_name, selection) => {
+      const root = newRoot()
+      writeLedgerFile(root, {
+        version: 2,
+        entries: [],
+        coverage: [
+          { ruleId: ruleId(1), hash: HASH_A, runId: 'r', at: 't', selection },
+        ],
+      })
+      expect(readLedger(root)).toEqual({
+        status: 'unreadable',
+        reason: 'invalid',
+      })
+    },
+  )
+
+  it.each([
+    ['version 3', '{"version":3,"entries":[]}'],
+    ['version 0', '{"version":0,"entries":[]}'],
+    ['a string version', '{"version":"2","entries":[]}'],
+    ['no version', '{"entries":[]}'],
+    ['malformed json', '{"version":2,'],
+  ])(
+    'reads %s as unreadable, and a publish writes nothing and leaves the file as it was',
+    (_name, text) => {
+      const root = newRoot()
+      fs.writeFileSync(ledgerPath(root), text)
+
+      expect(readLedger(root)).toEqual({
+        status: 'unreadable',
+        reason: 'invalid',
+      })
+      expect(publish(root, 'run-one', update('run-one', [1], [1]))).toEqual({
+        status: 'failed',
+        reason: 'ledger-unreadable',
+      })
+      expect(fs.readFileSync(ledgerPath(root), 'utf8')).toBe(text)
+      expect(fs.existsSync(path.join(root, 'runs', 'run-one'))).toBe(false)
+    },
+  )
+
+  it('reads an oversize file as unreadable and leaves it as it was', () => {
+    const root = newRoot()
+    const text = `{"version":2,"entries":[],"pad":"${'x'.repeat(16 * 1024 * 1024)}"}`
+    fs.writeFileSync(ledgerPath(root), text)
+
+    expect(readLedger(root)).toEqual({
+      status: 'unreadable',
+      reason: 'too-large',
+    })
+    expect(publish(root, 'run-one', update('run-one', [1], [1]))).toEqual({
+      status: 'failed',
+      reason: 'ledger-unreadable',
+    })
+    expect(fs.statSync(ledgerPath(root)).size).toBe(Buffer.byteLength(text))
   })
 })

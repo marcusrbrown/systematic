@@ -21,7 +21,7 @@ import {
   SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
 } from './config-schema.js'
-import type { ConnectSettings } from './connect-config.js'
+import type { ConnectGroups, ConnectSettings } from './connect-config.js'
 import {
   REMOVED_BUNDLED_AGENT_CATEGORIES,
   REMOVED_CONFIG_KEYS,
@@ -282,8 +282,9 @@ export interface SystematicConfig {
   searchUnreadable?: boolean
   /**
    * Merged `connect` settings from user and custom config only: the
-   * `allow_projects` lists of every layer that sets one, as a union. Absent
-   * when no layer sets the block, which allows no project. A project
+   * `allow_projects` lists of every layer that sets one, as a union, and the
+   * `groups` by name with a later layer replacing a same-named group whole.
+   * Absent when no layer sets the block, which allows no project. A project
    * config's `connect` is stripped at load with a warning and never appears
    * here. The `ce:connect` helper reads the same files itself
    * (`loadConnectAllowList`) and never consults this value.
@@ -2211,8 +2212,10 @@ function unionDisabledList(
 }
 
 /**
- * The `connect` allow lists of the chain as one union, or nothing when no
- * file sets the block. The project's block was stripped before this point.
+ * The `connect` block of the chain: the allow lists as one union and the
+ * groups merged by name, a later file replacing a same-named group whole.
+ * Nothing when no file sets the block, and no `groups` key when no file sets
+ * one. The project's block was stripped before this point.
  */
 function mergeConnect(
   sources: readonly FileConfigSource[],
@@ -2221,12 +2224,22 @@ function mergeConnect(
     source.config.connect === undefined ? [] : [source.config.connect],
   )
   if (blocks.length === 0) return {}
+  const groups: ConnectGroups = {}
+  let hasGroups = false
+  for (const block of blocks) {
+    if (block.groups === undefined) continue
+    hasGroups = true
+    for (const [name, members] of Object.entries(block.groups)) {
+      groups[name] = [...members]
+    }
+  }
   return {
     connect: {
       allow_projects: blocks.reduce<string[]>(
         (merged, block) => mergeArraysUnique(merged, block.allow_projects),
         [],
       ),
+      ...(hasGroups && { groups }),
     },
   }
 }

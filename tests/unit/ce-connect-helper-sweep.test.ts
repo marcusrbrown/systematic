@@ -68,7 +68,20 @@ interface World {
   readonly alpha: string
   readonly beta: string
   readonly stateRoot: string
+  readonly configFile: string
   readonly deps: HelperDeps
+}
+
+function writeConfig(
+  world: Pick<World, 'alpha' | 'beta' | 'configFile'>,
+  groups: Record<string, string[]>,
+): void {
+  fs.writeFileSync(
+    world.configFile,
+    JSON.stringify({
+      connect: { allow_projects: [world.alpha, world.beta], groups },
+    }),
+  )
 }
 
 /** Two projects with four learnings each: eight rules, four per run. */
@@ -78,9 +91,10 @@ function buildWorld(): World {
   const home = realTemp('connect-sweep-home-')
   const userConfigDir = path.join(home, '.config', 'opencode')
   fs.mkdirSync(userConfigDir, { recursive: true })
-  fs.writeFileSync(
-    path.join(userConfigDir, 'systematic.json'),
-    JSON.stringify({ connect: { allow_projects: [alpha, beta] } }),
+  const configFile = path.join(userConfigDir, 'systematic.json')
+  writeConfig(
+    { alpha, beta, configFile },
+    { solo: [alpha], 'solo-again': [alpha], pair: [alpha, beta] },
   )
   const stateHome = path.join(realTemp('connect-sweep-state-'), 'xdg')
   // A clock that moves on every read, so two runs never share a coverage time.
@@ -88,6 +102,7 @@ function buildWorld(): World {
   return {
     alpha,
     beta,
+    configFile,
     stateRoot: path.join(stateHome, 'systematic', 'connect'),
     deps: {
       env: { XDG_STATE_HOME: stateHome },
@@ -117,11 +132,16 @@ interface Started {
   readonly offered: string[]
 }
 
-function start(world: World): Started {
+function start(world: World, selection: readonly string[] = []): Started {
   const body = ok(
     runHelperOp(
       'begin',
-      { host: 'opencode-v2', version: '9999.0.0', mode: 'headless' },
+      {
+        host: 'opencode-v2',
+        version: '9999.0.0',
+        mode: 'headless',
+        ...(selection.length === 0 ? {} : { selection }),
+      },
       world.deps,
     ),
   )
@@ -184,17 +204,21 @@ function publish(world: World, run: Started, extra: Json = {}): Json {
 function runCovering(
   world: World,
   covered: (offered: string[]) => string[] = (offered) => offered,
+  selection: readonly string[] = [],
 ): { run: Started; validated: Json; published: Json } {
-  const run = start(world)
+  const run = start(world, selection)
   const ids = covered(run.offered)
   const half = Math.ceil(ids.length / 2)
+  const projects = (run.body.projects as Array<{ root: string }>).map(
+    (project) => project.root,
+  )
   const files = [ids.slice(0, half), ids.slice(half)]
     .filter((group) => group.length > 0)
     .map((group, index) =>
       writeBatch(
         run,
         `family-${index + 1}.json`,
-        batch(world, run, group, { family: `family ${index + 1}` }),
+        batch(world, run, group, { family: `family ${index + 1}`, projects }),
       ),
     )
   const validated = validate(world, run, files)
@@ -587,7 +611,10 @@ describe('sweep progress', () => {
     const world = buildWorld()
     runCovering(world)
     const shown = ok(runHelperOp('ledger-show', {}, world.deps))
-    expect(shown.coverage).toEqual({ rules: 4 })
+    expect(shown.coverage).toEqual({
+      rules: 4,
+      namespaces: [{ selection: 'all', rules: 4 }],
+    })
   })
 })
 
@@ -605,5 +632,236 @@ describe('ledger clear', () => {
     const again = start(world)
     expect(again.offered).toEqual(first.run.offered)
     expect(again.body.sweep).toMatchObject({ covered: 0 })
+  })
+})
+
+// ── Coverage per selection ──────────────────────────────────────────────────
+
+interface LedgerCoverage {
+  readonly ruleId: string
+  readonly runId: string
+  readonly selection?: string
+}
+
+function coverageRecords(world: World): LedgerCoverage[] {
+  if (!fs.existsSync(path.join(world.stateRoot, 'ledger.json'))) return []
+  return (ledgerFile(world).coverage ?? []) as LedgerCoverage[]
+}
+
+function idsIn(world: World, selection: string | undefined): string[] {
+  return coverageRecords(world)
+    .filter((item) => item.selection === selection)
+    .map((item) => item.ruleId)
+    .sort()
+}
+
+function selectionIdOf(run: Started): string {
+  return (run.body.selection as Json).id as string
+}
+
+function abort(world: World, run: Started): void {
+  ok(
+    runHelperOp(
+      'publish',
+      { runId: run.runId, lock: run.lock, abort: true },
+      world.deps,
+    ),
+  )
+}
+
+function beginSnapshot(run: Started): {
+  coverageScope: { pruneUnattributed: boolean }
+} {
+  return JSON.parse(
+    fs.readFileSync(path.join(run.workDir, 'begin.json'), 'utf8'),
+  ) as { coverageScope: { pruneUnattributed: boolean } }
+}
+
+function alphaIds(world: World): string[] {
+  return NAMES.map((name) =>
+    ruleIdFor(world.alpha, `docs/solutions/${name}.md`),
+  ).sort()
+}
+
+describe('coverage per selection', () => {
+  it('does not count a rule a group run covered as covered for a run with no selection', () => {
+    const world = buildWorld()
+    const group = runCovering(world, undefined, ['group:solo'])
+    expect(group.run.body.sweep).toEqual({
+      total: 4,
+      covered: 0,
+      sliceSize: 4,
+      runsLeft: 1,
+    })
+    expect(group.run.offered.slice().sort()).toEqual(alphaIds(world))
+
+    const plain = runCovering(world)
+    expect(plain.run.body.sweep).toEqual({
+      total: 8,
+      covered: 0,
+      sliceSize: 4,
+      runsLeft: 2,
+    })
+    expect(plain.run.offered).toContain(
+      ruleIdFor(world.alpha, 'docs/solutions/one.md'),
+    )
+    expect(plain.published.summary).toContain(
+      'Sweep: covered 4 of 8 rules (current hashes); this run covered 4; about 1 run left in the sweep.',
+    )
+  })
+
+  it('keeps a group sweep of its own: the second run offers what the first did not, and the line counts the group', () => {
+    const world = buildWorld()
+    const first = runCovering(world, undefined, ['group:pair'])
+    const second = runCovering(world, undefined, ['group:pair'])
+
+    expect(
+      second.run.offered.some((id) => first.run.offered.includes(id)),
+    ).toBe(false)
+    expect(second.run.body.sweep).toMatchObject({ total: 8, covered: 4 })
+    expect(second.published.summary).toContain(
+      'Sweep: covered 8 of 8 rules (current hashes); this run covered 4; the sweep is complete',
+    )
+  })
+
+  it('counts only the rules of the group in its sweep line', () => {
+    const world = buildWorld()
+    const first = runCovering(world, undefined, ['group:solo'])
+    expect(first.published.summary).toContain(
+      'Sweep: covered 4 of 4 rules (current hashes); this run covered 4; the sweep is complete',
+    )
+    const next = start(world, ['group:solo'])
+    expect(next.body.sweep).toMatchObject({ total: 4, covered: 4, runsLeft: 0 })
+    abort(world, next)
+  })
+
+  it('shares one sweep between groups and picks with the same members, and starts fresh when a member is added', () => {
+    const world = buildWorld()
+    const first = runCovering(world, undefined, ['group:solo'])
+
+    const sameMembers = start(world, ['group:solo-again'])
+    expect(sameMembers.body.sweep).toMatchObject({ total: 4, covered: 4 })
+    expect(selectionIdOf(sameMembers)).toBe(selectionIdOf(first.run))
+    abort(world, sameMembers)
+
+    const picked = start(world, ['projects:alpha'])
+    expect(picked.body.sweep).toMatchObject({ total: 4, covered: 4 })
+    abort(world, picked)
+
+    writeConfig(world, { solo: [world.alpha, world.beta] })
+    const grown = start(world, ['group:solo'])
+    expect(grown.body.sweep).toMatchObject({ total: 8, covered: 0 })
+    abort(world, grown)
+  })
+
+  it('gives a group of the whole allow list a namespace of its own, and never prunes for it', () => {
+    const world = buildWorld()
+    const group = runCovering(world, undefined, ['group:pair'])
+    const id = selectionIdOf(group.run)
+    expect(coverageRecords(world).every((item) => item.selection === id)).toBe(
+      true,
+    )
+    expect(coverageRecords(world)).toHaveLength(4)
+
+    const grouped = start(world, ['group:pair'])
+    expect(beginSnapshot(grouped).coverageScope.pruneUnattributed).toBe(false)
+    abort(world, grouped)
+    const plain = start(world)
+    expect(plain.body.sweep).toMatchObject({ total: 8, covered: 0 })
+    expect(beginSnapshot(plain).coverageScope.pruneUnattributed).toBe(true)
+    abort(world, plain)
+  })
+
+  it('keeps the coverage of projects a group run did not select, and a later run with no selection prunes only what it reads', () => {
+    const world = buildWorld()
+    runCovering(world)
+    const kept = idsIn(world, undefined)
+    expect(kept).toHaveLength(4)
+    const betaKept = kept.filter((id) => !alphaIds(world).includes(id))
+    expect(betaKept).toHaveLength(2)
+
+    const group = runCovering(world, undefined, ['group:solo'])
+    expect(idsIn(world, undefined)).toEqual(kept)
+    expect(idsIn(world, selectionIdOf(group.run))).toEqual(alphaIds(world))
+
+    const gone = ruleIdFor(world.beta, 'docs/solutions/one.md')
+    expect(kept).toContain(gone)
+    git(world.beta, ['rm', '-q', 'docs/solutions/one.md'])
+    commit(world.beta, 'remove')
+    runCovering(world)
+
+    expect(idsIn(world, undefined)).not.toContain(gone)
+    expect(idsIn(world, selectionIdOf(group.run))).toEqual(alphaIds(world))
+  })
+
+  it('migrates a version 1 ledger on the first write and honours the coverage it holds', () => {
+    const world = buildWorld()
+    const first = runCovering(world)
+    const file = path.join(world.stateRoot, 'ledger.json')
+    const written = ledgerFile(world)
+    expect(written.version).toBe(2)
+    fs.writeFileSync(file, JSON.stringify({ ...written, version: 1 }))
+
+    const second = runCovering(world)
+
+    expect(
+      second.run.offered.some((id) => first.run.offered.includes(id)),
+    ).toBe(false)
+    expect(second.run.body.sweep).toMatchObject({ covered: 4 })
+    expect(ledgerFile(world).version).toBe(2)
+    expect(coverageRecords(world)).toHaveLength(8)
+  })
+
+  it('refuses a ledger of an unknown version and leaves it as it was', () => {
+    const world = buildWorld()
+    runCovering(world)
+    const file = path.join(world.stateRoot, 'ledger.json')
+    const text = JSON.stringify({ ...ledgerFile(world), version: 3 })
+    fs.writeFileSync(file, text)
+
+    const result = runHelperOp(
+      'begin',
+      { host: 'opencode-v2', version: '9999.0.0', mode: 'headless' },
+      world.deps,
+    )
+
+    expect(result.ok).toBe(false)
+    expect(JSON.stringify(result.body)).toContain('ledger-unreadable')
+    expect(fs.readFileSync(file, 'utf8')).toBe(text)
+    expect(fs.existsSync(path.join(world.stateRoot, 'lock'))).toBe(false)
+  })
+
+  it('lists the coverage of every selection in ledger show, and ledger clear removes all of it', () => {
+    const world = buildWorld()
+    const group = runCovering(world, undefined, ['group:solo'])
+    runCovering(world)
+    runCovering(world, undefined, ['projects:beta'])
+
+    const shown = ok(runHelperOp('ledger-show', {}, world.deps))
+    const coverage = shown.coverage as {
+      rules: number
+      namespaces: Array<Json>
+    }
+    expect(coverage.rules).toBe(12)
+    expect(coverage.namespaces).toHaveLength(3)
+    expect(coverage.namespaces[0]).toEqual({ selection: 'all', rules: 4 })
+    const byId = new Map(
+      coverage.namespaces.map((item) => [item.selection, item]),
+    )
+    expect(byId.get(selectionIdOf(group.run))).toEqual({
+      selection: selectionIdOf(group.run),
+      rules: 4,
+      label: 'group:solo',
+    })
+    const picked = coverage.namespaces.find(
+      (item) => item.label === 'projects:beta',
+    )
+    expect(picked).toMatchObject({ rules: 4 })
+
+    ok(runHelperOp('ledger-clear', {}, world.deps))
+    expect(coverageRecords(world)).toEqual([])
+    const again = start(world, ['group:solo'])
+    expect(again.body.sweep).toMatchObject({ covered: 0 })
+    abort(world, again)
   })
 })

@@ -320,6 +320,7 @@
       "files": [
         "skills/ce-connect/SKILL.md",
         "skills/ce-connect/references/candidate-contract.md",
+        "skills/ce-connect/references/fetch-and-import.md",
         "skills/ce-connect/references/headless-and-outcomes.md",
         "skills/ce-connect/scripts/connect.mjs"
       ]
