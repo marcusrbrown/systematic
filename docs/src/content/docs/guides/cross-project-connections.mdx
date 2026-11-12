@@ -185,12 +185,14 @@ A lock held by a process that has died is reclaimed by the next run without any 
 
 A host and version counts as supported only after a deny has been observed on a real host: the researcher is dispatched, it tries shell, write, edit and web fetch, each is refused, and its read succeeds. Definition tests are regression pins and are not counted as proof. The proofs use a scripted model, so they show that the host enforces the limits. They do not show how a live model behaves.
 
-| Host | Version | Status | How the limits are enforced |
-|---|---|---|---|
-| OpenCode v1 | 1.19.5 | Supported | The agent's `permission:` denies `bash`, `edit`, `webfetch`, `websearch` and `task`. A blanket allow in your host config does not lift them. |
-| OpenCode v2 | 2.2.5 | Supported | The same denies, plus Systematic's own tool guard (below). |
-| Pi | 1.5.0 | Supported | The agent's `tools` allowlist (`Read, Grep, Glob`) reaches the delegate session as read, grep and find. |
-| Claude Code | 2.1.319 | Supported | The agent's `tools` allowlist (`Read, Grep, Glob`) is what the host enforces. In a manual run with a live model, the session's tools were exactly those three. The agent also declares `disallowedTools`, but upstream reports say the host does not always enforce that for plugin subagents, so the allowlist is what counts. |
+| Host | Status | How the limits are enforced |
+|---|---|---|
+| OpenCode v1 | Supported | The agent's `permission:` denies `bash`, `edit`, `webfetch`, `websearch` and `task`. A blanket allow in your host config does not lift them. |
+| OpenCode v2 | Supported | The same denies, plus Systematic's own tool guard (below). |
+| Pi | Supported | The agent's `tools` allowlist (`Read, Grep, Glob`) reaches the delegate session as read, grep and find. |
+| Claude Code | Supported | The agent's `tools` allowlist (`Read, Grep, Glob`) is what the host enforces. In a manual run with a live model, the session's tools were exactly those three. The agent also declares `disallowedTools`, but upstream reports say the host does not always enforce that for plugin subagents, so the allowlist is what counts. |
+
+Each row is one exact host version. The versions are listed in `HOST_SUPPORT_TABLE` in `src/lib/connect-config.ts`.
 
 The Claude Code row rests on one manual run, not on a scripted test: one live model, one version. In the run that dispatched the researcher through the `Agent` tool, the subagent reported only those three tools and called none of the others, which is its own report. The host's statement comes from the second run, a session started as the researcher, whose tool list held only Read, Grep and Glob. Read paths are not scoped, and whether a dispatched subagent can reach its parent session's MCP tools was not tested.
 
