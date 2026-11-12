@@ -4,6 +4,22 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.33.0](https://github.com/marcusrbrown/systematic/compare/v3.32.3...v3.33.0) (2026-11-12)
+
+### Features
+
+* run ce:connect over a saved group or picked projects, and import a CI run's candidates ([#1380](https://github.com/marcusrbrown/systematic/issues/1380)) ([492903d](https://github.com/marcusrbrown/systematic/commit/492903db0f3d58054161c713d89dd47bb5ceb22f))
+
+### Documentation
+
+* describe the v2 installer order, the fail-closed tool guard and the host-support table accurately ([#1377](https://github.com/marcusrbrown/systematic/issues/1377)) ([d0fa693](https://github.com/marcusrbrown/systematic/commit/d0fa6930dceb63142334434e21838be3cc4f3b6e))
+
+### Miscellaneous Chores
+
+* **deps:** update dependency @biomejs/biome to v2.6.6 ([#1355](https://github.com/marcusrbrown/systematic/issues/1355)) ([2fcde4c](https://github.com/marcusrbrown/systematic/commit/2fcde4cc43c0e136636b2343546d392c1f401d5f))
+* **deps:** update fro-bot/agent to v0.140.1 ([#1379](https://github.com/marcusrbrown/systematic/issues/1379)) ([581ba2d](https://github.com/marcusrbrown/systematic/commit/581ba2df43fdc66adef60220f843631551626ef7))
+* **dev:** update dependency typebox to v1.4.5 ([#1353](https://github.com/marcusrbrown/systematic/issues/1353)) ([f80b06e](https://github.com/marcusrbrown/systematic/commit/f80b06ef5b413ef6183eaa379fe608099dd234b1))
+
 ## [3.32.3](https://github.com/marcusrbrown/systematic/compare/v3.32.2...v3.32.3) (2026-11-12)
 
 ### Bug Fixes
