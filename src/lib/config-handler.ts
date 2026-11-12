@@ -9,6 +9,7 @@ import {
   type PlannedAgent,
 } from './asset-plan.js'
 import { loadConfigWithSources } from './config.js'
+import { READ_ONLY_AGENT_NAMES } from './opencode-v2-tool-guard.js'
 import { formatSkillCommandName } from './skill-loader.js'
 import { isRecord, type PermissionSetting } from './validation.js'
 
@@ -36,6 +37,32 @@ function isSystematicAgentConfig(agent: AgentConfig | undefined): boolean {
   )
 }
 
+/**
+ * Security-sensitive bundled agents already written about, one notice per agent
+ * per process: the hook runs on every config load, and one warning is enough.
+ */
+const reportedSecuritySensitiveAgents = new Set<string>()
+
+/** The routing another config entry supplied for a security-sensitive agent. */
+interface ForeignRouting {
+  readonly model?: string
+  readonly variant?: string
+}
+
+/**
+ * Routing taken from another entry, by host config object and agent name. The
+ * hook replaces `config.agent` on every run, so after the first run the entry
+ * in place is this hook's own output and no longer shows what the other entry
+ * set. The config object is the one thing that stays the same across reruns.
+ */
+let foreignRoutingByConfig = new WeakMap<object, Map<string, ForeignRouting>>()
+
+/** Clear the once-per-process notice record and captured routing. For tests. */
+export function resetSecuritySensitiveAgentNotices(): void {
+  reportedSecuritySensitiveAgents.clear()
+  foreignRoutingByConfig = new WeakMap()
+}
+
 function isSystematicCommandConfig(
   command: CommandConfig | undefined,
 ): boolean {
@@ -45,10 +72,17 @@ function isSystematicCommandConfig(
   )
 }
 
+/**
+ * Merge emitted entries into the host's. A key the host already has keeps its
+ * entry, unless `shouldDropExisting` says it is prior Systematic output or
+ * `enforceOver` returns a replacement for it. `enforceOver` is for the entries
+ * Systematic must not defer on; it sees the entry in place and the emitted one.
+ */
 function mergeSystematicEntries<T>(
   existing: Record<string, T> | undefined,
   emitted: Record<string, T>,
   shouldDropExisting: (key: string, value: T | undefined) => boolean,
+  enforceOver?: (key: string, present: T, emitted: T) => T,
 ): Record<string, T> {
   const merged: Record<string, T> = { ...(existing ?? {}) }
 
@@ -59,11 +93,84 @@ function mergeSystematicEntries<T>(
   }
 
   for (const [key, value] of Object.entries(emitted)) {
-    if (Object.hasOwn(merged, key)) continue
+    if (Object.hasOwn(merged, key)) {
+      if (enforceOver !== undefined) {
+        merged[key] = enforceOver(key, merged[key] as T, value)
+      }
+      continue
+    }
     merged[key] = value
   }
 
   return merged
+}
+
+/**
+ * Bundled agents whose safety is their own definition: the permission denies,
+ * the tool limits and the prompt. Another entry of the same name must never
+ * replace it. This is the list the v2 tool guard keys on, so the two harnesses
+ * name the same agents.
+ */
+function isSecuritySensitiveAgent(name: string): boolean {
+  return READ_ONLY_AGENT_NAMES.includes(name)
+}
+
+/** The string `model` and `variant` of another entry, nothing else. */
+function readForeignRouting(entry: AgentConfig | undefined): ForeignRouting {
+  if (!isRecord(entry)) return {}
+  const { model, variant } = entry
+  return {
+    ...(typeof model === 'string' ? { model } : {}),
+    ...(typeof variant === 'string' ? { variant } : {}),
+  }
+}
+
+/** One warning per process and agent. It never prints the other entry. */
+function reportForeignDefinition(name: string): void {
+  if (reportedSecuritySensitiveAgents.has(name)) return
+  reportedSecuritySensitiveAgents.add(name)
+  console.warn(
+    `[systematic] agent "${name}" is also defined by another config entry; applied Systematic's read-only definition and kept only that entry's model and variant.`,
+  )
+}
+
+/**
+ * The entry for a security-sensitive agent another config entry also defines.
+ * Systematic's definition wins whole; only `model` and `variant` come from the
+ * other entry, because a model choice cannot widen what the agent may do. The
+ * other entry's `permission` and `tools` are not merged: a merge could only
+ * add to the agent's reach. The other entry's routing wins over a Systematic
+ * overlay's, on the first run and on every rerun.
+ *
+ * An entry carrying the Systematic marker is this hook's own earlier output. It
+ * contributes nothing, so an overlay change or `model: null` applies on a
+ * rerun; routing from a genuinely other entry is reapplied from the copy taken
+ * on first sight. The warning never prints the other entry's contents.
+ */
+function enforceSecuritySensitiveAgent(
+  config: object,
+  name: string,
+  present: AgentConfig | undefined,
+  emitted: AgentConfig,
+): AgentConfig {
+  if (!isSecuritySensitiveAgent(name)) return present ?? emitted
+
+  const captured = foreignRoutingByConfig.get(config) ?? new Map()
+  foreignRoutingByConfig.set(config, captured)
+
+  let foreign: ForeignRouting | undefined
+  if (isSystematicAgentConfig(present)) {
+    foreign = captured.get(name)
+  } else {
+    foreign = readForeignRouting(present)
+    captured.set(name, foreign)
+    reportForeignDefinition(name)
+  }
+
+  const result: AgentConfig = { ...emitted }
+  if (foreign?.model !== undefined) result.model = foreign.model
+  if (foreign?.variant !== undefined) result.variant = foreign.variant
+  return result
 }
 
 /**
@@ -305,7 +412,10 @@ function applyDiscoveredRouting(
  *
  * Bundled content is loaded and then tuned with Systematic agent overlays.
  * Existing native OpenCode agents with the same emitted key are preserved as
- * replacements for bundled agents.
+ * replacements for bundled agents. The exception is a security-sensitive agent
+ * (see {@link isSecuritySensitiveAgent}): its Systematic definition is applied
+ * over any other entry of the same name, keeping only that entry's model and
+ * variant.
  */
 export function createConfigHandler(deps: ConfigHandlerDeps) {
   const { directory, bundledSkillsDir, bundledAgentsDir, bundledCommandsDir } =
@@ -325,8 +435,13 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       loadConfigWithSources(directory)
     const existingAgents = { ...(config.agent ?? {}) }
     const existingCommands = { ...(config.command ?? {}) }
+    // A security-sensitive agent is never a native replacement: its own
+    // definition is applied over any entry of the same name (see below).
     const nativeAgentNames = Object.entries(existingAgents)
-      .filter(([, agent]) => !isSystematicAgentConfig(agent))
+      .filter(
+        ([name, agent]) =>
+          !isSystematicAgentConfig(agent) && !isSecuritySensitiveAgent(name),
+      )
       .map(([name]) => name)
 
     const plan = buildAssetPlan({
@@ -363,7 +478,11 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       existingAgents as Record<string, AgentConfig>,
       bundledAgents,
       (key, agent) =>
-        bundledAgentKeys.has(key) && isSystematicAgentConfig(agent),
+        bundledAgentKeys.has(key) &&
+        isSystematicAgentConfig(agent) &&
+        !isSecuritySensitiveAgent(key),
+      (key, present, emitted) =>
+        enforceSecuritySensitiveAgent(config, key, present, emitted),
     )
 
     // Bundled commands/skills carry the `(Systematic) ` marker and are

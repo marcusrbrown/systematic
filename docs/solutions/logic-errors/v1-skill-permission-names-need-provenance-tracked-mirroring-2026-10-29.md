@@ -45,7 +45,7 @@ Two bugs came from writing rules in one form only:
 
 Three rules.
 
-**1. Cover both names, and mark each generated rule.** `PermissionRuleTriple` carries an optional `fromSkillsList` marker (`src/lib/asset-plan.ts:53`). `addManagedSkillRules` sets it on the list's `* deny` and on each allow (`src/lib/asset-plan.ts:474-482`). `setPermissionRule` replaces the marker along with the rule, so a hand-written rule that overrides a list rule for the same pattern is no longer marked (`src/lib/asset-plan.ts:503-519`). The v1 fold in `foldPermissionRulesToV1Map` mirrors only an allow whose `fromSkillsList` marker survived last-match-wins (`src/lib/config-handler.ts:155-165`):
+**1. Cover both names, and mark each generated rule.** `PermissionRuleTriple` carries an optional `fromSkillsList` marker (`src/lib/asset-plan.ts:53`). `addManagedSkillRules` sets it on the list's `* deny` and on each allow (`src/lib/asset-plan.ts:474-482`). `setPermissionRule` replaces the marker along with the rule, so a hand-written rule that overrides a list rule for the same pattern is no longer marked (`src/lib/asset-plan.ts:503-519`). The v1 fold in `foldPermissionRulesToV1Map` mirrors only an allow whose `fromSkillsList` marker survived last-match-wins (`src/lib/config-handler.ts:262-272`):
 
 ```ts
 if (permission !== 'skill' || setting !== 'allow' || !fromSkillsList) continue
@@ -56,15 +56,15 @@ if (prefixed !== pattern && (explicit ?? 'allow') === 'allow') {
 }
 ```
 
-**2. Generated rules never override user rules.** The fold first collects every unmarked skill rule into `explicitSkillSettings` (`src/lib/config-handler.ts:137-142`). The mirror applies only when the prefixed name has no explicit rule, or its explicit rule is `allow` (`src/lib/config-handler.ts:161-164`). A prefixed deny or ask the user wrote stays. A prefixed allow the user wrote agrees with the mirror, so it is moved after the list's `* deny` and not duplicated. The doc comment on `foldPermissionRulesToV1Map` states the rule (`src/lib/config-handler.ts:124-132`).
+**2. Generated rules never override user rules.** The fold first collects every unmarked skill rule into `explicitSkillSettings` (`src/lib/config-handler.ts:244-249`). The mirror applies only when the prefixed name has no explicit rule, or its explicit rule is `allow` (`src/lib/config-handler.ts:268-271`). A prefixed deny or ask the user wrote stays. A prefixed allow the user wrote agrees with the mirror, so it is moved after the list's `* deny` and not duplicated. The doc comment on `foldPermissionRulesToV1Map` states the rule (`src/lib/config-handler.ts:231-239`).
 
-**3. Bind ownership to the object that was written.** `denyDisabledSkills` adds a bare and a prefixed deny for each disabled skill at the top level of the host config (`src/lib/config-handler.ts:439`, called at `src/lib/config-handler.ts:388`). It records what it added in a `WeakMap` keyed by the config, storing the `permission` map, the `permission.skill` map, and the added patterns (`src/lib/config-handler.ts:406`). On the next run it removes those denies only while both maps are still the same objects (`src/lib/config-handler.ts:446-450`). A rule the user already wrote for the same name is left alone and never recorded.
+**3. Bind ownership to the object that was written.** `denyDisabledSkills` adds a bare and a prefixed deny for each disabled skill at the top level of the host config (`src/lib/config-handler.ts:558`, called at `src/lib/config-handler.ts:507`). It records what it added in a `WeakMap` keyed by the config, storing the `permission` map, the `permission.skill` map, and the added patterns (`src/lib/config-handler.ts:525`). On the next run it removes those denies only while both maps are still the same objects (`src/lib/config-handler.ts:565-569`). A rule the user already wrote for the same name is left alone and never recorded.
 
 Tests in `tests/unit/config-handler.test.ts` pin each rule:
 
-- `tests/unit/config-handler.test.ts:1861`, `tests/unit/config-handler.test.ts:1884`, `tests/unit/config-handler.test.ts:1903`: an explicit prefixed deny survives a bare allow, whether set before or after the list.
-- `tests/unit/config-handler.test.ts:1924`: an explicit prefixed allow is kept and not duplicated.
-- `tests/unit/config-handler.test.ts:1945`: a replaced `permission.skill` map is not touched when a skill is re-enabled.
+- `tests/unit/config-handler.test.ts:1862`, `tests/unit/config-handler.test.ts:1885`, `tests/unit/config-handler.test.ts:1904`: an explicit prefixed deny survives a bare allow, whether set before or after the list.
+- `tests/unit/config-handler.test.ts:1925`: an explicit prefixed allow is kept and not duplicated.
+- `tests/unit/config-handler.test.ts:1946`: a replaced `permission.skill` map is not touched when a skill is re-enabled.
 
 OpenCode v2 uses one name, and its output is unchanged. `skillResource` strips the `systematic:` prefix from skill rules, so both spellings match the same skill (`src/lib/opencode-v2-permissions.ts:41-44`).
 
@@ -83,7 +83,7 @@ These apply to any host that names one resource two ways, not only OpenCode.
 - When two consumers name the same resource differently, generate rules for both names. Keep the two forms in sync by construction, from one source, and not by a second hand-maintained list.
 - Record provenance on each rule, not on each name. A name can have a generated rule and a hand-written rule over time; only the rule that wins has an author.
 - Write down which settings "agree" with a generated rule. Here a prefixed allow agrees and a prefixed deny or ask does not. Without that sentence, "never override the user" gets implemented as "skip anything explicit", which leaves a user's allow in the wrong position.
-- Bind ownership of a mutation to the object you wrote into, not to a key path. A user-owned config can be replaced between runs. Test the replacement path directly, as `tests/unit/config-handler.test.ts:1945` does.
+- Bind ownership of a mutation to the object you wrote into, not to a key path. A user-owned config can be replaced between runs. Test the replacement path directly, as `tests/unit/config-handler.test.ts:1946` does.
 - Probe the host with each name form before trusting the model of how it evaluates.
 
 ## Related Issues
