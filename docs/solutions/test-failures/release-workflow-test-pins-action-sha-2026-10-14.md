@@ -7,10 +7,12 @@ problem_type: test_failure
 component: testing_framework
 symptoms:
   - "Renovate PR #1102 failed the required Test check: publish job > mints the App token from the release secrets expected @bcd2ba49 and received @64ab729a"
+  - "Renovate PR #1359 (OpenCode v2 2.2.5 to 2.2.6) failed the Test check: the ce:connect host-support table test expected opencode-v2 2.2.6 and received 2.2.5"
 root_cause: logic_error
 resolution_type: test_fix
 severity: medium
-tags: [renovate, github-actions, sha-pinning, workflow-tests, test-fix]
+tags: [renovate, github-actions, sha-pinning, workflow-tests, test-fix, regex-manager, host-support-table]
+last_updated: 2026-11-12
 ---
 
 # A workflow test asserted an exact action SHA, so every Renovate bump failed the Test check
@@ -64,7 +66,40 @@ The workflows pin every action to a full commit SHA, and Renovate owns which SHA
 - Workflow tests pin invariants: which action a step uses, step ids, inputs, secret wiring, and that actions are SHA-pinned. They never pin a value a dependency bot rotates.
 - Before adding a per-step assertion, check whether a file-wide test already covers the invariant.
 - Before merging a workflow test, apply a dependency bump to the workflow and re-run it. The test should still pass.
+- Tests check behavior at the current version, never the version itself. A test that compares a restated version with a pin adds a hand step to every bump and proves nothing the real-host jobs do not. When one fails on a Renovate PR, delete it.
+- A value in source that must track a pinned version gets a `// renovate:` annotation and a regex manager whose package name falls in the pin's group, so Renovate moves both together and `postUpgradeTasks` regenerates whatever depends on it.
+
+## The same failure with a version restated in source
+
+`HOST_SUPPORT_TABLE` in `src/lib/connect-config.ts` lists the OpenCode v1, OpenCode v2 and Pi versions the ce:connect researcher was proven on. A unit test required each row to equal the pin in `scripts/opencode-host-pins.json` or `package.json`. Renovate bumped the v2 pin, the Host Contract v2 jobs proved the researcher at the new version in the same PR, and the Test check still failed on that one assertion. Satisfying it by hand meant editing the row, regenerating `skills/ce-connect/scripts/connect.mjs` and recording a new evaluation digest, on every bump.
+
+The fix had two parts:
+
+- Delete the assertion (#1369). Behavior at the new version is what the real-host jobs prove; a test that a restated version equals the pin proves nothing more.
+- Connect the row to the bump (#1371). Each row carries an annotation, and one regex manager in `.github/renovate.json5` reads it, so the row bumps in the same group PR as its pin:
+
+```ts
+  {
+    host: 'opencode-v2',
+    // renovate: datasource=npm depName=@opencode/cli
+    version: '2.2.6',
+```
+
+```json5
+{
+  customType: 'regex',
+  managerFilePatterns: ['/^src/lib/connect-config\\.ts$/'],
+  matchStrings: [
+    '//\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*version:\\s*\'(?<currentValue>\\d+\\.\\d+\\.\\d+)\'',
+  ],
+}
+```
+
+The existing `groupName` rules for `opencode-ai`, `@opencode/**` and `@earendil-works/**` put each row in its pin's PR. `postUpgradeTasks` already runs `bun run postupgrade`, which regenerates every surface, so the helper bundle that embeds the table is rebuilt in the same PR. The next v2 bump changed the row and the bundle with no hand edit. The Claude Code row has no package to track and keeps its manual evidence.
+
+The tests for the wiring run the manager's own regex over the real file (`tests/unit/renovate-workflow.test.ts`). They check that it finds exactly the annotated rows, that each captured version equals its table row, and that each package lands in its pin's group. Neither side is a literal, so a bump never breaks them; removing or misnaming an annotation does.
 
 ## Related Issues
 
 - #1102, #1121
+- #1359, #1369, #1371
