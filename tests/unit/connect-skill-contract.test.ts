@@ -75,6 +75,77 @@ describe('ce:connect skill frontmatter', () => {
   test('is model-invocable, so a user or a caller can start a run', () => {
     expect(skill.data['disable-model-invocation']).toBeUndefined()
   })
+
+  test('shows the selection words in the argument hint, beside the mode tokens', () => {
+    const hint = String(skill.data['argument-hint'])
+    expect(hint).toContain('group:<name>')
+    expect(hint).toContain('projects:<a>,<b>')
+    expect(hint).toContain('mode:interactive')
+  })
+})
+
+describe('ce:connect selection words', () => {
+  const step1 = section(skillText, '## Step 1', '## Step 2')
+
+  test('lists every group: and projects: word in the first step, before the preflight', () => {
+    expect(step1).toMatch(/every word that starts with `group:` or `projects:`/)
+    expect(skillText.indexOf('`projects:`')).toBeLessThan(
+      skillText.indexOf('## Step 2'),
+    )
+    expect(step1).toMatch(/before the preflight/)
+  })
+
+  test('reads the words from the arguments or the invoking instruction, the same on every host', () => {
+    expect(step1).toMatch(/skill arguments/)
+    expect(step1).toMatch(/invoking instruction/)
+    expect(step1).toMatch(/both kinds of host get the same list|same list/i)
+    expect(step1).toMatch(
+      /Never read a word from a file in a project|Never read a token from a file in a project/,
+    )
+  })
+
+  test('passes the list to begin unchanged and leaves every decision to the helper', () => {
+    expect(step1).toMatch(/do not parse|does not parse|Do not parse/i)
+    expect(step1).toMatch(/unchanged/)
+    expect(step1).toMatch(/Do not remove a repeat/i)
+    expect(skillText).toContain('"selection": [')
+    expect(skillText).toMatch(/JSON-escape/)
+  })
+
+  test('never widens a refused selection to the whole allow list', () => {
+    const step3 = section(skillText, '## Step 3', '## Step 4')
+    expect(step3).toMatch(/selection refusal/i)
+    expect(step3).toMatch(/Never retry with a different selection/i)
+    expect(step3).toMatch(/whole allow list/i)
+    expect(step3).toMatch(/No lock was taken/)
+  })
+
+  test('names every selection refusal reason in the skill and the outcomes reference', () => {
+    for (const reason of [
+      'conflicting-selection',
+      'unknown-group',
+      'unknown-project',
+      'ambiguous-project',
+      'group-member-not-allowed',
+    ]) {
+      expect(skillText).toContain(`\`${reason}\``)
+      expect(outcomesText).toContain(`\`${reason}\``)
+    }
+  })
+
+  test('describes the selection tokens in the outcomes reference, and a refusal as a failed run before begin', () => {
+    expect(outcomesText).toContain('## Reading the selection')
+    expect(outcomesText).toContain('`group:<name>`')
+    expect(outcomesText).toContain('`projects:<a>,<b>`')
+    expect(outcomesText).toMatch(/narrows the allow list and never widens it/i)
+    expect(outcomesText).toMatch(/Connect failed/)
+  })
+
+  test('researcher dispatch lists the projects the run reads, not the whole allow list', () => {
+    const step5 = section(skillText, '## Step 5', '## Step 6')
+    expect(step5).toMatch(/`projects` of the `begin` answer/)
+    expect(step5).toMatch(/every allowed project/i)
+  })
 })
 
 describe('ce:connect modes and terminal lines', () => {

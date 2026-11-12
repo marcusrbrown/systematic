@@ -13,6 +13,7 @@ import { CONNECT_BOUNDS } from '../../src/lib/connect-evidence.js'
 import {
   CANDIDATE_LIMITS,
   formatProvenanceCitation,
+  projectKey,
   projectName,
   ruleIdFor,
 } from '../../src/lib/connect-helper-core.js'
@@ -34,8 +35,13 @@ function realTemp(prefix: string): string {
   return fs.realpathSync(makeDir(prefix))
 }
 
-function createProject(files: Record<string, string>): string {
-  const work = realTemp('connect-ops-project-')
+/** A repository with the given files; `name` fixes the directory's basename. */
+function createProject(files: Record<string, string>, name?: string): string {
+  const work =
+    name === undefined
+      ? realTemp('connect-ops-project-')
+      : path.join(realTemp('connect-ops-named-'), name)
+  fs.mkdirSync(work, { recursive: true })
   git(work, ['init', '-q', '-b', 'main'])
   git(work, ['config', 'gc.auto', '0'])
   git(work, ['config', 'maintenance.auto', 'false'])
@@ -113,6 +119,8 @@ const SUPPORTED: HostSupportRow = {
 interface World {
   readonly source: string
   readonly target: string
+  /** Projects beyond the source and the target, in creation order. */
+  readonly extras: readonly string[]
   readonly home: string
   readonly stateRoot: string
   deps: HelperDeps
@@ -123,9 +131,38 @@ interface World {
 }
 
 interface WorldOptions {
-  readonly allow?: (source: string, target: string) => string[]
+  readonly allow?: (
+    source: string,
+    target: string,
+    extras: readonly string[],
+  ) => string[]
+  readonly groups?: (
+    source: string,
+    target: string,
+    extras: readonly string[],
+  ) => Record<string, string[]>
+  /** How many projects to create beyond the source and the target. */
+  readonly extraProjects?: number
   readonly deps?: Partial<HelperDeps>
   readonly targetFiles?: Record<string, string>
+}
+
+function extraLearning(index: number): string {
+  return [
+    '---',
+    `title: Extra learning ${index}`,
+    `applies_when: Extra project ${index} keeps a note`,
+    '---',
+    '',
+    '## Guidance',
+    '',
+    `Keep note ${index} short.`,
+    '',
+    '## Prevention',
+    '',
+    `Review note ${index} often.`,
+    '',
+  ].join('\n')
 }
 
 function buildWorld(options: WorldOptions = {}): World {
@@ -138,18 +175,32 @@ function buildWorld(options: WorldOptions = {}): World {
     'src/lock.ts': LOCK_SOURCE,
     ...options.targetFiles,
   })
+  const extras = Array.from({ length: options.extraProjects ?? 0 }, (_, i) =>
+    createProject({ 'docs/solutions/extra.md': extraLearning(i) }),
+  )
   const home = realTemp('connect-ops-home-')
   const userConfigDir = path.join(home, '.config', 'opencode')
   fs.mkdirSync(userConfigDir, { recursive: true })
-  const allow = options.allow?.(source, target) ?? [source, target]
+  const allow = options.allow?.(source, target, extras) ?? [
+    source,
+    target,
+    ...extras,
+  ]
+  const groups = options.groups?.(source, target, extras)
   fs.writeFileSync(
     path.join(userConfigDir, 'systematic.json'),
-    JSON.stringify({ connect: { allow_projects: allow } }),
+    JSON.stringify({
+      connect: {
+        allow_projects: allow,
+        ...(groups === undefined ? {} : { groups }),
+      },
+    }),
   )
   const stateHome = path.join(realTemp('connect-ops-state-'), 'xdg')
   return {
     source,
     target,
+    extras,
     home,
     stateRoot: path.join(stateHome, 'systematic', 'connect'),
     deps: {
@@ -768,6 +819,310 @@ describe('begin', () => {
 })
 
 // ── validate and publish ───────────────────────────────────────────────────
+
+describe('begin with a selection', () => {
+  type Words = string[]
+
+  function noState(world: World): void {
+    expect(fs.existsSync(world.stateRoot)).toBe(false)
+  }
+
+  function pairWorld(options: WorldOptions = {}): World {
+    return buildWorld({
+      extraProjects: 1,
+      groups: (source, target) => ({ pair: [source, target], solo: [source] }),
+      ...options,
+    })
+  }
+
+  function rootsOf(body: Json): string[] {
+    return (body.projects as Array<Json>).map((p) => p.root as string).sort()
+  }
+
+  describe('a group', () => {
+    it('reads exactly the five members of a group, and names the group and its id', () => {
+      const world = buildWorld({
+        extraProjects: 5,
+        groups: (source, target, extras) => ({
+          'harness-tools': [
+            source,
+            target,
+            extras[0] ?? '',
+            extras[1] ?? '',
+            extras[2] ?? '',
+          ],
+        }),
+      })
+      const run = start(world, { selection: ['group:harness-tools'] })
+      const members = [
+        world.source,
+        world.target,
+        ...world.extras.slice(0, 3),
+      ].sort()
+      expect(rootsOf(run.body)).toEqual(members)
+      expect(run.body.ruleCount).toBe(5)
+      expect(run.body.selection).toEqual({
+        kind: 'group',
+        name: 'harness-tools',
+        id: expect.stringMatching(/^[0-9a-f]{16}$/),
+      })
+    })
+
+    it('names the group and the id in the digest and the run record, and the run is complete', () => {
+      const world = pairWorld()
+      const { run, published } = fullRun(world, [], {
+        begin: { selection: ['group:pair'] },
+      })
+      const selection = run.body.selection as Json
+      expect(published.outcome).toBe('complete')
+      expect(readDigest(published)).toContain(
+        `Selection: group \`pair\` (id ${String(selection.id)})`,
+      )
+      const record = readRunRecord(published)
+      expect(record.selection).toEqual(selection)
+      expect(
+        (record.projects as Array<Json>).map((p) => p.root as string).sort(),
+      ).toEqual([world.source, world.target].sort())
+      expect(readDigest(published)).not.toContain(world.extras[0] ?? 'unset')
+    })
+
+    it('reads a group word that repeats identically as that group', () => {
+      const world = pairWorld()
+      const once = start(world, { selection: ['group:pair'] })
+      publish(world, once, { abort: true })
+      const twice = start(world, { selection: ['group:pair', 'group:pair'] })
+      expect(twice.body.selection).toEqual(once.body.selection)
+      expect(rootsOf(twice.body)).toEqual(rootsOf(once.body))
+    })
+
+    it('counts two members that resolve to one main root once', () => {
+      const world = buildWorld({
+        groups: (source) => ({ dup: [source, `${source}/.`] }),
+      })
+      const run = start(world, { selection: ['group:dup'] })
+      expect(rootsOf(run.body)).toEqual([world.source])
+    })
+
+    it('leaves a stale allow-list entry the group does not name alone, so the run stays complete', () => {
+      const world = buildWorld({
+        allow: (source, target) => [source, target, '/nonexistent/gone'],
+        groups: (source, target) => ({ pair: [source, target] }),
+      })
+      const { run, published } = fullRun(world, [], {
+        begin: { selection: ['group:pair'] },
+      })
+      expect(run.body.unmatched).toEqual([])
+      expect(run.body.degradeReasons).toEqual([])
+      expect(published.outcome).toBe('complete')
+    })
+  })
+
+  describe('picks', () => {
+    it('reads the projects named by directory name, and names them in the digest and run record', () => {
+      const world = pairWorld()
+      const picks = [projectName(world.source), projectName(world.target)]
+      const { run, published } = fullRun(world, [], {
+        begin: { selection: [`projects:${picks.join(',')}`] },
+      })
+      expect(rootsOf(run.body)).toEqual([world.source, world.target].sort())
+      const selection = run.body.selection as Json
+      expect(selection.kind).toBe('projects')
+      expect([...(selection.picks as string[])].sort()).toEqual(
+        [...picks].sort(),
+      )
+      expect(readDigest(published)).toContain(
+        `Selection: projects ${(selection.picks as string[]).map((p) => `\`${p}\``).join(', ')}`,
+      )
+      expect(readRunRecord(published).selection).toEqual(selection)
+    })
+
+    it('reads a project named by its 12-hex key', () => {
+      const world = pairWorld()
+      const extra = world.extras[0] ?? ''
+      const run = start(world, {
+        selection: [`projects:${projectKey(extra)}`],
+      })
+      expect(rootsOf(run.body)).toEqual([extra])
+    })
+
+    it('reads a 12-hex entry that is no key as a name', () => {
+      const hex = createProject(
+        { 'docs/solutions/hex.md': extraLearning(7) },
+        'abcdef012345',
+      )
+      const world = buildWorld({
+        allow: (source, target) => [source, target, hex],
+      })
+      const run = start(world, { selection: ['projects:abcdef012345'] })
+      expect(rootsOf(run.body)).toEqual([hex])
+    })
+
+    it('gives a group and a pick of the same projects one selection id', () => {
+      const world = pairWorld()
+      const byGroup = start(world, { selection: ['group:pair'] })
+      publish(world, byGroup, { abort: true })
+      const byPicks = start(world, {
+        selection: [
+          `projects:${projectName(world.source)},${projectName(world.target)}`,
+        ],
+      })
+      expect((byPicks.body.selection as Json).id).toBe(
+        (byGroup.body.selection as Json).id,
+      )
+    })
+  })
+
+  describe('no selection', () => {
+    it('reads the whole allow list and names no group', () => {
+      const world = pairWorld()
+      const { run, published } = fullRun(world, [])
+      expect(run.body.selection).toEqual({ kind: 'all' })
+      expect(rootsOf(run.body)).toEqual(
+        [world.source, world.target, ...world.extras].sort(),
+      )
+      expect(readRunRecord(published).selection).toEqual({ kind: 'all' })
+      const digest = readDigest(published)
+      expect(digest).toContain('Selection: all allowed projects')
+      expect(digest).not.toContain('group')
+    })
+
+    it('reads an empty selection list as no selection', () => {
+      const world = pairWorld()
+      const run = start(world, { selection: [] })
+      expect(run.body.selection).toEqual({ kind: 'all' })
+      expect(run.body.projects as unknown[]).toHaveLength(3)
+    })
+  })
+
+  describe('refusals', () => {
+    function refused(world: World, words: Words, over: Json = {}): Json {
+      return failed(begin(world, { selection: words, ...over }))
+    }
+
+    it('stops before begin for a group member that is not on the allow list, names it, and takes no lock', () => {
+      for (const modeName of ['headless', 'interactive']) {
+        const world = buildWorld({
+          extraProjects: 1,
+          allow: (source, target) => [source, target],
+          groups: (source, _target, extras) => ({
+            bad: [source, extras[0] ?? ''],
+          }),
+        })
+        const body = refused(world, ['group:bad'], { mode: modeName })
+        expect(body.outcome).toBe('failed')
+        expect(body.reason).toBe('group-member-not-allowed')
+        expect(body.group).toBe('bad')
+        expect(body.member).toBe(world.extras[0])
+        expect(body.memberReason).toBeUndefined()
+        noState(world)
+      }
+    })
+
+    it('says why a group member did not resolve', () => {
+      const world = buildWorld({
+        groups: (source) => ({ gone: [source, '/nonexistent/member'] }),
+      })
+      const body = refused(world, ['group:gone'])
+      expect(body.reason).toBe('group-member-not-allowed')
+      expect(body.member).toBe('/nonexistent/member')
+      expect(body.memberReason).toBe('stale')
+      noState(world)
+    })
+
+    const CONFLICTS: Array<[string, Words]> = [
+      ['a group word with a projects word', ['group:pair', 'projects:alpha']],
+      ['two different group words', ['group:pair', 'group:solo']],
+      ['two different projects words', ['projects:a', 'projects:b']],
+    ]
+    for (const [title, words] of CONFLICTS) {
+      it(`stops for ${title}, in both modes, with no lock`, () => {
+        for (const modeName of ['headless', 'interactive']) {
+          const world = pairWorld()
+          const body = refused(world, words, { mode: modeName })
+          expect(body.outcome).toBe('failed')
+          expect(body.reason).toBe('conflicting-selection')
+          expect(typeof body.detail).toBe('string')
+          noState(world)
+        }
+      })
+    }
+
+    it('stops for a group that is not defined, whatever Object.prototype holds', () => {
+      for (const name of ['nope', 'constructor', '__proto__', 'toString']) {
+        const world = pairWorld()
+        const body = refused(world, [`group:${name}`])
+        expect(body.reason).toBe('unknown-group')
+        expect(body.group).toBe(name)
+        noState(world)
+      }
+    })
+
+    it('stops for a project that matches no name and no key', () => {
+      const world = pairWorld()
+      const body = refused(world, ['projects:nowhere'])
+      expect(body.reason).toBe('unknown-project')
+      expect(body.project).toBe('nowhere')
+      noState(world)
+    })
+
+    it('stops for a name two allowed projects share, listing both keys', () => {
+      const one = createProject(
+        { 'docs/solutions/a.md': extraLearning(1) },
+        'shared',
+      )
+      const two = createProject(
+        { 'docs/solutions/b.md': extraLearning(2) },
+        'shared',
+      )
+      const world = buildWorld({
+        allow: (source, target) => [source, target, one, two],
+      })
+      const body = refused(world, ['projects:shared'])
+      expect(body.reason).toBe('ambiguous-project')
+      expect(body.project).toBe('shared')
+      expect(body.keys).toEqual([projectKey(one), projectKey(two)])
+      noState(world)
+      const byKey = start(world, { selection: [`projects:${projectKey(two)}`] })
+      expect(rootsOf(byKey.body)).toEqual([two])
+    })
+
+    const MALFORMED: Array<[string, unknown]> = [
+      ['an empty group value', ['group:']],
+      ['an empty projects value', ['projects:']],
+      ['an empty entry between commas', ['projects:a,,b']],
+      ['a word that is neither kind', ['mode:headless']],
+      ['a value over the length cap', [`group:${'x'.repeat(2043)}`]],
+      ['more than 32 words', Array.from({ length: 33 }, () => 'group:pair')],
+      ['a selection that is not a list', 'group:pair'],
+      ['a word that is not text', ['group:pair', 3]],
+    ]
+    for (const [title, selection] of MALFORMED) {
+      it(`rejects ${title} as an invalid request with no lock`, () => {
+        const world = pairWorld()
+        const body = failed(begin(world, { selection }))
+        expect(body.reason).toBe('invalid-request')
+        noState(world)
+      })
+    }
+
+    it('refuses a bad selection before it asks consent on an unverified host', () => {
+      const world = pairWorld({ deps: { hostTable: [] } })
+      const body = refused(world, ['group:nope'], { mode: 'interactive' })
+      expect(body.reason).toBe('unknown-group')
+      expect(body.outcome).toBe('failed')
+      noState(world)
+    })
+
+    it('leaves the state of an earlier run untouched', () => {
+      const world = pairWorld()
+      fullRun(world, [], { begin: { selection: ['group:pair'] } })
+      const before = snapshotTree(world.stateRoot)
+      refused(world, ['group:nope'])
+      refused(world, ['group:pair', 'group:solo'])
+      expect(snapshotTree(world.stateRoot)).toEqual(before)
+    })
+  })
+})
 
 describe('validate and publish', () => {
   it('publishes a contradiction with both sources, fingerprints and excerpts', () => {

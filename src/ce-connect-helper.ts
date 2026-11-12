@@ -9,6 +9,7 @@ import {
   HOST_SUPPORT_TABLE,
   type HostSupportRow,
   loadConnectAllowList,
+  resolveAllowEntry,
   resolveAllowList,
 } from './lib/connect-config.js'
 import {
@@ -51,8 +52,11 @@ import {
   removeWorkDir,
   renderDigest,
   renderSummary,
+  resolveSelection,
   resolveStateRoot,
   ruleIdFor,
+  type Selection,
+  type SelectionProject,
   type StaleCitation,
   type Standing,
   type SweepProgress,
@@ -287,6 +291,8 @@ interface Environment {
   readonly stateRoot: string
   readonly allowedRoots: readonly string[]
   readonly resolved: ReturnType<typeof resolveAllowList>
+  /** The merged `connect.groups` of the user config. */
+  readonly groups: Readonly<Record<string, readonly string[]>>
   readonly warnings: readonly string[]
   readonly configUnreadable: boolean
 }
@@ -304,6 +310,7 @@ function describeEnvironment(deps: HelperDeps): Environment {
     stateRoot: resolveStateRoot(deps.env ?? process.env, homeDir),
     allowedRoots: resolved.resolved.map((item) => item.mainRoot),
     resolved,
+    groups: load.groups,
     warnings: load.warnings,
     configUnreadable: load.unreadable,
   }
@@ -487,6 +494,8 @@ interface Snapshot {
     /** The key of the rule's project. */
     project?: string
   }>
+  /** What the run was narrowed to. */
+  readonly selection?: Selection
   /** What the run could not see in full, so its coverage is not pruned there. */
   readonly coverageScope?: CoverageScope
   /** What the run was offered, and where the sweep stood when it began. */
@@ -600,11 +609,26 @@ interface BeginRequest {
   readonly version: string | undefined
   readonly mode: 'interactive' | 'headless'
   readonly consent: boolean
+  /** The `group:` and `projects:` words the skill collected, unparsed. */
+  readonly selection: readonly string[]
+}
+
+function parseSelectionWords(value: unknown): readonly string[] | undefined {
+  if (value === undefined) return []
+  if (!Array.isArray(value)) return undefined
+  const words: string[] = []
+  for (const word of value as unknown[]) {
+    if (typeof word !== 'string') return undefined
+    words.push(word)
+  }
+  return words
 }
 
 function parseBeginRequest(request: unknown): BeginRequest | undefined {
   if (!isRecord(request)) return undefined
   const { host, version, mode, consent } = request
+  const selection = parseSelectionWords(request.selection)
+  if (selection === undefined) return undefined
   if (typeof host !== 'string' || host === '' || host.length > MAX_TEXT) {
     return undefined
   }
@@ -616,7 +640,7 @@ function parseBeginRequest(request: unknown): BeginRequest | undefined {
   }
   if (mode !== 'interactive' && mode !== 'headless') return undefined
   if (consent !== undefined && typeof consent !== 'boolean') return undefined
-  return { host, version, mode, consent: consent === true }
+  return { host, version, mode, consent: consent === true, selection }
 }
 
 const CORPUS_PREFIXES = ['docs/solutions/', 'docs/plans/', 'docs/brainstorms/']
@@ -934,9 +958,10 @@ interface Scans {
   readonly coverageScope: CoverageScope
 }
 
-/** Scan every matched project. One that cannot be read degrades the run. */
+/** Scan every selected project. One that cannot be read degrades the run. */
 function scanAll(
   environment: Environment,
+  projects: readonly SelectionProject[],
   deps: HelperDeps,
   limits: ConnectBounds,
   unmatched: ReadonlyArray<{ entry: string; reason: string }>,
@@ -950,7 +975,7 @@ function scanAll(
   }
   const scans: ScannedProject[] = []
   let allRead = unmatched.length === 0 && !environment.configUnreadable
-  for (const item of environment.resolved.resolved) {
+  for (const item of projects) {
     const scanned = scanProject(item.entry, item.mainRoot, deps, limits)
     if ('failed' in scanned) {
       allRead = false
@@ -976,6 +1001,10 @@ interface RunSetup {
   readonly parsed: BeginRequest
   readonly verdict: ReturnType<typeof checkHostSupport>
   readonly environment: Environment
+  readonly selection: Selection
+  /** The projects the run reads: the selection, or the whole resolved allow list. */
+  readonly projects: readonly SelectionProject[]
+  /** Allow-list entries that matched no project. Empty for a run with a selection. */
   readonly unmatched: ReadonlyArray<{ entry: string; reason: string }>
   readonly root: string
   readonly now: () => number
@@ -1024,6 +1053,7 @@ function beginResponse(
     ...(setup.reclaimed === undefined ? {} : { reclaimed: setup.reclaimed }),
     host: snapshot.host,
     mode: setup.parsed.mode,
+    selection: setup.selection,
     projects: scans.map((scan) => ({
       root: scan.digest.root,
       name: scan.digest.name,
@@ -1064,6 +1094,7 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
   const limits = bounds(deps)
   const { scans, degradeReasons, unread, coverageScope } = scanAll(
     setup.environment,
+    setup.projects,
     deps,
     limits,
     setup.unmatched,
@@ -1105,6 +1136,7 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
       unmatched: setup.unmatched,
       degradeReasons,
       unread,
+      selection: setup.selection,
       ruleIds: rules.map((rule) => rule.id),
       ruleVersions: rules.map((rule) => ({
         id: rule.id,
@@ -1137,18 +1169,64 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
   }
 }
 
+/**
+ * Narrow the allow list to what the request selected, or refuse. A refusal
+ * names its reason and what it concerns. Nothing is locked or written yet.
+ */
+function selectProjects(
+  words: readonly string[],
+  environment: Environment,
+):
+  | {
+      readonly ok: true
+      readonly selection: Selection
+      readonly projects: readonly SelectionProject[]
+    }
+  | { readonly ok: false; readonly result: HelperResult } {
+  const resolution = resolveSelection({
+    words,
+    groups: environment.groups,
+    allowed: environment.resolved.resolved,
+    resolveMember: (entry) =>
+      resolveAllowEntry(entry, { homeDir: environment.homeDir }),
+  })
+  if (resolution.status === 'invalid') {
+    return { ok: false, result: failure('begin', 'invalid-request') }
+  }
+  if (resolution.status === 'refused') {
+    const { reason, ...detail } = resolution.refusal
+    return { ok: false, result: failure('begin', reason, detail) }
+  }
+  return {
+    ok: true,
+    selection: resolution.selection,
+    projects: resolution.projects,
+  }
+}
+
 function begin(request: unknown, deps: HelperDeps): HelperResult {
   const parsed = parseBeginRequest(request)
   if (parsed === undefined) return failure('begin', 'invalid-request')
+
+  const environment = describeEnvironment(deps)
+  // A bad selection is refused before the host gate, so a user is never asked
+  // for consent to a run that cannot start.
+  const chosen = selectProjects(parsed.selection, environment)
+  if (!chosen.ok) return chosen.result
   const verdict = gateHost(parsed, deps)
   if (isResult(verdict)) return verdict
 
-  const environment = describeEnvironment(deps)
-  const unmatched = environment.resolved.unmatched.map((item) => ({
-    entry: item.entry,
-    reason: item.reason as AllowEntryMissReason,
-  }))
-  if (environment.resolved.resolved.length === 0) {
+  const { selection, projects } = chosen
+  // An allow-list entry the selection does not name is not touched, so one
+  // that matches nothing does not degrade a narrowed run.
+  const unmatched =
+    selection.kind === 'all'
+      ? environment.resolved.unmatched.map((item) => ({
+          entry: item.entry,
+          reason: item.reason as AllowEntryMissReason,
+        }))
+      : []
+  if (projects.length === 0) {
     return failure('begin', 'no-allowed-projects', {
       unmatched,
       configWarnings: environment.warnings,
@@ -1186,6 +1264,8 @@ function begin(request: unknown, deps: HelperDeps): HelperResult {
     parsed,
     verdict,
     environment,
+    selection,
+    projects,
     unmatched,
     root: state.root,
     now,
@@ -1807,6 +1887,9 @@ function digestModel(
     mode: snapshot.mode,
     hostSupport: snapshot.host,
     degradeReasons,
+    ...(snapshot.selection === undefined
+      ? {}
+      : { selection: snapshot.selection }),
     sweep: state.sweep,
     projects,
     unmatched: snapshot.unmatched,
@@ -1841,6 +1924,7 @@ function runRecord(
       ? {}
       : { lockReclaim: snapshot.reclaimed }),
     pruned: snapshot.pruned,
+    selection: snapshot.selection ?? { kind: 'all' },
     projects: snapshot.projects.map((project) => ({
       name: project.name,
       root: project.root,

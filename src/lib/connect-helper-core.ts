@@ -1368,6 +1368,8 @@ export interface DigestModel {
     readonly consented?: boolean
   }
   readonly degradeReasons: readonly string[]
+  /** What the run was narrowed to. */
+  readonly selection?: Selection
   /** Where the sweep over the rule index stands after this run. */
   readonly sweep?: SweepProgress
   readonly projects: readonly DigestProject[]
@@ -1596,6 +1598,7 @@ function renderHeader(model: DigestModel): string[] {
     `Mode: ${model.mode}`,
     `Generated: ${model.generatedAt}`,
     hostLine(model),
+    ...(model.selection === undefined ? [] : [selectionLine(model.selection)]),
   ]
   const sweep = model.sweep === undefined ? '' : renderSweepLine(model.sweep)
   if (sweep !== '') out.push(sweep)
@@ -1940,3 +1943,272 @@ export const BATCH_BOUNDS = Object.freeze({
   maxRulesPerFamily: CONNECT_BOUNDS.maxRulesPerFamily,
   maxFamiliesPerRun: CONNECT_BOUNDS.maxFamiliesPerRun,
 })
+
+// ── Selection ───────────────────────────────────────────────────────────────
+
+/** The most words one request may carry. */
+export const MAX_SELECTION_WORDS = 32
+/** The most characters in one word. */
+export const MAX_SELECTION_WORD_LENGTH = 2048
+
+const GROUP_PREFIX = 'group:'
+const PROJECTS_PREFIX = 'projects:'
+const PROJECT_KEY = /^[0-9a-f]{12}$/
+const WORD_FORBIDDEN = /[\s\p{Cc}\p{Cf}]/u
+const MAX_SHOWN_SELECTION_TEXT = 100
+
+/** What a run reads: the whole allow list, a named group, or picked projects. */
+export type Selection =
+  | { readonly kind: 'all' }
+  | { readonly kind: 'group'; readonly name: string; readonly id: string }
+  | {
+      readonly kind: 'projects'
+      readonly picks: readonly string[]
+      readonly id: string
+    }
+
+/** An allow-list entry that resolved to a project. */
+export interface SelectionProject {
+  readonly entry: string
+  readonly mainRoot: string
+}
+
+export type MemberResolution =
+  | { readonly status: 'resolved'; readonly mainRoot: string }
+  | { readonly status: 'unmatched'; readonly reason: string }
+
+export interface SelectionRequest {
+  /** The `group:` and `projects:` words, as the skill collected them. */
+  readonly words: readonly string[]
+  /** The merged `connect.groups` of the user config, by name. */
+  readonly groups: Readonly<Record<string, readonly string[]>>
+  /** The resolved allow list, in its own order. */
+  readonly allowed: readonly SelectionProject[]
+  /** Resolve one group member the way an allow-list entry resolves. */
+  readonly resolveMember: (entry: string) => MemberResolution
+}
+
+export type SelectionRefusal =
+  | { readonly reason: 'conflicting-selection'; readonly detail: string }
+  | { readonly reason: 'unknown-group'; readonly group: string }
+  | { readonly reason: 'unknown-project'; readonly project: string }
+  | {
+      readonly reason: 'ambiguous-project'
+      readonly project: string
+      readonly keys: readonly string[]
+    }
+  | {
+      readonly reason: 'group-member-not-allowed'
+      readonly group: string
+      readonly member: string
+      readonly memberReason?: string
+    }
+
+export type SelectionResult =
+  | {
+      readonly status: 'ok'
+      readonly selection: Selection
+      /** The selected projects, in allow-list order. */
+      readonly projects: readonly SelectionProject[]
+    }
+  /** The words are not a well-formed request. */
+  | { readonly status: 'invalid' }
+  | { readonly status: 'refused'; readonly refusal: SelectionRefusal }
+
+/** The id of a selection: a hash of the sorted project keys, so only membership counts. */
+export function selectionIdFor(keys: readonly string[]): string {
+  return createHash('sha256')
+    .update(`connect-selection-v1\0${[...keys].sort().join(',')}`)
+    .digest('hex')
+    .slice(0, 16)
+}
+
+/** Text from a request, made safe to show on one line. */
+function shownSelectionText(text: string): string {
+  const flat = text.replace(/[\p{Cc}\p{Cf}]+/gu, ' ').trim()
+  return flat.length > MAX_SHOWN_SELECTION_TEXT
+    ? flat.slice(0, MAX_SHOWN_SELECTION_TEXT)
+    : flat
+}
+
+function isWellFormedWord(word: string): boolean {
+  if (word.length > MAX_SELECTION_WORD_LENGTH) return false
+  if (WORD_FORBIDDEN.test(word)) return false
+  const value = word.startsWith(GROUP_PREFIX)
+    ? word.slice(GROUP_PREFIX.length)
+    : word.startsWith(PROJECTS_PREFIX)
+      ? word.slice(PROJECTS_PREFIX.length)
+      : undefined
+  if (value === undefined || value === '') return false
+  return word.startsWith(GROUP_PREFIX) || !value.split(',').includes('')
+}
+
+function conflict(detail: string): SelectionResult {
+  return {
+    status: 'refused',
+    refusal: { reason: 'conflicting-selection', detail },
+  }
+}
+
+function selectAllowed(
+  allowed: readonly SelectionProject[],
+  roots: ReadonlySet<string>,
+): SelectionProject[] {
+  return allowed.filter((item) => roots.has(item.mainRoot))
+}
+
+function resolveGroup(
+  name: string,
+  request: SelectionRequest,
+): SelectionResult {
+  if (!Object.hasOwn(request.groups, name)) {
+    return {
+      status: 'refused',
+      refusal: { reason: 'unknown-group', group: shownSelectionText(name) },
+    }
+  }
+  const members = request.groups[name] ?? []
+  const allowedRoots = new Set(request.allowed.map((item) => item.mainRoot))
+  const roots = new Set<string>()
+  for (const member of members) {
+    const resolution = request.resolveMember(member)
+    if (resolution.status === 'unmatched') {
+      return {
+        status: 'refused',
+        refusal: {
+          reason: 'group-member-not-allowed',
+          group: shownSelectionText(name),
+          member: shownSelectionText(member),
+          memberReason: resolution.reason,
+        },
+      }
+    }
+    if (!allowedRoots.has(resolution.mainRoot)) {
+      return {
+        status: 'refused',
+        refusal: {
+          reason: 'group-member-not-allowed',
+          group: shownSelectionText(name),
+          member: shownSelectionText(member),
+        },
+      }
+    }
+    roots.add(resolution.mainRoot)
+  }
+  const projects = selectAllowed(request.allowed, roots)
+  return {
+    status: 'ok',
+    projects,
+    selection: {
+      kind: 'group',
+      name,
+      id: selectionIdFor(projects.map((item) => projectKey(item.mainRoot))),
+    },
+  }
+}
+
+/** The allowed projects a pick names: by key when it looks like one, else by name. */
+function matchPick(
+  pick: string,
+  allowed: readonly SelectionProject[],
+): SelectionProject[] {
+  if (PROJECT_KEY.test(pick)) {
+    const byKey = allowed.filter((item) => projectKey(item.mainRoot) === pick)
+    if (byKey.length > 0) return byKey
+  }
+  return allowed.filter((item) => projectName(item.mainRoot) === pick)
+}
+
+function resolvePicks(
+  picks: readonly string[],
+  request: SelectionRequest,
+): SelectionResult {
+  const roots = new Set<string>()
+  for (const pick of picks) {
+    const matches = matchPick(pick, request.allowed)
+    const [only, ...rest] = matches
+    if (only === undefined) {
+      return {
+        status: 'refused',
+        refusal: {
+          reason: 'unknown-project',
+          project: shownSelectionText(pick),
+        },
+      }
+    }
+    if (rest.length > 0) {
+      return {
+        status: 'refused',
+        refusal: {
+          reason: 'ambiguous-project',
+          project: shownSelectionText(pick),
+          keys: matches.map((item) => projectKey(item.mainRoot)),
+        },
+      }
+    }
+    roots.add(only.mainRoot)
+  }
+  const projects = selectAllowed(request.allowed, roots)
+  return {
+    status: 'ok',
+    projects,
+    selection: {
+      kind: 'projects',
+      picks: projects.map((item) => projectName(item.mainRoot)),
+      id: selectionIdFor(projects.map((item) => projectKey(item.mainRoot))),
+    },
+  }
+}
+
+/**
+ * Turn the selection words of a request into the projects a run reads. Pure:
+ * the caller supplies the groups, the resolved allow list and the member
+ * resolver. A selection only narrows the allow list; a project that is not on
+ * it is refused, never added.
+ *
+ * Order of checks: a malformed word, then a conflict, then the lookups. Words
+ * that repeat identically count once; `projects:a,b` and `projects:b,a` are
+ * different words and conflict.
+ */
+export function resolveSelection(request: SelectionRequest): SelectionResult {
+  const { words } = request
+  if (words.length > MAX_SELECTION_WORDS) return { status: 'invalid' }
+  if (!words.every(isWellFormedWord)) return { status: 'invalid' }
+
+  const distinct = [...new Set(words)]
+  const groupWords = distinct.filter((word) => word.startsWith(GROUP_PREFIX))
+  const pickWords = distinct.filter((word) => word.startsWith(PROJECTS_PREFIX))
+  if (groupWords.length > 0 && pickWords.length > 0) {
+    return conflict('group: and projects: words together')
+  }
+  if (groupWords.length > 1) return conflict('two different group: words')
+  if (pickWords.length > 1) return conflict('two different projects: words')
+
+  const [groupWord] = groupWords
+  if (groupWord !== undefined) {
+    return resolveGroup(groupWord.slice(GROUP_PREFIX.length), request)
+  }
+  const [pickWord] = pickWords
+  if (pickWord !== undefined) {
+    return resolvePicks(
+      pickWord.slice(PROJECTS_PREFIX.length).split(','),
+      request,
+    )
+  }
+  return {
+    status: 'ok',
+    selection: { kind: 'all' },
+    projects: request.allowed,
+  }
+}
+
+function selectionLine(selection: Selection): string {
+  switch (selection.kind) {
+    case 'all':
+      return 'Selection: all allowed projects'
+    case 'group':
+      return `Selection: group ${inline(selection.name)} (id ${selection.id})`
+    case 'projects':
+      return `Selection: projects ${selection.picks.map(inline).join(', ')} (id ${selection.id})`
+  }
+}

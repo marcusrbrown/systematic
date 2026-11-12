@@ -35,8 +35,8 @@ The `ce:connect` helper hands a read-only subagent its inputs as files in a run 
 
 Write every file the model must read as short lines, and give it an index so it never has to read a whole file.
 
-- **Indent the JSON.** `rules.json` is written with `JSON.stringify(..., null, 1)` in the `writeWorkFile` call (`src/ce-connect-helper.ts:1122-1129`). The file is still one valid document, and the observed index no longer has a line near the cap. Indentation does not wrap a long string value, so an individual value or entry can still exceed a line or read-window limit.
-- **Add line-oriented indexes.** `files.tsv` has one tab-separated line per inventoried file (fingerprint, role, project root, path) and is built by `fingerprintIndex` (`src/ce-connect-helper.ts:383-399`). `rules.tsv` has one line per rule (id, project, path, title, `applies_when`, offered or later) and is built by `rulesOverview` (`src/ce-connect-helper.ts:355-381`). Control characters are collapsed or the line is dropped, so a path cannot break the format.
+- **Indent the JSON.** `rules.json` is written with `JSON.stringify(..., null, 1)` in the `writeWorkFile` call (`src/ce-connect-helper.ts:1154-1161`). The file is still one valid document, and the observed index no longer has a line near the cap. Indentation does not wrap a long string value, so an individual value or entry can still exceed a line or read-window limit.
+- **Add line-oriented indexes.** `files.tsv` has one tab-separated line per inventoried file (fingerprint, role, project root, path) and is built by `fingerprintIndex` (`src/ce-connect-helper.ts:390-406`). `rules.tsv` has one line per rule (id, project, path, title, `applies_when`, offered or later) and is built by `rulesOverview` (`src/ce-connect-helper.ts:362-388`). Control characters are collapsed or the line is dropped, so a path cannot break the format.
 - **Tell the agent how to find an entry.** The agent's input description says to search the rules file for `"id": "<rule id>"` and read about 45 lines from the line the search reports, and to take fingerprints from the files index (`agents/research/connections-researcher.md:35-36`).
 
 ## Why This Works
@@ -45,8 +45,8 @@ A line cap only matters when one record spans more than one cap's worth of text.
 
 ## Prevention
 
-- Assert on the longest line, not on parseability. The work-file test reads the rule file back, parses it, and asserts the maximum line length is under a limit just above the cap (`READ_LINE_LIMIT` in `tests/unit/ce-connect-helper-ops.test.ts:361-392`). The fixture is one rule whose guidance is about 1,440 characters, long enough to overflow the cap if the file were one line. It is not a bound on arbitrary content, so test the real input bounds and page when an entry is long.
-- Pin the shape of each index file: one record per line, the exact column count, and no tab or line break inside a cell (`tests/unit/ce-connect-helper-ops.test.ts:394-476`).
+- Assert on the longest line, not on parseability. The work-file test reads the rule file back, parses it, and asserts the maximum line length is under a limit just above the cap (`READ_LINE_LIMIT` in `tests/unit/ce-connect-helper-ops.test.ts:412-443`). The fixture is one rule whose guidance is about 1,440 characters, long enough to overflow the cap if the file were one line. It is not a bound on arbitrary content, so test the real input bounds and page when an entry is long.
+- Pin the shape of each index file: one record per line, the exact column count, and no tab or line break inside a cell (`tests/unit/ce-connect-helper-ops.test.ts:445-527`).
 - When a subagent has only read and search tools, treat the host read tool's limits as part of the contract of every file you give it. Check the real limit on the host you ship for; the 2000-character figure here was observed on OpenCode and is noted in the helper's own comment, and other hosts may cut differently.
 - Keep single-line machine files (`begin.json`) out of the model's inputs. The model gets the indexes that were derived from them.
 

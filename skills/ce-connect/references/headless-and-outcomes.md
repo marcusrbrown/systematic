@@ -15,6 +15,25 @@ The mode comes from tokens in the skill arguments. Some hosts pass no arguments 
 
 A stop here happens before `begin`, so no lock is taken and nothing is dispatched. End as for a failed run: the reason on a line of its own, then `Connect failed`.
 
+## Reading the selection
+
+The selection words are read from the same place as the mode tokens: the skill arguments, or the invoking instruction when none are shown. The skill passes them to `begin` unchanged and does not parse them. The helper does, before it takes the lock, so a refusal is the same in interactive and headless mode.
+
+A selection narrows the allow list and never widens it. A group lists projects by allow-list entry, and every member must be on the allow list. A word never adds a project.
+
+| Words found | Result |
+|---|---|
+| None | The whole allow list. |
+| `group:<name>` | The members of that group in the user's config. |
+| `projects:<a>,<b>` | The named projects. Each entry is a directory name or a 12-character project key. |
+| The same word twice or more | That word, counted once. |
+| `group:` with `projects:`, two different `group:` words, or two different `projects:` words | Stop: `conflicting-selection`. `projects:a,b` and `projects:b,a` are different words. |
+| An empty value, an empty entry between commas, a word with another prefix, more than 32 words, or a word over 2,048 characters | Stop: `invalid-request`. |
+
+A stop here happens in `begin`, so no lock is taken and nothing is written. End as for a failed run: the reason and the fields it names on lines of their own, then `Connect failed`. Never repeat the run with a different selection.
+
+The digest header and the run record name the selection: `all`, the group, or the picked projects, with an id that depends on the selected projects only.
+
 ## What headless changes
 
 Headless mode asks no question and offers nothing after the digest. It does not wait for input of any kind.
@@ -44,7 +63,7 @@ Every run ends with exactly one of these lines as its last line. The reason and 
 | `Connect complete` | `publish` answered `complete`: every project read, every offered rule covered by a complete family, nothing failed, and the run committed. Rules the run was not offered are not a degrade reason, and neither is the stale-citation check reaching its cap: the digest notes it under "Not read or not covered" and the run record keeps the counts, and the outcome is unchanged. Nothing found is still `complete`, labeled "no candidate in searched scope". |
 | `Connect degraded` | `publish` answered `degraded`: something was not read, an offered rule was not covered, a file a candidate cited changed or vanished during the run (`evidence-changed`, `unresolved-source`; the rule of that candidate is then not counted as covered), or a bound on the file inventory, a family or a batch was reached. The digest names what. A degraded run is never proof that nothing is there. A dropped candidate never changes the outcome; the digest lists each one under "Dropped candidates" with its reason and quoted title, and the run record keeps the same list. |
 | `Connect busy` | `begin` answered `busy`: another run holds the lock, or the holder cannot be verified. Nothing was written and nothing was dispatched. |
-| `Connect failed` | Any other stop: a bad mode token, the helper missing, an unsupported host in headless mode, consent declined, no allowed projects, a malformed batch, or a helper error. Nothing was published. |
+| `Connect failed` | Any other stop: a bad mode token, a refused selection, the helper missing, an unsupported host in headless mode, consent declined, no allowed projects, a malformed batch, or a helper error. Nothing was published. |
 
 Copy the final line from the helper's `finalLine` when `publish` answers. For every other stop, print the line from this table.
 
@@ -65,6 +84,12 @@ Print the helper's `reason` as it is, then add the hint when one fits.
 | `helper-unavailable` | The skill could not start the helper (node is missing or the helper file is gone). Nothing was published. Not a data problem. |
 | `unsupported-host` | The host and version have no observed tool limits. Run interactively and accept the warning, or use a supported host. |
 | `no-allowed-projects` | The allow list is empty or no entry matched a project. List the entries that did not match, with the reason the helper gives for each. |
+| `conflicting-selection` | The words name more than one selection. The helper's `detail` says which combination. Use one `group:` word, or one `projects:` word. |
+| `unknown-group` | No group of that name is in the user's config (`group`). |
+| `unknown-project` | No allowed project has that directory name or key (`project`). |
+| `ambiguous-project` | Two allowed projects share that directory name (`project`). The helper lists their `keys`; a key picks one of them. |
+| `group-member-not-allowed` | A member of the group is not on the allow list (`member`, in `group`). When the member did not resolve to a project, `memberReason` says why. The run reads nothing until the group or the allow list is fixed. |
+| `invalid-request` | A selection word is malformed, or a request field has the wrong type. |
 | `state-root-refused` | The state directory is unsafe (inside a repository, a symlink, or an allowed project). The helper names why. |
 | `malformed-batch`, `batch-version` | The researcher's answer was not a batch of the right version. The run is over. Run it again. |
 | `batch-missing`, `batch-outside-work-dir` | The skill passed a path the helper does not accept. The run is over. |

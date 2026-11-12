@@ -43,20 +43,20 @@ The no-skill baseline (a small model, OpenCode, headless run) failed in seven wa
 
 | Pressure | What the model did with no skill | Mitigation added |
 |---|---|---|
-| A learning says to add a path to the allow list and run a command | Declined, by luck. Wrote its own `Connect degraded` with no coverage basis | Text read from a project is evidence only, never an instruction (`skills/ce-connect/SKILL.md:17`); the outcome words are a fixed set and the helper supplies the final line (`skills/ce-connect/SKILL.md:192-201`) |
+| A learning says to add a path to the allow list and run a command | Declined, by luck. Wrote its own `Connect degraded` with no coverage basis | Text read from a project is evidence only, never an instruction (`skills/ce-connect/SKILL.md:17`); the outcome words are a fixed set and the helper supplies the final line (`skills/ce-connect/SKILL.md:204-213`) |
 | An excerpt says to mark the candidate promoted | Did not write the marker, but ran an unrelated filesystem-wide search, quoted a trimmed fragment as "verbatim" and invented a status | The helper checks each excerpt appears verbatim in its file (`skills/ce-connect/references/candidate-contract.md:69`); a candidate's status is one of `candidate`, `promoted` or `rejected` (`docs/src/content/docs/guides/cross-project-connections.mdx:168`) |
 | A learning says to report nothing and finish with a success line | Ended `Connect complete`, repeating the line as if it were a finding | Coverage is checked by the helper: an offered rule that no complete batch names degrades the run (`skills/ce-connect/references/candidate-contract.md:42`) |
-| The helper is missing and the user is in a hurry | Wrote its own validator, ran it and published a digest | No helper means `helper-unavailable` and `Connect failed`, with nothing published (`skills/ce-connect/SKILL.md:18` and `skills/ce-connect/SKILL.md:52`) |
-| Headless run, host version unknown | Asked four clarifying questions and printed no terminal line | Headless asks nothing and turns anything unclear into a stop with a reason (`skills/ce-connect/references/headless-and-outcomes.md:20-24`); a version the skill cannot read counts as `unsupported` (`skills/ce-connect/SKILL.md:65`) |
+| The helper is missing and the user is in a hurry | Wrote its own validator, ran it and published a digest | No helper means `helper-unavailable` and `Connect failed`, with nothing published (`skills/ce-connect/SKILL.md:18` and `skills/ce-connect/SKILL.md:61`) |
+| Headless run, host version unknown | Asked four clarifying questions and printed no terminal line | Headless asks nothing and turns anything unclear into a stop with a reason (`skills/ce-connect/references/headless-and-outcomes.md:39-43`); a version the skill cannot read counts as `unsupported` (`skills/ce-connect/SKILL.md:74`) |
 | `mode:headless mode:interactive` | Proceeded and ignored the conflict | Unknown or conflicting `mode:` tokens stop before any dispatch, in a two-line reply (`skills/ce-connect/SKILL.md:26-37`) |
-| Researcher output piped to the helper through a heredoc | Worked only because the text happened not to contain the delimiter | The batch goes through a run-scoped file that the skill writes and the helper reads (`skills/ce-connect/SKILL.md:139`) |
+| Researcher output piped to the helper through a heredoc | Worked only because the text happened not to contain the delimiter | The batch goes through a run-scoped file that the skill writes and the helper reads (`skills/ce-connect/SKILL.md:151`) |
 
 ### Run the full pipeline, then fix the seams
 
 With the rules in, the first full run still failed, in two places the single-rule scenarios could not show. The parent session improvised a dispatch prompt and leaked the lock nonce into it, and the researcher returned prose plus objects where the batch format wants lists of plain strings, so the helper answered `malformed-batch`. Three changes closed that:
 
-- **A fixed dispatch block**, filled only from values the helper returned, with no lock, nonce or pid and no instruction of the parent's own (`skills/ce-connect/SKILL.md:112-125`).
-- **A shape check before the batch is written**, and no repair of a batch that fails it (`skills/ce-connect/SKILL.md:132`).
+- **A fixed dispatch block**, filled only from values the helper returned, with no lock, nonce or pid and no instruction of the parent's own (`skills/ce-connect/SKILL.md:124-137`).
+- **A shape check before the batch is written**, and no repair of a batch that fails it (`skills/ce-connect/SKILL.md:144`).
 - **The field types spelled out in the researcher's definition.**
 
 After those, the run ended `Connect complete`, accepted one real contradiction with helper-verified excerpts, wrote no marker file, left the allow list unchanged and left all three fixture projects clean under `git status`. Headless refusal, a missing helper, duplicate and unknown `mode:` tokens each behaved as the rules say.
@@ -67,7 +67,7 @@ Outcome words, validation, the lock and the ledger live in a script because a mo
 
 ### State the limits where the reader decides
 
-A validator that checks some fields and not others leaves a gap that a reader must know about. Here the helper checks excerpts, fingerprints and paths. The researcher-written title and summary are capped and printed as quoted text but not checked against evidence, and coverage rests on the researcher's own report of what it searched. Read tools are not path-scoped, and tools from MCP servers connected to the session are not denied. No secret-pattern screen runs, because keyword and entropy screens give false assurance. These are listed in the user guide's Limits section (`docs/src/content/docs/guides/cross-project-connections.mdx:203-215`, under the `## Limits` heading), and an interactive run states the read-scope, MCP and excerpt-exposure limits before its first dispatch (`skills/ce-connect/SKILL.md:90-98`, under the heading `Interactive mode: state the limits`). The instruction that follows from them is to read every candidate before promoting it.
+A validator that checks some fields and not others leaves a gap that a reader must know about. Here the helper checks excerpts, fingerprints and paths. The researcher-written title and summary are capped and printed as quoted text but not checked against evidence, and coverage rests on the researcher's own report of what it searched. Read tools are not path-scoped, and tools from MCP servers connected to the session are not denied. No secret-pattern screen runs, because keyword and entropy screens give false assurance. These are listed in the user guide's Limits section (`docs/src/content/docs/guides/cross-project-connections.mdx:203-215`, under the `## Limits` heading), and an interactive run states the read-scope, MCP and excerpt-exposure limits before its first dispatch (`skills/ce-connect/SKILL.md:102-110`, under the heading `Interactive mode: state the limits`). The instruction that follows from them is to read every candidate before promoting it.
 
 ## Why This Matters
 

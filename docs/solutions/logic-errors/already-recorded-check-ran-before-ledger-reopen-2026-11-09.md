@@ -34,7 +34,7 @@ Suppressing on path alone bypasses the ledger's changed-source decision.
 
 ## Solution
 
-Put the change signal in front of the shortcut. `classifyOne` still calls `findRecorded` first, because it is cheap and deterministic, but it now suppresses only when the ledger would not reopen the candidate for changed sources (`src/ce-connect-helper.ts:1394-1400` `reopensForChangedSources`; `src/ce-connect-helper.ts:1414-1456` `classifyOne`):
+Put the change signal in front of the shortcut. `classifyOne` still calls `findRecorded` first, because it is cheap and deterministic, but it now suppresses only when the ledger would not reopen the candidate for changed sources (`src/ce-connect-helper.ts:1474-1480` `reopensForChangedSources`; `src/ce-connect-helper.ts:1494-1536` `classifyOne`):
 
 ```ts
 // Before (reconstructed from the order of the checks): a citation of the
@@ -55,7 +55,7 @@ classifyAgainstLedger(check.candidate, record, input.ledger, result)
 The two neighbouring defects were fixed in the same pass:
 
 - **A contradiction must span projects.** The shape check required two sources and the target among them, but not a second project. A candidate with two learnings from the target alone is now dropped as `same-project-contradiction` (`contradictionProblem`, `src/lib/connect-helper-core.ts:1049-1065`).
-- **Lost evidence degrades the run.** A candidate dropped as `changed-since-begin` now adds the degrade reason `evidence-changed` and holds its rule back from the covered set, so the rule is offered again. A plain rejection stays non-degrading (`classifyOne`, `src/ce-connect-helper.ts:1414-1456`; `holdBack`, `src/ce-connect-helper.ts:1402-1412`).
+- **Lost evidence degrades the run.** A candidate dropped as `changed-since-begin` now adds the degrade reason `evidence-changed` and holds its rule back from the covered set, so the rule is offered again. A plain rejection stays non-degrading (`classifyOne`, `src/ce-connect-helper.ts:1494-1536`; `holdBack`, `src/ce-connect-helper.ts:1482-1492`).
 
 ## Why This Works
 
@@ -63,9 +63,9 @@ The two neighbouring defects were fixed in the same pass:
 
 ## Prevention
 
-- **Test the sequence, not the pieces.** `reopens a promoted connection when its source changed, and does not list it as already recorded` runs a candidate, records it with `decide` as promoted, commits a target learning that cites the old fingerprint, edits the source, runs again, and asserts that `recorded` is empty and the accepted entry has `standing: 'sources changed'` and the refresh pointer (`tests/unit/ce-connect-helper-ops.test.ts:1178-1245`).
+- **Test the sequence, not the pieces.** `reopens a promoted connection when its source changed, and does not list it as already recorded` runs a candidate, records it with `decide` as promoted, commits a target learning that cites the old fingerprint, edits the source, runs again, and asserts that `recorded` is empty and the accepted entry has `standing: 'sources changed'` and the refresh pointer (`tests/unit/ce-connect-helper-ops.test.ts:1533-1600`).
 - **Pair it with a negative control.** The same run with an unchanged source must still list the connection as already recorded, or the fix has turned suppression off.
-- **Pin each drop reason.** `drops two distinct paths that are both in the target project` asserts `same-project-contradiction` (`tests/unit/connect-helper-core.test.ts:866-910`). The changed-evidence tests assert `evidence-changed`, the outcome `degraded`, that the lost rule is absent from the covered set while the others are recorded, and that a plain rejection leaves the run `complete` (`tests/unit/ce-connect-helper-ops.test.ts:1246-1320`).
+- **Pin each drop reason.** `drops two distinct paths that are both in the target project` asserts `same-project-contradiction` (`tests/unit/connect-helper-core.test.ts:870-914`). The changed-evidence tests assert `evidence-changed`, the outcome `degraded`, that the lost rule is absent from the covered set while the others are recorded, and that a plain rejection leaves the run `complete` (`tests/unit/ce-connect-helper-ops.test.ts:1601-1675`).
 - **Rule of thumb for any dedup or "already done" shortcut:** if a later step detects change, the shortcut has to consult that step's result, or run after it.
 
 ## Related Issues

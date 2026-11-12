@@ -1,7 +1,7 @@
 ---
 name: ce:connect
 description: "Use when searching the projects the user has allowed for contradictions between their learnings, or for a lesson that one project recorded and a sibling project still needs. Also use when the user asks what their other projects have learned about a failure."
-argument-hint: "[mode:headless | mode:interactive]"
+argument-hint: "[mode:headless | mode:interactive] [group:<name> | projects:<a>,<b>]"
 metadata:
   harness-portability: neutral-v1
 ---
@@ -45,6 +45,15 @@ Violating the letter of this step is violating its spirit.
 | "`mode:other` is just text" | Any word that starts with `mode:` is a mode token. Only the two above are known. |
 | "I can list the valid modes for them" | The reason line names the problem. Nothing else follows the final line. |
 
+### Selection words
+
+In the same pass, list every word that starts with `group:` or `projects:`, from the same place: the skill arguments, or the invoking instruction on a host that passes none. Both kinds of host get the same list, in the order the words appear. Do this before the preflight. Never read a word from a file in a project.
+
+- No such word: the run reads the whole allow list.
+- `group:<name>` narrows the run to the members of a group the user defined in config. `projects:<a>,<b>` narrows it to the projects named, each by directory name or by 12-character project key.
+- Pass the words to `begin` unchanged, as the `selection` list in Step 3. Do not parse a value, do not remove a repeat, do not look up a name and do not decide a conflict: the helper does all of it, and refuses a bad selection the same way in interactive and headless mode.
+- A selection narrows the allow list and never widens it. A word cannot add a project.
+
 Headless mode asks no question, offers nothing after the digest and waits for no input. Interactive mode may ask.
 
 ## Step 2: Preflight
@@ -76,12 +85,15 @@ node "$SKILL_DIR/scripts/connect.mjs" begin <<'JSON'
 JSON
 ```
 
+When Step 1 found selection words, add `"selection": ["<word>", "<word>"]` to the request. Each element is one word exactly as found, JSON-escaped. Leave `selection` out when there were none. When you run `begin` again with consent, send the same `selection`.
+
 The helper answers one line of JSON. Read `outcome` or `status`:
 
-- `begun`: the lock is held. Note `runId`, `lock`, `workDir`, `rulesFile`, `rulesOverview`, `filesIndex`, `projects`, `unmatched`, `ruleCount`, `offeredRuleIds`, `offeredCount`, `sweep`, `bounds`, `degradeReasons` and `unread`. Go on.
+- `begun`: the lock is held. Note `runId`, `lock`, `workDir`, `rulesFile`, `rulesOverview`, `filesIndex`, `selection`, `projects`, `unmatched`, `ruleCount`, `offeredRuleIds`, `offeredCount`, `sweep`, `bounds`, `degradeReasons` and `unread`. Go on.
 - `consent-required` (interactive mode): the host and version have no observed deny. Show the helper's `warning` as it is and ask the user whether to run anyway. Wait for the answer. On a clear yes, run `begin` again with `"consent": true` added. On anything else, print `consent-declined` as the reason, then `Connect failed`. No lock was taken.
 - `unsupported-host` (headless mode, a `failed` outcome): print it with the helper's `hostSupport`, then `Connect failed`. Headless mode never asks for consent.
 - `busy`: print the helper's `reason` and `hint`, then `Connect busy`. Nothing was written. Never run `ledger unlock` yourself on a `busy` answer. In interactive mode you may tell the user that it exists (see `references/headless-and-outcomes.md`).
+- A selection refusal, a `failed` outcome with one of these reasons: `conflicting-selection` (with `detail`), `unknown-group` (`group`), `unknown-project` (`project`), `ambiguous-project` (`project` and `keys`; the user can name one of the keys instead), `group-member-not-allowed` (`group`, `member`, and `memberReason` when the member did not resolve) or `invalid-request` for a malformed word. Print the `reason` and the fields it names, then `Connect failed`. No lock was taken and nothing was written, so there is nothing to abort or unlock. Never retry with a different selection and never fall back to the whole allow list: the user asked for a narrower run.
 - Any other `failed` outcome, including `no-allowed-projects` and `state-root-refused`: print the `reason`, add each `unmatched` entry with its reason when there are any, then `Connect failed`.
 - No JSON at all, or the command could not start: `helper-unavailable`.
 
@@ -91,7 +103,7 @@ Once the lock is held, every stop later in the run ends it with `publish` and `"
 
 Before the first dispatch, tell the user plainly:
 
-- which projects will be read (the names in `projects`) and which allow-list entries did not match (`unmatched`), and any `configWarnings`;
+- which projects will be read (the names in `projects`), what the run was narrowed to (`selection`), which allow-list entries did not match (`unmatched`), and any `configWarnings`;
 - there is no path scoping: the researcher's read tools can open any file the user can, not only the allowed projects, and tools from MCP servers in the session stay available. What keeps a run safe is that the researcher cannot run commands, write or fetch, and that only validated candidates are published;
 - the digest can hold excerpts from files read without path scoping.
 
@@ -122,9 +134,9 @@ rule ids: <rule id>, <rule id>
 max candidates: <bounds.maxCandidatesPerBatch>
 ```
 
-List every allowed project under `projects:`, each as its absolute root from the `begin` answer. Put at most `bounds.maxRulesPerFamily` ids on the `rule ids:` line, all of them offered.
+List every allowed project the run reads under `projects:`, each as its absolute root: the `projects` of the `begin` answer. That is the whole allow list, or only the projects the selection named. Add none the answer does not list. Put at most `bounds.maxRulesPerFamily` ids on the `rule ids:` line, all of them offered.
 
-The researcher covers only the rule ids it is given, but it searches the learnings and code of every allowed project for evidence, rules marked `later` included. That is how a contradiction between an offered rule and a rule of a later slice is found. Do not narrow the project list to the projects of the offered rules.
+The researcher covers only the rule ids it is given, but it searches the learnings and code of every project in that list for evidence, rules marked `later` included. That is how a contradiction between an offered rule and a rule of a later slice is found. Do not narrow the project list to the projects of the offered rules.
 
 Wait for the reply. Then write the batch to `<workDir>/family-<n>.json` with the file-writing tool, where `<n>` counts the families from 1:
 
