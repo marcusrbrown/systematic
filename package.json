@@ -138,7 +138,7 @@
     "rimraf": "6.1.4",
     "semantic-release": "25.0.9",
     "semantic-release-export-data": "1.2.0",
-    "typebox": "1.4.4",
+    "typebox": "1.4.6",
     "typescript": "7.0.2"
   },
   "dependencies": {
