@@ -364,6 +364,17 @@ describe('closure edges', () => {
     }
   })
 
+  test('an edit to connect-config.ts selects the schema, the config reference and the connect helper', () => {
+    const picked = selectAffected(
+      GENERATED_SURFACES,
+      ['src/lib/connect-config.ts'],
+      [...listRepoFiles(ROOT_DIR)],
+    )
+    expect(names(picked.direct)).toEqual(
+      expect.arrayContaining(['schema', 'config-reference', 'connect-helper']),
+    )
+  })
+
   test('an expanded output path is matched against a trigger glob', () => {
     const a = fake('a', ['gen/out.txt'], ['src/**'])
     const b = fake('b', ['b/out.txt'], ['gen/*.txt'])

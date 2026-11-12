@@ -343,6 +343,253 @@ describe('loadConnectAllowList: fail closed', () => {
   })
 })
 
+describe('loadConnectAllowList: groups', () => {
+  const groupsOf = (groups: unknown, allow: string[] = ['/work/a']) => ({
+    connect: { allow_projects: allow, groups },
+  })
+
+  it('reads a group of project paths under its name', () => {
+    const dirs = setupDirs()
+    writeConfig(
+      dirs.userDir,
+      'systematic.json',
+      groupsOf({ 'harness-tools': ['~/a', '~/b'] }),
+    )
+    const load = loadConnectAllowList(optionsFor(dirs))
+    expect(load.groups).toEqual({ 'harness-tools': ['~/a', '~/b'] })
+    expect(load.unreadable).toBe(false)
+    expect(load.allowProjects).toEqual(['/work/a'])
+  })
+
+  it('reports no groups when none are written', () => {
+    const dirs = setupDirs()
+    expect(loadConnectAllowList(optionsFor(dirs)).groups).toEqual({})
+    writeConfig(dirs.userDir, 'systematic.json', {
+      connect: { allow_projects: ['/work/a'] },
+    })
+    expect(loadConnectAllowList(optionsFor(dirs)).groups).toEqual({})
+  })
+
+  it('does not require the group members to be on the allow list', () => {
+    const dirs = setupDirs()
+    writeConfig(
+      dirs.userDir,
+      'systematic.json',
+      groupsOf({ team: ['/elsewhere/x'] }),
+    )
+    const load = loadConnectAllowList(optionsFor(dirs))
+    expect(load.groups).toEqual({ team: ['/elsewhere/x'] })
+    expect(load.unreadable).toBe(false)
+  })
+
+  it('a later layer replaces a same-named group whole; other groups survive', () => {
+    const dirs = setupDirs()
+    const customDir = path.join(dirs.home, 'custom')
+    writeConfig(
+      dirs.userDir,
+      'systematic.json',
+      groupsOf({ x: ['/work/1', '/work/2'], early: ['/work/3'] }),
+    )
+    writeConfig(
+      dirs.userDir,
+      'systematic.local.json',
+      groupsOf({ x: ['/work/4'] }, []),
+    )
+    writeConfig(customDir, 'systematic.json', groupsOf({ y: ['/work/5'] }, []))
+    writeConfig(
+      customDir,
+      'systematic.local.json',
+      groupsOf({ y: ['/work/6', '/work/7'] }, []),
+    )
+    const load = loadConnectAllowList(optionsFor(dirs, customDir))
+    expect(load.groups).toEqual({
+      x: ['/work/4'],
+      early: ['/work/3'],
+      y: ['/work/6', '/work/7'],
+    })
+  })
+
+  it('keeps the earlier layer group when the later layer does not define it', () => {
+    const dirs = setupDirs()
+    writeConfig(
+      dirs.userDir,
+      'systematic.json',
+      groupsOf({ keep: ['/work/1'] }),
+    )
+    writeConfig(dirs.userDir, 'systematic.local.json', groupsOf({}, []))
+    expect(loadConnectAllowList(optionsFor(dirs)).groups).toEqual({
+      keep: ['/work/1'],
+    })
+  })
+
+  it('accepts exactly 32 groups and refuses 33', () => {
+    const dirs = setupDirs()
+    const make = (count: number) =>
+      Object.fromEntries(
+        Array.from({ length: count }, (_, i) => [`g${i}`, ['/work/a']]),
+      )
+    writeConfig(dirs.userDir, 'systematic.json', groupsOf(make(32)))
+    const ok = loadConnectAllowList(optionsFor(dirs))
+    expect(Object.keys(ok.groups)).toHaveLength(32)
+    expect(ok.unreadable).toBe(false)
+
+    writeConfig(dirs.userDir, 'systematic.json', groupsOf(make(33)))
+    const bad = loadConnectAllowList(optionsFor(dirs))
+    expect(bad.groups).toEqual({})
+    expect(bad.allowProjects).toEqual([])
+    expect(bad.unreadable).toBe(true)
+  })
+
+  it('accepts a group of exactly the maximum members and refuses one more', () => {
+    const dirs = setupDirs()
+    const members = (count: number) =>
+      Array.from({ length: count }, (_, i) => `/work/p${i}`)
+    writeConfig(
+      dirs.userDir,
+      'systematic.json',
+      groupsOf({ big: members(64) }, []),
+    )
+    const ok = loadConnectAllowList(optionsFor(dirs))
+    expect(ok.groups.big).toHaveLength(64)
+    expect(ok.unreadable).toBe(false)
+
+    writeConfig(
+      dirs.userDir,
+      'systematic.json',
+      groupsOf({ big: members(65) }, []),
+    )
+    const bad = loadConnectAllowList(optionsFor(dirs))
+    expect(bad.groups).toEqual({})
+    expect(bad.unreadable).toBe(true)
+  })
+
+  it.each([
+    ['a', true],
+    ['a-b', true],
+    ['9-lives', true],
+    ['constructor', true],
+    ['x'.repeat(64), true],
+    ['A_b', false],
+    ['Upper', false],
+    ['a_b', false],
+    ['-leading', false],
+    ['', false],
+    ['x'.repeat(65), false],
+    ['has space', false],
+  ])('the group name %j is accepted: %p', (name, accepted) => {
+    const dirs = setupDirs()
+    writeConfig(dirs.userDir, 'systematic.json', {
+      connect: { groups: { [name]: ['/work/a'] } },
+    })
+    const load = loadConnectAllowList(optionsFor(dirs))
+    expect(load.unreadable).toBe(!accepted)
+    expect(Object.hasOwn(load.groups, name)).toBe(accepted)
+  })
+
+  it('a __proto__ key in groups never becomes a group or changes the record', () => {
+    const dirs = setupDirs()
+    writeConfig(
+      dirs.userDir,
+      'systematic.json',
+      '{"connect":{"groups":{"__proto__":["/work/evil"],"team":["/work/a"]}}}',
+    )
+    const load = loadConnectAllowList(optionsFor(dirs))
+    expect(Object.hasOwn(load.groups, '__proto__')).toBe(false)
+    expect(Object.getPrototypeOf(load.groups)).toBe(Object.prototype)
+    expect(Object.keys(load.groups)).not.toContain('__proto__')
+    expect(JSON.stringify(load.groups)).not.toContain('/work/evil')
+  })
+
+  it('refuses a group with no members', () => {
+    const dirs = setupDirs()
+    writeConfig(dirs.userDir, 'systematic.json', groupsOf({ empty: [] }))
+    const load = loadConnectAllowList(optionsFor(dirs))
+    expect(load.unreadable).toBe(true)
+    expect(load.groups).toEqual({})
+  })
+
+  it.each([
+    ['groups is an array', [['/work/a']]],
+    ['groups is a string', 'team'],
+    ['groups is null', null],
+    ['a member list is not an array', { team: '/work/a' }],
+    ['a member is not a string', { team: ['/work/a', 7] }],
+    ['a member is empty', { team: ['/work/a', ''] }],
+    [
+      'a member is too long',
+      { team: [`/${'x'.repeat(MAX_ALLOW_PROJECT_LENGTH)}`] },
+    ],
+  ])(
+    '%s: the whole layer is unreadable, its allow list too, and other layers are unaffected',
+    (_label, groups) => {
+      const dirs = setupDirs()
+      const customDir = path.join(dirs.home, 'custom')
+      writeConfig(
+        dirs.userDir,
+        'systematic.json',
+        groupsOf(groups, ['/work/a']),
+      )
+      writeConfig(customDir, 'systematic.json', {
+        connect: { allow_projects: ['/work/b'], groups: { ok: ['/work/b'] } },
+      })
+      const load = loadConnectAllowList(optionsFor(dirs, customDir))
+      expect(load.unreadable).toBe(true)
+      expect(load.allowProjects).toEqual(['/work/b'])
+      expect(load.groups).toEqual({ ok: ['/work/b'] })
+      expect(load.warnings).toHaveLength(1)
+    },
+  )
+
+  it('warnings never name a group or its members', () => {
+    const dirs = setupDirs()
+    writeConfig(
+      dirs.userDir,
+      'systematic.json',
+      groupsOf({ 'secret-client': ['/work/secret-client'], bad: [] }),
+    )
+    const load = loadConnectAllowList(optionsFor(dirs))
+    expect(load.warnings.length).toBeGreaterThan(0)
+    expect(load.warnings.join('\n')).not.toContain('secret-client')
+  })
+
+  it('never reads groups from a project file', () => {
+    const dirs = setupDirs()
+    const repo = createRepo()
+    writeConfig(path.join(repo.work, '.opencode'), 'systematic.json', {
+      connect: { groups: { evil: ['/work/evil'] } },
+    })
+    const previous = process.cwd()
+    process.chdir(repo.work)
+    try {
+      expect(loadConnectAllowList(optionsFor(dirs)).groups).toEqual({})
+    } finally {
+      process.chdir(previous)
+    }
+  })
+})
+
+describe('validateConnectBlock: groups', () => {
+  it('returns the validated groups beside the allow list', () => {
+    const result = validateConnectBlock({
+      allow_projects: ['/work/a'],
+      groups: { team: ['/work/a'] },
+    })
+    expect(result).toEqual({
+      ok: true,
+      allowProjects: ['/work/a'],
+      groups: { team: ['/work/a'] },
+    })
+  })
+
+  it('returns an empty group record when none is written', () => {
+    expect(validateConnectBlock({})).toEqual({
+      ok: true,
+      allowProjects: [],
+      groups: {},
+    })
+  })
+})
+
 describe('loadConnectAllowList: custom config directory containment', () => {
   it('refuses a custom directory inside a checkout and ignores everything it holds', () => {
     const dirs = setupDirs()
@@ -728,6 +975,72 @@ describe('the zod schema and the reader agree on what a connect block is', () =>
       'an entry one too long',
       { allow_projects: [`/${'x'.repeat(MAX_ALLOW_PROJECT_LENGTH)}`] },
     ],
+    ['groups alone', { groups: { team: ['/work/a'] } }],
+    [
+      'groups beside an allow list',
+      { allow_projects: ['/a'], groups: { t: ['/a'] } },
+    ],
+    ['an empty groups record', { groups: {} }],
+    ['groups as an array', { groups: [['/a']] }],
+    ['groups as null', { groups: null }],
+    ['groups as a string', { groups: 'team' }],
+    ['a group with no members', { groups: { team: [] } }],
+    ['a non-array group', { groups: { team: '/a' } }],
+    ['a non-string member', { groups: { team: [1] } }],
+    ['an empty member', { groups: { team: [''] } }],
+    [
+      'the longest member',
+      { groups: { team: [`/${'x'.repeat(MAX_ALLOW_PROJECT_LENGTH - 1)}`] } },
+    ],
+    [
+      'a member one too long',
+      { groups: { team: [`/${'x'.repeat(MAX_ALLOW_PROJECT_LENGTH)}`] } },
+    ],
+    [
+      'the maximum members in a group',
+      {
+        groups: {
+          team: Array.from({ length: MAX_ALLOW_PROJECTS }, (_, i) => `/p${i}`),
+        },
+      },
+    ],
+    [
+      'one member too many in a group',
+      {
+        groups: {
+          team: Array.from(
+            { length: MAX_ALLOW_PROJECTS + 1 },
+            (_, i) => `/p${i}`,
+          ),
+        },
+      },
+    ],
+    [
+      'exactly 32 groups',
+      {
+        groups: Object.fromEntries(
+          Array.from({ length: 32 }, (_, i) => [`g${i}`, ['/a']]),
+        ),
+      },
+    ],
+    [
+      '33 groups',
+      {
+        groups: Object.fromEntries(
+          Array.from({ length: 33 }, (_, i) => [`g${i}`, ['/a']]),
+        ),
+      },
+    ],
+    ['a lowercase name', { groups: { a: ['/a'] } }],
+    ['a hyphenated name', { groups: { 'a-b': ['/a'] } }],
+    ['a digit-led name', { groups: { '9a': ['/a'] } }],
+    ['the longest name', { groups: { ['x'.repeat(64)]: ['/a'] } }],
+    ['a name one too long', { groups: { ['x'.repeat(65)]: ['/a'] } }],
+    ['an uppercase name', { groups: { A_b: ['/a'] } }],
+    ['an underscore name', { groups: { a_b: ['/a'] } }],
+    ['a leading hyphen name', { groups: { '-a': ['/a'] } }],
+    ['an empty name', { groups: { '': ['/a'] } }],
+    ['an unknown key beside groups', { groups: { a: ['/a'] }, extra: 1 }],
   ]
 
   it.each(cases)('%s', (_label, block) => {

@@ -27,25 +27,25 @@
       "$ref": "#/definitions/__schema86"
     },
     "disabled_skills": {
-      "$ref": "#/definitions/__schema90"
+      "$ref": "#/definitions/__schema95"
     },
     "disabled_agents": {
-      "$ref": "#/definitions/__schema92"
+      "$ref": "#/definitions/__schema97"
     },
     "disabled_commands": {
-      "$ref": "#/definitions/__schema94"
+      "$ref": "#/definitions/__schema99"
     },
     "bootstrap": {
-      "$ref": "#/definitions/__schema96"
+      "$ref": "#/definitions/__schema101"
     },
     "workflow_guard": {
-      "$ref": "#/definitions/__schema102"
+      "$ref": "#/definitions/__schema107"
     },
     "pi_subagents": {
-      "$ref": "#/definitions/__schema104"
+      "$ref": "#/definitions/__schema109"
     },
     "skills_as_commands": {
-      "$ref": "#/definitions/__schema115"
+      "$ref": "#/definitions/__schema120"
     }
   },
   "additionalProperties": false,
@@ -2107,13 +2107,25 @@
       "properties": {
         "allow_projects": {
           "$ref": "#/definitions/__schema87"
+        },
+        "groups": {
+          "$ref": "#/definitions/__schema90"
         }
       },
       "additionalProperties": false,
-      "description": "Cross-project connections. User-owned only: valid in user config or OPENCODE_CONFIG_DIR config, and a project config setting it has the whole block ignored with a warning, because a repository cannot grant itself access to other projects. A block with an unknown key or a bad value is unreadable and counts as an empty allow list.",
+      "description": "Cross-project connections. User-owned only: valid in user config or OPENCODE_CONFIG_DIR config, and a project config setting it has the whole block ignored with a warning, because a repository cannot grant itself access to other projects. A block with an unknown key or a bad value is unreadable and counts as an empty allow list and no groups.",
       "examples": [
         {
           "allow_projects": ["~/src/github.com/me/app"]
+        },
+        {
+          "allow_projects": [
+            "~/src/github.com/me/app",
+            "~/src/github.com/me/lib"
+          ],
+          "groups": {
+            "harness-tools": ["~/src/github.com/me/app"]
+          }
         },
         {
           "allow_projects": []
@@ -2143,9 +2155,16 @@
       "maxLength": 4096
     },
     "__schema90": {
-      "default": [],
-      "description": "Array of bundled skill names to disable globally. Unknown skill names are rejected at parse time.",
-      "examples": [["ce:plan", "ce:review"]],
+      "description": "Named subsets of the allow list that `ce:connect` can be narrowed to with `group:<name>`. A group name is 1 to 64 characters of lowercase letters, digits and hyphens, led by a letter or digit (`^[a-z0-9][a-z0-9-]{0,63}$`). Each group lists at least one and at most 64 members in the same form as an `allow_projects` entry. At most 32 groups per file. A group never adds a project: a member that is not on the allow list stops the run that selects the group. Groups merge by name across user, user.local, custom and custom.local config, and a later file replaces a same-named group whole.",
+      "examples": [
+        {
+          "harness-tools": [
+            "~/src/github.com/me/app",
+            "/srv/checkouts/shared-lib"
+          ]
+        }
+      ],
+      "maxProperties": 32,
       "allOf": [
         {
           "$ref": "#/definitions/__schema91"
@@ -2153,6 +2172,42 @@
       ]
     },
     "__schema91": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/definitions/__schema92"
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/__schema93"
+      }
+    },
+    "__schema92": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "__schema93": {
+      "minItems": 1,
+      "maxItems": 64,
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/__schema94"
+      }
+    },
+    "__schema94": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "__schema95": {
+      "default": [],
+      "description": "Array of bundled skill names to disable globally. Unknown skill names are rejected at parse time.",
+      "examples": [["ce:plan", "ce:review"]],
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema96"
+        }
+      ]
+    },
+    "__schema96": {
       "type": "array",
       "items": {
         "type": "string",
@@ -2212,7 +2267,7 @@
         ]
       }
     },
-    "__schema92": {
+    "__schema97": {
       "default": [],
       "description": "Array of bundled agent names (bare or qualified category/name) to disable globally. Unknown agent names are rejected at parse time.",
       "examples": [
@@ -2221,11 +2276,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema93"
+          "$ref": "#/definitions/__schema98"
         }
       ]
     },
-    "__schema93": {
+    "__schema98": {
       "type": "array",
       "items": {
         "type": "string",
@@ -2337,23 +2392,23 @@
         ]
       }
     },
-    "__schema94": {
+    "__schema99": {
       "default": [],
       "description": "Array of command names to disable globally",
       "examples": [["deprecated-migration-helper"]],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema95"
+          "$ref": "#/definitions/__schema100"
         }
       ]
     },
-    "__schema95": {
+    "__schema100": {
       "type": "array",
       "items": {
         "type": "string"
       }
     },
-    "__schema96": {
+    "__schema101": {
       "default": {
         "enabled": true
       },
@@ -2368,18 +2423,18 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema97"
+          "$ref": "#/definitions/__schema102"
         }
       ]
     },
-    "__schema97": {
+    "__schema102": {
       "type": "object",
       "properties": {
         "enabled": {
-          "$ref": "#/definitions/__schema98"
+          "$ref": "#/definitions/__schema103"
         },
         "file": {
-          "$ref": "#/definitions/__schema100"
+          "$ref": "#/definitions/__schema105"
         }
       },
       "additionalProperties": false,
@@ -2393,42 +2448,42 @@
         }
       ]
     },
-    "__schema98": {
+    "__schema103": {
       "default": true,
       "description": "Enable bootstrap prompt injection into every conversation",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema99"
+          "$ref": "#/definitions/__schema104"
         }
       ]
     },
-    "__schema99": {
+    "__schema104": {
       "type": "boolean"
     },
-    "__schema100": {
+    "__schema105": {
       "description": "Path to a custom bootstrap prompt file",
       "examples": ["~/.config/opencode/bootstrap.md"],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema101"
+          "$ref": "#/definitions/__schema106"
         }
       ]
     },
-    "__schema101": {
+    "__schema106": {
       "type": "string"
     },
-    "__schema102": {
+    "__schema107": {
       "description": "Removed. The workflow guard no longer exists, so this setting has no effect and is ignored. Delete it from your config to silence the warning it triggers.",
       "deprecated": true,
       "allOf": [
         {
-          "$ref": "#/definitions/__schema103"
+          "$ref": "#/definitions/__schema108"
         }
       ]
     },
-    "__schema103": {},
-    "__schema104": {
+    "__schema108": {},
+    "__schema109": {
       "default": {
         "categories": {},
         "agents": {}
@@ -2450,11 +2505,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema105"
+          "$ref": "#/definitions/__schema110"
         }
       ]
     },
-    "__schema105": {
+    "__schema110": {
       "type": "object",
       "properties": {
         "categories": {
@@ -2470,7 +2525,7 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema106"
+              "$ref": "#/definitions/__schema111"
             }
           ]
         },
@@ -2487,14 +2542,14 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema114"
+              "$ref": "#/definitions/__schema119"
             }
           ]
         }
       },
       "additionalProperties": false
     },
-    "__schema106": {
+    "__schema111": {
       "type": "object",
       "propertyNames": {
         "type": "string"
@@ -2508,12 +2563,12 @@
         ],
         "allOf": [
           {
-            "$ref": "#/definitions/__schema113"
+            "$ref": "#/definitions/__schema118"
           }
         ]
       }
     },
-    "__schema107": {
+    "__schema112": {
       "trust": "project-or-higher",
       "allOf": [
         {
@@ -2521,7 +2576,7 @@
         }
       ]
     },
-    "__schema108": {
+    "__schema113": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991,
@@ -2529,48 +2584,48 @@
       "examples": [0, 10, 25],
       "trust": "any"
     },
-    "__schema109": {
+    "__schema114": {
       "type": "string",
       "minLength": 1,
       "description": "pi-subagents comma-selector tool string (built-ins, */all/none, or extension selectors)",
       "examples": ["*", "read,grep,glob", "none"],
       "trust": "project-or-higher"
     },
-    "__schema110": {
+    "__schema115": {
       "anyOf": [
         {
-          "$ref": "#/definitions/__schema111"
+          "$ref": "#/definitions/__schema116"
         },
         {
-          "$ref": "#/definitions/__schema112"
+          "$ref": "#/definitions/__schema117"
         }
       ],
       "description": "pi-subagents skills selector: true (all) or a comma-separated list of skill names",
       "examples": [true, "ce:plan,ce:review"],
       "trust": "project-or-higher"
     },
-    "__schema111": {
+    "__schema116": {
       "type": "boolean",
       "const": true
     },
-    "__schema112": {
+    "__schema117": {
       "type": "string",
       "minLength": 1
     },
-    "__schema113": {
+    "__schema118": {
       "type": "object",
       "properties": {
         "thinking": {
-          "$ref": "#/definitions/__schema107"
+          "$ref": "#/definitions/__schema112"
         },
         "max_turns": {
-          "$ref": "#/definitions/__schema108"
+          "$ref": "#/definitions/__schema113"
         },
         "tools": {
-          "$ref": "#/definitions/__schema109"
+          "$ref": "#/definitions/__schema114"
         },
         "skills": {
-          "$ref": "#/definitions/__schema110"
+          "$ref": "#/definitions/__schema115"
         }
       },
       "additionalProperties": false,
@@ -2582,26 +2637,26 @@
         }
       ]
     },
-    "__schema114": {
+    "__schema119": {
       "type": "object",
       "propertyNames": {
         "type": "string"
       },
       "additionalProperties": {
-        "$ref": "#/definitions/__schema113"
+        "$ref": "#/definitions/__schema118"
       }
     },
-    "__schema115": {
+    "__schema120": {
       "default": true,
       "description": "Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema116"
+          "$ref": "#/definitions/__schema121"
         }
       ]
     },
-    "__schema116": {
+    "__schema121": {
       "type": "boolean"
     }
   }

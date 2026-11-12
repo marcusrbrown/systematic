@@ -1187,7 +1187,7 @@ Patterns for files and folders to skip under each root. A pattern with no `/` ma
 
 ## connect
 
-Cross-project connections. User-owned only: valid in user config or OPENCODE_CONFIG_DIR config, and a project config setting it has the whole block ignored with a warning, because a repository cannot grant itself access to other projects. A block with an unknown key or a bad value is unreadable and counts as an empty allow list.
+Cross-project connections. User-owned only: valid in user config or OPENCODE_CONFIG_DIR config, and a project config setting it has the whole block ignored with a warning, because a repository cannot grant itself access to other projects. A block with an unknown key or a bad value is unreadable and counts as an empty allow list and no groups.
 
 **Type:** `object`
 **Examples:**
@@ -1197,6 +1197,20 @@ Cross-project connections. User-owned only: valid in user config or OPENCODE_CON
   "allow_projects": [
     "~/src/github.com/me/app"
   ]
+}
+```
+
+```json
+{
+  "allow_projects": [
+    "~/src/github.com/me/app",
+    "~/src/github.com/me/lib"
+  ],
+  "groups": {
+    "harness-tools": [
+      "~/src/github.com/me/app"
+    ]
+  }
 }
 ```
 
@@ -1220,6 +1234,24 @@ Main repository roots that `ce:connect` may read for contradictions and transfer
   "~/src/github.com/me/app",
   "/srv/checkouts/shared-lib"
 ]
+```
+
+
+### groups
+
+Named subsets of the allow list that `ce:connect` can be narrowed to with `group:<name>`. A group name is 1 to 64 characters of lowercase letters, digits and hyphens, led by a letter or digit (`^[a-z0-9][a-z0-9-]{0,63}$`). Each group lists at least one and at most 64 members in the same form as an `allow_projects` entry. At most 32 groups per file. A group never adds a project: a member that is not on the allow list stops the run that selects the group. Groups merge by name across user, user.local, custom and custom.local config, and a later file replaces a same-named group whole.
+
+**Type:** `object`
+
+**Examples:**
+
+```json
+{
+  "harness-tools": [
+    "~/src/github.com/me/app",
+    "/srv/checkouts/shared-lib"
+  ]
+}
 ```
 
 
