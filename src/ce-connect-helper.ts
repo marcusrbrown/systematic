@@ -71,6 +71,7 @@ import {
   workDirPath,
   writeWorkFile,
 } from './lib/connect-helper-core.js'
+import { readRepoIdentity } from './lib/connect-repo-identity.js'
 import {
   acquireLock,
   type CandidateRecord,
@@ -82,6 +83,8 @@ import {
   type DecideInput,
   decideLedgerEntry,
   forceUnlock,
+  type InvocationProject,
+  type InvocationWriteOptions,
   type Ledger,
   type LockHandle,
   type LockReclaim,
@@ -91,10 +94,13 @@ import {
   prepareStateRoot,
   pruneRuns,
   publishRun,
+  readCiRunMarker,
+  readInvocationRecord,
   readLedger,
   readRunRecord,
   releaseLock,
   rewriteRunFiles,
+  writeInvocationRecord,
 } from './lib/connect-state.js'
 import { isMainModule } from './lib/main-module.js'
 
@@ -136,6 +142,8 @@ export interface HelperDeps {
   readonly inspector?: ProcessInspector
   /** Seams in the middle of a publish, for tests of a crash or a failed write. */
   readonly publishHooks?: NonNullable<PublishOptions['hooks']>
+  /** Seams in the write of the invocation record, for tests of a failed write. */
+  readonly invocationHooks?: InvocationWriteOptions
 }
 
 export interface HelperResult {
@@ -442,6 +450,10 @@ function parseRunRequest(request: unknown):
 interface SnapshotProject extends DigestProject {
   readonly key: string
   readonly entry: string
+  /** `owner/repo` of the GitHub `origin` remote, when the checkout has one. */
+  readonly repo?: string
+  /** The commit HEAD names, when it can be read. */
+  readonly commit?: string
   /** Citations the check examined. */
   readonly citationsChecked: number
   /** The citation cap stopped the check. Reported, and not a reason to degrade. */
@@ -603,6 +615,119 @@ function readJsonFile<T>(
 
 function addUnique(list: string[], value: string): void {
   if (!list.includes(value)) list.push(value)
+}
+
+// ── The invocation record ───────────────────────────────────────────────────
+
+/**
+ * A CI run is a run whose workflow wrote `ci-run.json` into the state root. Its
+ * marker tags `invocation.json`, which the helper writes on every path from
+ * `begin` onward, so the workflow reads the outcome from one file that names
+ * this run and not from whatever else the state root holds. A local run has no
+ * such file and writes no record.
+ */
+function ciRunMarker(deps: HelperDeps): string | undefined {
+  return readCiRunMarker(
+    resolveStateRoot(deps.env ?? process.env, deps.homeDir ?? os.homedir()),
+  )
+}
+
+function invocationProjects(
+  projects: readonly SnapshotProject[],
+): InvocationProject[] {
+  return projects.map((project) => ({
+    key: project.key,
+    name: project.name,
+    ...(project.repo === undefined ? {} : { repo: project.repo }),
+    ...(project.commit === undefined ? {} : { commit: project.commit }),
+  }))
+}
+
+interface InvocationEnd {
+  readonly outcome: 'complete' | 'degraded' | 'busy' | 'failed'
+  readonly reason?: string
+  readonly runId?: string
+  readonly projects?: readonly InvocationProject[]
+}
+
+/** The projects the begun record of this run named, for a record that ends a run without its snapshot. */
+function beganWith(
+  root: string,
+  marker: string,
+  runId: string | undefined,
+): readonly InvocationProject[] | undefined {
+  if (runId === undefined) return undefined
+  const began = readInvocationRecord(root)
+  return began?.marker === marker && began.runId === runId
+    ? began.projects
+    : undefined
+}
+
+function writeTerminal(
+  root: string,
+  marker: string,
+  end: InvocationEnd,
+  deps: HelperDeps,
+): 'written' | 'unwritten' {
+  const projects = end.projects ?? beganWith(root, marker, end.runId)
+  const result = writeInvocationRecord(
+    root,
+    {
+      version: 1,
+      marker,
+      phase: 'terminal',
+      outcome: end.outcome,
+      finalLine: `Connect ${end.outcome}`,
+      ...(end.reason === undefined ? {} : { reason: end.reason }),
+      ...(end.runId === undefined ? {} : { runId: end.runId }),
+      ...(projects === undefined ? {} : { projects }),
+    },
+    deps.invocationHooks,
+  )
+  return result === 'written' ? 'written' : 'unwritten'
+}
+
+/**
+ * End a CI invocation that stopped before or without a publish. The state root
+ * is prepared under its usual refusal rules; no lock is taken and nothing but
+ * the record is written. A record that cannot be written is said so in the
+ * answer, and the workflow then reads the missing or `begun` record as a run
+ * with no final line.
+ */
+function endInvocation(
+  marker: string,
+  result: HelperResult,
+  end: InvocationEnd,
+  deps: HelperDeps,
+): HelperResult {
+  const prepared = prepare('invocation', deps)
+  const written = prepared.ok
+    ? writeTerminal(prepared.root, marker, end, deps)
+    : 'unwritten'
+  return written === 'written'
+    ? result
+    : { ok: result.ok, body: { ...result.body, invocationRecord: 'unwritten' } }
+}
+
+/** The record for a failure answer: busy is its own outcome, and every other stop is failed. */
+function endOfFailure(result: HelperResult, runId?: string): InvocationEnd {
+  const { outcome, reason } = result.body
+  return {
+    outcome: outcome === 'busy' ? 'busy' : 'failed',
+    ...(typeof reason === 'string' ? { reason } : {}),
+    ...(runId === undefined ? {} : { runId }),
+  }
+}
+
+/** The run id a request names, when it is a plain run id. */
+function requestRunId(request: unknown): string | undefined {
+  if (!isRecord(request)) return undefined
+  const { runId } = request
+  return typeof runId === 'string' &&
+    RUN_ID.test(runId) &&
+    !runId.endsWith('.tmp')
+    ? runId
+    : undefined
 }
 
 // ── begin ───────────────────────────────────────────────────────────────────
@@ -846,6 +971,7 @@ function scanProject(
       root: inventory.mainRoot,
       key: projectKey(inventory.mainRoot),
       entry,
+      ...readRepoIdentity(inventory.mainRoot),
       files: inventory.files.length,
       citationsUnsupported: report.unsupported,
       citationsChecked: report.citations.length,
@@ -1028,6 +1154,8 @@ interface RunSetup {
   readonly holder: HolderChoice
   readonly lock: LockHandle
   readonly reclaimed: LockReclaim | undefined
+  /** The marker of the CI run, when the workflow wrote one. */
+  readonly ciMarker: string | undefined
 }
 
 function prunedCounts(
@@ -1182,6 +1310,28 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
     )
     writeWorkFile(workDir, 'files.tsv', fingerprintIndex(snapshot.projects))
     writeWorkFile(workDir, 'rules.tsv', rulesOverview(rules, offer))
+    if (setup.ciMarker !== undefined) {
+      const recorded = writeInvocationRecord(
+        root,
+        {
+          version: 1,
+          marker: setup.ciMarker,
+          phase: 'begun',
+          runId,
+          projects: invocationProjects(snapshot.projects),
+        },
+        deps.invocationHooks,
+      )
+      if (recorded === 'failed') {
+        return releaseAndFail(
+          'begin',
+          lock,
+          root,
+          runId,
+          'invocation-write-failed',
+        )
+      }
+    }
     return beginResponse(setup, snapshot, scans, workDir, limits)
   } catch {
     return releaseAndFail('begin', lock, root, runId, 'internal-error')
@@ -1224,6 +1374,24 @@ function selectProjects(
 }
 
 function begin(request: unknown, deps: HelperDeps): HelperResult {
+  const ciMarker = ciRunMarker(deps)
+  const result = beginRun(request, deps, ciMarker)
+  // A consent request is a question, not an end: the same call comes again.
+  if (
+    ciMarker === undefined ||
+    result.ok ||
+    result.body.outcome === 'consent-required'
+  ) {
+    return result
+  }
+  return endInvocation(ciMarker, result, endOfFailure(result), deps)
+}
+
+function beginRun(
+  request: unknown,
+  deps: HelperDeps,
+  ciMarker: string | undefined,
+): HelperResult {
   const parsed = parseBeginRequest(request)
   if (parsed === undefined) return failure('begin', 'invalid-request')
 
@@ -1291,6 +1459,7 @@ function begin(request: unknown, deps: HelperDeps): HelperResult {
     holder,
     lock: acquired.lock,
     reclaimed: acquired.reclaimed,
+    ciMarker,
   }
   try {
     return indexRun(setup, deps)
@@ -1818,6 +1987,26 @@ function refuseValidate(request: unknown, deps: HelperDeps): HelperResult {
 }
 
 function validate(request: unknown, deps: HelperDeps): HelperResult {
+  const ciMarker = ciRunMarker(deps)
+  const result = validateRun(request, deps)
+  // A failure that released the lock ended the run; one that did not leaves
+  // the lock to its holder, and the run is still going.
+  if (
+    ciMarker === undefined ||
+    result.ok ||
+    result.body.lockReleased !== true
+  ) {
+    return result
+  }
+  return endInvocation(
+    ciMarker,
+    result,
+    endOfFailure(result, requestRunId(request)),
+    deps,
+  )
+}
+
+function validateRun(request: unknown, deps: HelperDeps): HelperResult {
   const parsed = parseValidateRequest(request)
   if (parsed === undefined) return refuseValidate(request, deps)
   const root = resolveStateRoot(
@@ -1948,6 +2137,8 @@ function runRecord(
       name: project.name,
       root: project.root,
       key: project.key,
+      ...(project.repo === undefined ? {} : { repo: project.repo }),
+      ...(project.commit === undefined ? {} : { commit: project.commit }),
       files: project.files,
       citationsUnsupported: project.citationsUnsupported,
       citationsChecked: project.citationsChecked,
@@ -2036,6 +2227,7 @@ function commitRun(
   handle: LockHandle,
   root: string,
   deps: HelperDeps,
+  ciMarker: string | undefined,
 ): HelperResult {
   const degradeReasons = [...state.degradeReasons]
   const outcome = degradeReasons.length > 0 ? 'degraded' : 'complete'
@@ -2107,6 +2299,21 @@ function commitRun(
   removeWorkDir(root, snapshot.runId)
   const finalOutcome = ledgerWritten ? outcome : 'degraded'
   const digestPath = path.join(published.runDir, 'digest.md')
+  // The run is committed and the lock is gone, so this is the last write. If
+  // it fails, the begun record stays and reads as a run with no final line.
+  const recorded =
+    ciMarker === undefined
+      ? 'written'
+      : writeTerminal(
+          root,
+          ciMarker,
+          {
+            outcome: finalOutcome,
+            runId: snapshot.runId,
+            projects: invocationProjects(snapshot.projects),
+          },
+          deps,
+        )
   return success('publish', {
     outcome: finalOutcome,
     finalLine: `Connect ${finalOutcome}`,
@@ -2116,6 +2323,7 @@ function commitRun(
     runRecordPath: path.join(published.runDir, 'run.json'),
     ledger: published.ledger,
     ...(recordsCurrent ? {} : { runRecordCurrent: false }),
+    ...(recorded === 'written' ? {} : { invocationRecord: 'unwritten' }),
     lockReleased: released === 'released',
     degradeReasons,
     candidates: state.accepted.length,
@@ -2129,6 +2337,33 @@ function commitRun(
 }
 
 function publish(request: unknown, deps: HelperDeps): HelperResult {
+  const ciMarker = ciRunMarker(deps)
+  const result = publishRunOp(request, deps, ciMarker)
+  if (ciMarker === undefined) return result
+  const runId = requestRunId(request)
+  // A published run recorded itself. An abort is the one other way to end a
+  // run well; a failure that released the lock ended it badly. A failure that
+  // did not release the lock leaves the lock, and the run, to its holder.
+  if (result.ok) {
+    return result.body.outcome === 'aborted'
+      ? endInvocation(
+          ciMarker,
+          result,
+          { outcome: 'failed', reason: 'aborted', runId },
+          deps,
+        )
+      : result
+  }
+  return result.body.lockReleased === true
+    ? endInvocation(ciMarker, result, endOfFailure(result, runId), deps)
+    : result
+}
+
+function publishRunOp(
+  request: unknown,
+  deps: HelperDeps,
+  ciMarker: string | undefined,
+): HelperResult {
   const parsed = parseRunRequest(request)
   if (parsed === undefined) return failure('publish', 'invalid-request')
   const root = resolveStateRoot(
@@ -2161,7 +2396,7 @@ function publish(request: unknown, deps: HelperDeps): HelperResult {
         'not-validated',
       )
     }
-    return commitRun(snapshot, state, handle, root, deps)
+    return commitRun(snapshot, state, handle, root, deps, ciMarker)
   } catch {
     return releaseAndFail(
       'publish',

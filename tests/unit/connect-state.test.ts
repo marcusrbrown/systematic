@@ -6,12 +6,15 @@ import {
   acquireLock,
   type CandidateRecord,
   type CandidateStanding,
+  CI_RUN_FILE,
   candidateIdentity,
   classifyCandidate,
   clearLedger,
   decideLedgerEntry,
   forceUnlock,
   HOLDERLESS_LOCK_MAX_AGE_MS,
+  INVOCATION_FILE,
+  type InvocationRecord,
   type LockHandle,
   type LockOptions,
   type LockResult,
@@ -23,9 +26,12 @@ import {
   pruneRuns,
   publishRun,
   RUN_RETENTION_MS,
+  readCiRunMarker,
+  readInvocationRecord,
   readLedger,
   releaseLock,
   rewriteRunFiles,
+  writeInvocationRecord,
 } from '../../src/lib/connect-state.js'
 import { cleanupTempDirs, makeDir } from './git-worktree-fixtures'
 
@@ -210,13 +216,31 @@ describe('state root', () => {
     })
   })
 
-  it('refuses a root under a directory that holds .git', () => {
+  it('refuses a root under a directory that holds a repository', () => {
     const base = makeDir('connect-state-')
     fs.mkdirSync(path.join(base, '.git'))
+    fs.writeFileSync(path.join(base, '.git', 'HEAD'), 'ref: refs/heads/main\n')
     expect(
       prepareStateRoot(path.join(base, 'state'), { allowedRoots: [] }),
     ).toEqual({ status: 'refused', reason: 'checkout' })
     expect(fs.existsSync(path.join(base, 'state'))).toBe(false)
+  })
+
+  it('refuses a root under a directory that holds a .git file', () => {
+    const base = makeDir('connect-state-')
+    fs.writeFileSync(path.join(base, '.git'), 'gitdir: /elsewhere\n')
+    expect(
+      prepareStateRoot(path.join(base, 'state'), { allowedRoots: [] }),
+    ).toEqual({ status: 'refused', reason: 'checkout' })
+  })
+
+  it('accepts a root under a directory whose .git directory is empty or holds no HEAD', () => {
+    const base = makeDir('connect-state-')
+    fs.mkdirSync(path.join(base, '.git'))
+    const root = path.join(base, 'ws', 'state')
+    const result = prepareStateRoot(root, { allowedRoots: [] })
+    expect(result.status).toBe('ok')
+    expect(fs.existsSync(path.join(root, 'runs'))).toBe(true)
   })
 
   it('refuses a root that is an allowed root or sits inside one', () => {
@@ -1627,5 +1651,239 @@ describe('rewriteRunFiles', () => {
     expect(rewriteRunFiles(s.root, lock, 'run-1', { 'digest.md': 'x' })).toBe(
       'failed',
     )
+  })
+})
+
+describe('readCiRunMarker', () => {
+  function rootWith(content?: string | Buffer): string {
+    const root = newRoot()
+    if (content !== undefined) {
+      fs.writeFileSync(path.join(root, CI_RUN_FILE), content)
+    }
+    return root
+  }
+
+  const valid = (marker: string): string =>
+    JSON.stringify({ version: 1, marker })
+
+  it('names the file the workflow writes', () => {
+    expect(CI_RUN_FILE).toBe('ci-run.json')
+  })
+
+  it('reads the marker from a well-formed file', () => {
+    expect(readCiRunMarker(rootWith(valid('123456789-2')))).toBe('123456789-2')
+  })
+
+  it('treats a missing file, a missing root and a root that is not a directory as no CI run, and creates nothing', () => {
+    expect(readCiRunMarker(rootWith())).toBeUndefined()
+    const missing = path.join(makeDir('connect-state-ci-'), 'nowhere')
+    expect(readCiRunMarker(missing)).toBeUndefined()
+    expect(fs.existsSync(missing)).toBe(false)
+    const file = path.join(makeDir('connect-state-ci-'), 'file')
+    fs.writeFileSync(file, valid('1-1'))
+    expect(readCiRunMarker(file)).toBeUndefined()
+  })
+
+  it.each([
+    ['not json', '{ nope'],
+    ['an array', '[]'],
+    ['null', 'null'],
+    ['no marker', '{"version":1}'],
+    ['a numeric marker', '{"version":1,"marker":12}'],
+    ['version 2', '{"version":2,"marker":"1-1"}'],
+    ['no version', '{"marker":"1-1"}'],
+    ['an extra key', '{"version":1,"marker":"1-1","extra":true}'],
+    ['an empty marker', '{"version":1,"marker":""}'],
+    ['a marker with a space', '{"version":1,"marker":"1 1"}'],
+    ['a marker with a slash', '{"version":1,"marker":"../1"}'],
+    ['a marker with a newline', '{"version":1,"marker":"1\\n1"}'],
+    [
+      'a 65-character marker',
+      JSON.stringify({ version: 1, marker: 'a'.repeat(65) }),
+    ],
+    ['an empty file', ''],
+  ])('treats %s as no CI run without throwing', (_name, content) => {
+    expect(readCiRunMarker(rootWith(content))).toBeUndefined()
+  })
+
+  it('accepts a 64-character marker', () => {
+    expect(readCiRunMarker(rootWith(valid('a'.repeat(64))))).toBe(
+      'a'.repeat(64),
+    )
+  })
+
+  it('treats a file over the size cap as no CI run', () => {
+    const padded = `${valid('1-1')}${' '.repeat(5000)}`
+    expect(readCiRunMarker(rootWith(padded))).toBeUndefined()
+  })
+
+  it('does not follow a symlink for the file, or a symlink for the root', () => {
+    const root = rootWith()
+    const real = path.join(makeDir('connect-state-ci-real-'), 'real.json')
+    fs.writeFileSync(real, valid('9-9'))
+    fs.symlinkSync(real, path.join(root, CI_RUN_FILE))
+    expect(readCiRunMarker(root)).toBeUndefined()
+
+    const realRoot = rootWith(valid('8-8'))
+    const link = path.join(makeDir('connect-state-ci-link-'), 'state')
+    fs.symlinkSync(realRoot, link)
+    expect(readCiRunMarker(link)).toBeUndefined()
+  })
+
+  it('treats a directory in place of the file as no CI run', () => {
+    const root = rootWith()
+    fs.mkdirSync(path.join(root, CI_RUN_FILE))
+    expect(readCiRunMarker(root)).toBeUndefined()
+  })
+})
+
+describe('the invocation record', () => {
+  const begun: InvocationRecord = {
+    version: 1,
+    marker: '42-1',
+    phase: 'begun',
+    runId: 'run-1',
+    projects: [
+      {
+        key: 'a1b2c3d4e5f6',
+        name: 'alpha',
+        repo: 'o/alpha',
+        commit: 'a'.repeat(40),
+      },
+      { key: '0123456789ab', name: 'beta' },
+    ],
+  }
+  const terminal: InvocationRecord = {
+    version: 1,
+    marker: '42-1',
+    phase: 'terminal',
+    outcome: 'degraded',
+    finalLine: 'Connect degraded',
+    reason: 'unmatched-entry',
+    runId: 'run-1',
+    projects: begun.phase === 'begun' ? begun.projects : [],
+  }
+
+  function leftovers(root: string): string[] {
+    return fs.readdirSync(root).filter((name) => name.includes('.tmp-'))
+  }
+
+  it('names the file the workflow reads', () => {
+    expect(INVOCATION_FILE).toBe('invocation.json')
+  })
+
+  it('writes a record owner-only and reads the same record back', () => {
+    const root = newRoot()
+    expect(writeInvocationRecord(root, begun)).toBe('written')
+    const file = path.join(root, INVOCATION_FILE)
+    expect(mode(file)).toBe(0o600)
+    expect(readInvocationRecord(root)).toEqual(begun)
+    expect(leftovers(root)).toEqual([])
+    expect(writeInvocationRecord(root, terminal)).toBe('written')
+    expect(readInvocationRecord(root)).toEqual(terminal)
+  })
+
+  it('keeps the previous record when the write fails', () => {
+    const root = newRoot()
+    writeInvocationRecord(root, begun)
+    const before = fs.readFileSync(path.join(root, INVOCATION_FILE), 'utf8')
+    const result = writeInvocationRecord(root, terminal, {
+      beforeWrite: () => {
+        throw new Error('disk full')
+      },
+    })
+    expect(result).toBe('failed')
+    expect(fs.readFileSync(path.join(root, INVOCATION_FILE), 'utf8')).toBe(
+      before,
+    )
+    expect(leftovers(root)).toEqual([])
+  })
+
+  it('replaces a symlink at the record path instead of writing through it', () => {
+    const root = newRoot()
+    const victim = path.join(makeDir('connect-state-victim-'), 'victim.txt')
+    fs.writeFileSync(victim, 'keep\n')
+    fs.symlinkSync(victim, path.join(root, INVOCATION_FILE))
+    expect(writeInvocationRecord(root, begun)).toBe('written')
+    expect(fs.readFileSync(victim, 'utf8')).toBe('keep\n')
+    expect(readInvocationRecord(root)).toEqual(begun)
+  })
+
+  it('writes named fields only', () => {
+    const root = newRoot()
+    const sneaky = {
+      ...begun,
+      token: 'ghp_x',
+      projects: [{ ...(begun.projects[0] ?? {}), root: '/secret' }],
+    }
+    expect(
+      writeInvocationRecord(root, sneaky as unknown as InvocationRecord),
+    ).toBe('written')
+    const text = fs.readFileSync(path.join(root, INVOCATION_FILE), 'utf8')
+    expect(text).not.toContain('ghp_x')
+    expect(text).not.toContain('/secret')
+  })
+
+  it.each([
+    ['a bad marker', { ...begun, marker: 'a b' }],
+    ['a bad version', { ...begun, version: 2 }],
+    ['a bad phase', { ...begun, phase: 'middle' }],
+    ['a bad run id', { ...begun, runId: '../x' }],
+    ['a bad project key', { ...begun, projects: [{ key: 'xyz', name: 'a' }] }],
+    [
+      'a bad repo',
+      {
+        ...begun,
+        projects: [{ key: 'a1b2c3d4e5f6', name: 'a', repo: 'no-slash' }],
+      },
+    ],
+    [
+      'a bad commit',
+      {
+        ...begun,
+        projects: [{ key: 'a1b2c3d4e5f6', name: 'a', commit: 'zz' }],
+      },
+    ],
+    ['a terminal record with a bad outcome', { ...terminal, outcome: 'great' }],
+    [
+      'a terminal record with a control character in the reason',
+      { ...terminal, reason: 'bad\nreason' },
+    ],
+  ])('refuses %s and writes nothing', (_name, record) => {
+    const root = newRoot()
+    expect(
+      writeInvocationRecord(root, record as unknown as InvocationRecord),
+    ).toBe('failed')
+    expect(fs.existsSync(path.join(root, INVOCATION_FILE))).toBe(false)
+    expect(leftovers(root)).toEqual([])
+  })
+
+  it('fails without throwing when the root cannot be written', () => {
+    const missing = path.join(makeDir('connect-state-inv-'), 'nowhere')
+    expect(writeInvocationRecord(missing, begun)).toBe('failed')
+  })
+
+  it.each([
+    ['not json', '{ nope'],
+    ['an array', '[]'],
+    ['an unknown phase', '{"version":1,"marker":"1-1","phase":"x"}'],
+    [
+      'a begun record without a run id',
+      '{"version":1,"marker":"1-1","phase":"begun","projects":[]}',
+    ],
+  ])('reads %s as no record', (_name, content) => {
+    const root = newRoot()
+    fs.writeFileSync(path.join(root, INVOCATION_FILE), content)
+    expect(readInvocationRecord(root)).toBeUndefined()
+  })
+
+  it('reads a missing file, and a file over the cap, as no record', () => {
+    const root = newRoot()
+    expect(readInvocationRecord(root)).toBeUndefined()
+    fs.writeFileSync(
+      path.join(root, INVOCATION_FILE),
+      `${JSON.stringify(begun)}${' '.repeat(2 * 1024 * 1024)}`,
+    )
+    expect(readInvocationRecord(root)).toBeUndefined()
   })
 })

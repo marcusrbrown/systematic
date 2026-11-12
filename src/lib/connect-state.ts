@@ -13,6 +13,8 @@
  *     runs/<id>/            a published run
  *     runs/<id>.tmp/        a run being staged
  *     ledger.json           the ledger
+ *     ci-run.json           written by a CI workflow before the run: its marker
+ *     invocation.json       written by the helper on a CI run: marker, phase, outcome
  *
  * Staging and publishing: a run is built in `runs/<id>.tmp/` and the rename to
  * `runs/<id>/` is the commit. The ledger is rewritten after it, with a
@@ -38,7 +40,11 @@ import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { type ContainerRefusal, containerRefusal } from './connect-config.js'
+import {
+  type ContainerRefusal,
+  containerRefusal,
+  MAX_ALLOW_PROJECTS,
+} from './connect-config.js'
 import { readContainedFile } from './connect-evidence.js'
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -1623,6 +1629,214 @@ export function readRunRecord(root: string, runId: string): unknown {
   if (read.kind === 'refused') return undefined
   try {
     return JSON.parse(read.bytes.toString('utf8'))
+  } catch {
+    return undefined
+  }
+}
+
+// ── Invocation record ───────────────────────────────────────────────────────
+
+/** Written by a CI workflow into the state root before the run; its marker tags the invocation record. */
+export const CI_RUN_FILE = 'ci-run.json'
+
+/** Written by the helper on every path of a CI run from `begin` onward. */
+export const INVOCATION_FILE = 'invocation.json'
+
+export interface InvocationProject {
+  readonly key: string
+  readonly name: string
+  readonly repo?: string
+  readonly commit?: string
+}
+
+export type InvocationRecord =
+  | {
+      readonly version: 1
+      readonly marker: string
+      readonly phase: 'begun'
+      readonly runId: string
+      readonly projects: readonly InvocationProject[]
+    }
+  | {
+      readonly version: 1
+      readonly marker: string
+      readonly phase: 'terminal'
+      readonly outcome: 'complete' | 'degraded' | 'busy' | 'failed'
+      readonly finalLine: string
+      readonly reason?: string
+      readonly runId?: string
+      readonly projects?: readonly InvocationProject[]
+    }
+
+export interface InvocationWriteOptions {
+  /** Runs before the write. A test seam: throwing here is a failed write that leaves the previous file. */
+  readonly beforeWrite?: (record: InvocationRecord) => void
+}
+
+const MAX_CI_RUN_BYTES = 1024
+const MAX_INVOCATION_BYTES = 1024 * 1024
+const MAX_INVOCATION_NAME_LENGTH = 200
+const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+const REPO_SLUG = /^[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9._-]{1,100}$/
+const INVOCATION_OUTCOMES: readonly InvocationOutcome[] = [
+  'complete',
+  'degraded',
+  'busy',
+  'failed',
+]
+
+type InvocationOutcome = 'complete' | 'degraded' | 'busy' | 'failed'
+
+function isInvocationOutcome(value: unknown): value is InvocationOutcome {
+  return (INVOCATION_OUTCOMES as readonly unknown[]).includes(value)
+}
+
+/**
+ * The marker a CI workflow wrote to `ci-run.json` in the state root, or
+ * nothing. The file must be exactly `{"version":1,"marker":"<name>"}` and small;
+ * a root or file that is a symlink, a missing root or file, and every other
+ * shape or read failure mean no CI run. Creates nothing and never throws.
+ */
+export function readCiRunMarker(root: string): string | undefined {
+  try {
+    const stat = lstatMaybe(root)
+    if (stat === undefined || !stat.isDirectory()) return undefined
+    const read = readContainedFile(root, CI_RUN_FILE, {
+      maxBytes: MAX_CI_RUN_BYTES,
+    })
+    if (read.kind === 'refused') return undefined
+    const value: unknown = JSON.parse(read.bytes.toString('utf8'))
+    if (!isRecord(value) || Object.keys(value).length !== 2) return undefined
+    const { version, marker } = value
+    return version === 1 && typeof marker === 'string' && SAFE_NAME.test(marker)
+      ? marker
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function optionalMatch(value: unknown, pattern: RegExp): boolean {
+  return (
+    value === undefined || (typeof value === 'string' && pattern.test(value))
+  )
+}
+
+function parseInvocationProject(item: unknown): InvocationProject | undefined {
+  if (!isRecord(item)) return undefined
+  const { key, name, repo, commit } = item
+  if (!isProjectKey(key) || !plainText(name, MAX_INVOCATION_NAME_LENGTH)) {
+    return undefined
+  }
+  if (!optionalMatch(repo, REPO_SLUG) || !optionalMatch(commit, OBJECT_ID)) {
+    return undefined
+  }
+  return {
+    key,
+    name,
+    ...(typeof repo === 'string' ? { repo } : {}),
+    ...(typeof commit === 'string' ? { commit } : {}),
+  }
+}
+
+function parseInvocationProjects(
+  value: unknown,
+): InvocationProject[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_ALLOW_PROJECTS) {
+    return undefined
+  }
+  const projects: InvocationProject[] = []
+  for (const item of value as unknown[]) {
+    const project = parseInvocationProject(item)
+    if (project === undefined) return undefined
+    projects.push(project)
+  }
+  return projects
+}
+
+type TerminalInvocation = Extract<InvocationRecord, { phase: 'terminal' }>
+
+function parseTerminal(
+  value: Record<string, unknown>,
+  marker: string,
+  runId: string | undefined,
+  projects: InvocationProject[] | undefined,
+): TerminalInvocation | undefined {
+  const { outcome, finalLine, reason } = value
+  if (!isInvocationOutcome(outcome) || finalLine !== `Connect ${outcome}`) {
+    return undefined
+  }
+  if (reason !== undefined && !plainText(reason, MAX_REASON_LENGTH)) {
+    return undefined
+  }
+  return {
+    version: 1,
+    marker,
+    phase: 'terminal',
+    outcome,
+    finalLine,
+    ...(reason === undefined ? {} : { reason }),
+    ...(runId === undefined ? {} : { runId }),
+    ...(projects === undefined ? {} : { projects }),
+  }
+}
+
+/** The record with named fields only, or nothing when any field is out of shape. */
+function parseInvocation(value: unknown): InvocationRecord | undefined {
+  if (!isRecord(value) || value.version !== 1) return undefined
+  const { marker, phase, runId } = value
+  if (typeof marker !== 'string' || !SAFE_NAME.test(marker)) return undefined
+  if (runId !== undefined && !(typeof runId === 'string' && isRunId(runId))) {
+    return undefined
+  }
+  const projects =
+    value.projects === undefined
+      ? undefined
+      : parseInvocationProjects(value.projects)
+  if (value.projects !== undefined && projects === undefined) return undefined
+  if (phase === 'terminal') return parseTerminal(value, marker, runId, projects)
+  if (phase !== 'begun') return undefined
+  if (runId === undefined || projects === undefined) return undefined
+  return { version: 1, marker, phase, runId, projects }
+}
+
+/**
+ * Replace `invocation.json` with a temporary file and a rename, owner-only.
+ * Only named fields are written, so a field outside the record never reaches
+ * the file. A record out of shape, a root that is not a real directory and any
+ * write failure are `failed`, and the previous file is left as it was.
+ */
+export function writeInvocationRecord(
+  root: string,
+  record: InvocationRecord,
+  options: InvocationWriteOptions = {},
+): 'written' | 'failed' {
+  try {
+    const clean = parseInvocation(record)
+    if (clean === undefined) return 'failed'
+    options.beforeWrite?.(clean)
+    const stat = lstatMaybe(root)
+    if (stat === undefined || !stat.isDirectory()) return 'failed'
+    writeFileAtomic(
+      path.join(root, INVOCATION_FILE),
+      `${JSON.stringify(clean, null, 2)}\n`,
+    )
+    return 'written'
+  } catch {
+    return 'failed'
+  }
+}
+
+/** The invocation record, or nothing when it is missing, oversize, not a regular file or out of shape. */
+export function readInvocationRecord(
+  root: string,
+): InvocationRecord | undefined {
+  try {
+    const read = readContainedFile(root, INVOCATION_FILE, {
+      maxBytes: MAX_INVOCATION_BYTES,
+    })
+    if (read.kind === 'refused') return undefined
+    return parseInvocation(JSON.parse(read.bytes.toString('utf8')))
   } catch {
     return undefined
   }

@@ -285,11 +285,29 @@ function isInside(child: string, parent: string): boolean {
   )
 }
 
-/** Whether `dir` or any ancestor holds a `.git` entry of any kind. */
+/**
+ * Whether a `.git` entry at `target` marks a checkout: a regular file (a
+ * gitdir pointer), or a directory that holds a `HEAD`. A directory with no
+ * `HEAD` is not a repository (an agent action may leave an empty one in its
+ * workspace). A symlink, any other entry type, and an entry that cannot be
+ * inspected count, because they cannot be shown not to be a checkout.
+ */
+function isGitEntry(target: string): boolean {
+  let stat: fs.Stats
+  try {
+    stat = fs.lstatSync(target)
+  } catch (error) {
+    const code = errorCode(error)
+    return code !== 'ENOENT' && code !== 'ENOTDIR'
+  }
+  return stat.isDirectory() ? entryExists(path.join(target, 'HEAD')) : true
+}
+
+/** Whether `dir` or any ancestor holds a `.git` entry that marks a checkout. */
 function insideCheckout(dir: string): boolean {
   let current = dir
   for (;;) {
-    if (entryExists(path.join(current, '.git'))) return true
+    if (isGitEntry(path.join(current, '.git'))) return true
     const parent = path.dirname(current)
     if (parent === current) return false
     current = parent
@@ -299,8 +317,8 @@ function insideCheckout(dir: string): boolean {
 /**
  * Why `dir` may not hold configuration or state, or `undefined` when it may.
  * A directory is refused when it is, or sits inside, an allowed root
- * (`allowed-root`), or when it or any ancestor holds a `.git` entry
- * (`checkout`). A repository is untrusted input, so what it holds must not
+ * (`allowed-root`), or when it or any ancestor holds a `.git` file, a `.git`
+ * symlink or a `.git` directory with a `HEAD` (`checkout`). A repository is untrusted input, so what it holds must not
  * steer what the helper reads or where it writes. Both sides are compared as
  * realpaths when they exist.
  */

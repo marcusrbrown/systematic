@@ -637,6 +637,40 @@ describe('loadConnectAllowList: custom config directory containment', () => {
     expect(load.customDirRefused).toBeUndefined()
   })
 
+  it('accepts a custom directory below a directory that holds only an empty .git directory', () => {
+    const dirs = setupDirs()
+    const base = makeDir('connect-custom-emptygit-')
+    fs.mkdirSync(path.join(base, '.git'))
+    const customDir = path.join(base, 'cfg')
+    writeConfig(customDir, 'systematic.json', {
+      connect: { allow_projects: ['/work/from-custom'] },
+    })
+    const load = loadConnectAllowList(optionsFor(dirs, customDir))
+    expect(load.allowProjects).toEqual(['/work/from-custom'])
+    expect(load.customDirRefused).toBeUndefined()
+  })
+
+  it('refuses a custom directory below a .git directory that holds a HEAD, and below a .git file', () => {
+    const dirs = setupDirs()
+    for (const make of [
+      (git: string) => {
+        fs.mkdirSync(git)
+        fs.writeFileSync(path.join(git, 'HEAD'), 'ref: refs/heads/main\n')
+      },
+      (git: string) => fs.writeFileSync(git, 'gitdir: /elsewhere\n'),
+    ]) {
+      const base = makeDir('connect-custom-realgit-')
+      make(path.join(base, '.git'))
+      const customDir = path.join(base, 'cfg')
+      writeConfig(customDir, 'systematic.json', {
+        connect: { allow_projects: ['/work/from-custom'] },
+      })
+      const load = loadConnectAllowList(optionsFor(dirs, customDir))
+      expect(load.allowProjects).toEqual([])
+      expect(load.customDirRefused).toBe('checkout')
+    }
+  })
+
   it('does not refuse a custom directory that is the user directory', () => {
     const dirs = setupDirs()
     fs.mkdirSync(path.join(dirs.home, '.git'))
@@ -671,6 +705,82 @@ describe('containerRefusal', () => {
 
   it('returns undefined for a plain directory outside any checkout', () => {
     expect(containerRefusal(makeDir('connect-plain-'), [])).toBeUndefined()
+  })
+})
+
+describe('containerRefusal: which .git entries make a checkout', () => {
+  /** A directory with a `.git` entry made by `make`, and a state directory below it. */
+  function below(make: (gitPath: string, base: string) => void): string {
+    const base = makeDir('connect-gitkind-')
+    make(path.join(base, '.git'), base)
+    const state = path.join(base, 'ws', 'state')
+    fs.mkdirSync(state, { recursive: true })
+    return state
+  }
+
+  it('does not count an empty .git directory', () => {
+    const state = below((git) => fs.mkdirSync(git))
+    expect(containerRefusal(state, [])).toBeUndefined()
+  })
+
+  it('does not count a .git directory that holds no HEAD', () => {
+    const state = below((git) => {
+      fs.mkdirSync(path.join(git, 'refs'), { recursive: true })
+      fs.writeFileSync(path.join(git, 'config'), '[core]\n')
+    })
+    expect(containerRefusal(state, [])).toBeUndefined()
+  })
+
+  it('does not count an empty .git directory in the directory itself', () => {
+    const base = makeDir('connect-gitkind-')
+    fs.mkdirSync(path.join(base, '.git'))
+    expect(containerRefusal(base, [])).toBeUndefined()
+  })
+
+  it('counts a .git directory that holds a HEAD', () => {
+    const state = below((git) => {
+      fs.mkdirSync(git)
+      fs.writeFileSync(path.join(git, 'HEAD'), 'ref: refs/heads/main\n')
+    })
+    expect(containerRefusal(state, [])).toBe('checkout')
+  })
+
+  it('counts a .git file that points at a git directory', () => {
+    const state = below((git, base) => {
+      fs.writeFileSync(git, `gitdir: ${path.join(base, 'elsewhere')}\n`)
+    })
+    expect(containerRefusal(state, [])).toBe('checkout')
+  })
+
+  it('counts a .git symlink, whether it leads to an empty directory or nowhere', () => {
+    const toEmpty = below((git, base) => {
+      fs.mkdirSync(path.join(base, 'empty'))
+      fs.symlinkSync(path.join(base, 'empty'), git)
+    })
+    expect(containerRefusal(toEmpty, [])).toBe('checkout')
+    const dangling = below((git, base) => {
+      fs.symlinkSync(path.join(base, 'nowhere'), git)
+    })
+    expect(containerRefusal(dangling, [])).toBe('checkout')
+  })
+
+  it('still refuses when a real repository encloses a directory with an empty .git', () => {
+    const repo = createRepo()
+    const inner = path.join(repo.work, 'ws')
+    fs.mkdirSync(path.join(inner, '.git'), { recursive: true })
+    expect(containerRefusal(path.join(inner, 'state'), [])).toBe('checkout')
+  })
+
+  it('treats an allow entry below a directory with an empty .git as no repository, not a nested one', () => {
+    const base = makeDir('connect-gitkind-')
+    fs.mkdirSync(path.join(base, '.git'))
+    const entry = path.join(base, 'plain')
+    fs.mkdirSync(entry)
+    expect(resolveAllowEntry(entry, {})).toEqual({
+      status: 'unmatched',
+      entry,
+      reason: 'not-a-repository',
+    })
   })
 })
 

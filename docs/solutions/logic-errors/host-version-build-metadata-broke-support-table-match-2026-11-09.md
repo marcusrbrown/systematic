@@ -29,7 +29,7 @@ tags:
 ## Symptoms
 
 - `checkHostSupport('opencode-v1', '1.19.5+harness.bf7f7dfe')` returned `{ supported: false, reason: 'unlisted' }` against a table listing `1.19.5`.
-- Headless `begin` replied `unsupported-host` with `hostSupport: "unlisted"` (`src/ce-connect-helper.ts:912-928`, `gateHost`). Interactive mode returned `consent-required` and a warning that the tool limits "have not been verified".
+- Headless `begin` replied `unsupported-host` with `hostSupport: "unlisted"` (`src/ce-connect-helper.ts:1044-1075`, `gateHost`). Interactive mode returned `consent-required` and a warning that the tool limits "have not been verified".
 - A headless run on the real host passed anyway, because the model stripped the suffix on its own. The check was passing by luck, not by design.
 
 ## What Didn't Work
@@ -41,7 +41,7 @@ Two traps to avoid, not recorded attempts:
 
 ## Solution
 
-Normalize in the helper, on both sides of the comparison. `normalizeVersion` trims, drops one leading `v`, cuts everything from the first `+`, and returns `undefined` when nothing is left (`src/lib/connect-config.ts:696-708`). `checkHostSupport` normalizes the observed version and each table row's version before comparing (`src/lib/connect-config.ts:715-732`).
+Normalize in the helper, on both sides of the comparison. `normalizeVersion` trims, drops one leading `v`, cuts everything from the first `+`, and returns `undefined` when nothing is left (`src/lib/connect-config.ts:716-728`). `checkHostSupport` normalizes the observed version and each table row's version before comparing (`src/lib/connect-config.ts:730-752`).
 
 ```ts
 // Before (strict match on the printed string):

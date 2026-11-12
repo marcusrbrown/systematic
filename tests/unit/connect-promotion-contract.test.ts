@@ -449,6 +449,31 @@ describe('ce:compound candidate input: the contract it reads', () => {
   })
 })
 
+describe('the run record gains the portable identity without a new schema version', () => {
+  const recordProducer = helperSource.slice(
+    helperSource.indexOf('function runRecord'),
+    helperSource.indexOf('function abortRun'),
+  )
+  const projectEntry = recordProducer.slice(
+    recordProducer.indexOf('projects: snapshot.projects.map'),
+    recordProducer.indexOf('unmatched: snapshot.unmatched'),
+  )
+
+  test('the run record stays at schema version 1', () => {
+    expect(recordProducer).toMatch(/schemaVersion: 1,\s+runId: snapshot\.runId/)
+  })
+
+  test('each project entry carries repo and commit only when they are known', () => {
+    expect(projectEntry).toMatch(/project\.repo === undefined/)
+    expect(projectEntry).toMatch(/project\.commit === undefined/)
+  })
+
+  test('the consumer reads the candidate block and does not depend on the new fields', () => {
+    expect(candidateInputText).toMatch(/`candidateBlock`/)
+    expect(candidateInputText).not.toMatch(/`repo`|`commit`/)
+  })
+})
+
 describe('ce:compound candidate input: rules that do not bend', () => {
   const rules = `${candidateSection}\n${candidateInputText}`
 

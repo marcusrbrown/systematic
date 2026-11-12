@@ -17,7 +17,11 @@ import {
   projectName,
   ruleIdFor,
 } from '../../src/lib/connect-helper-core.js'
-import type { ProcessTable } from '../../src/lib/connect-state.js'
+import {
+  CI_RUN_FILE,
+  INVOCATION_FILE,
+  type ProcessTable,
+} from '../../src/lib/connect-state.js'
 import { cleanupTempDirs, git, makeDir } from './git-worktree-fixtures'
 
 afterEach(cleanupTempDirs)
@@ -2650,5 +2654,555 @@ describe('a validate request that cannot be used', () => {
     )
     expect(wrongNonce.reason).toBe('lock-mismatch')
     expect(wrongNonce.lockReleased).toBe(false)
+  })
+})
+
+// ── The invocation record of a CI run ──────────────────────────────────────
+
+describe('the invocation record of a CI run', () => {
+  const MARKER = '9001-1'
+  const SECRET = 'ghp_secrettoken'
+  const FUTURE_RUN = '29990101T000000Z-deadbeef'
+
+  /** A world whose projects have GitHub origins, a stale newer run directory, and a CI run file. */
+  function ciWorld(options: WorldOptions = {}, marker = MARKER): World {
+    const world = buildWorld(options)
+    git(world.source, [
+      'remote',
+      'add',
+      'origin',
+      `https://user:${SECRET}@github.com/Org/Source.git`,
+    ])
+    git(world.target, ['remote', 'add', 'origin', 'git@github.com:org/target'])
+    fs.mkdirSync(path.join(world.stateRoot, 'runs', FUTURE_RUN), {
+      recursive: true,
+      mode: 0o700,
+    })
+    fs.writeFileSync(
+      path.join(world.stateRoot, 'runs', FUTURE_RUN, 'run.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        runId: FUTURE_RUN,
+        outcome: 'complete',
+      }),
+    )
+    armCi(world, marker)
+    return world
+  }
+
+  function armCi(world: World, marker: string): void {
+    fs.mkdirSync(world.stateRoot, { recursive: true, mode: 0o700 })
+    fs.writeFileSync(
+      path.join(world.stateRoot, CI_RUN_FILE),
+      JSON.stringify({ version: 1, marker }),
+    )
+  }
+
+  function invocation(world: World): Json | undefined {
+    const file = path.join(world.stateRoot, INVOCATION_FILE)
+    return fs.existsSync(file)
+      ? (JSON.parse(fs.readFileSync(file, 'utf8')) as Json)
+      : undefined
+  }
+
+  function head(project: string): string {
+    return git(project, ['rev-parse', 'HEAD'])
+  }
+
+  function projectsOf(world: World): Json[] {
+    return [
+      {
+        key: projectKey(world.source),
+        name: projectName(world.source),
+        repo: 'org/source',
+        commit: head(world.source),
+      },
+      {
+        key: projectKey(world.target),
+        name: projectName(world.target),
+        repo: 'org/target',
+        commit: head(world.target),
+      },
+    ].sort((a, b) => String(a.key).localeCompare(String(b.key)))
+  }
+
+  function sorted(projects: unknown): Json[] {
+    return [...(projects as Json[])].sort((a, b) =>
+      String(a.key).localeCompare(String(b.key)),
+    )
+  }
+
+  /** Every file the state root holds, except the two the CI run adds and the stale run. */
+  function otherFiles(world: World): string[] {
+    return Object.keys(snapshotTree(world.stateRoot))
+      .filter(
+        (name) =>
+          name !== CI_RUN_FILE &&
+          name !== INVOCATION_FILE &&
+          !name.startsWith(path.join('runs', FUTURE_RUN)),
+      )
+      .sort()
+  }
+
+  describe('a run that publishes', () => {
+    it('leaves a terminal complete record with this run and its projects, whatever else is in runs/', () => {
+      const world = ciWorld()
+      const { run, published } = fullRun(world, [])
+
+      expect(published.outcome).toBe('complete')
+      const record = invocation(world)
+      expect(record).toMatchObject({
+        version: 1,
+        marker: MARKER,
+        phase: 'terminal',
+        outcome: 'complete',
+        finalLine: 'Connect complete',
+        runId: run.runId,
+      })
+      expect(run.runId).not.toBe(FUTURE_RUN)
+      expect(sorted(record?.projects)).toEqual(projectsOf(world))
+      expect(mode(path.join(world.stateRoot, INVOCATION_FILE))).toBe(0o600)
+    })
+
+    it('leaves a terminal degraded record for a degraded run', () => {
+      const world = ciWorld({
+        allow: (source, target) => [source, target, '/nonexistent/gone'],
+      })
+      const { run, published } = fullRun(world, [])
+
+      expect(published.outcome).toBe('degraded')
+      expect(invocation(world)).toMatchObject({
+        marker: MARKER,
+        phase: 'terminal',
+        outcome: 'degraded',
+        finalLine: 'Connect degraded',
+        runId: run.runId,
+      })
+    })
+
+    it('leaves a terminal degraded record when the ledger cannot be written after the commit', () => {
+      const holder: { world?: World } = {}
+      const world = ciWorld({
+        deps: {
+          publishHooks: {
+            // A directory where the ledger file goes: the rename over it fails.
+            afterCommit: () => {
+              fs.mkdirSync(
+                path.join(holder.world?.stateRoot ?? '', 'ledger.json', 'x'),
+                { recursive: true },
+              )
+            },
+          },
+        },
+      })
+      holder.world = world
+      const { published } = fullRun(world, [])
+
+      expect(published.outcome).toBe('degraded')
+      expect(invocation(world)).toMatchObject({
+        phase: 'terminal',
+        outcome: 'degraded',
+        finalLine: 'Connect degraded',
+      })
+    })
+  })
+
+  describe('a run that has begun', () => {
+    it('leaves a begun record with the run id and the projects, and no terminal record', () => {
+      const world = ciWorld()
+      const run = start(world)
+
+      expect(invocation(world)).toMatchObject({
+        version: 1,
+        marker: MARKER,
+        phase: 'begun',
+        runId: run.runId,
+      })
+      expect(sorted(invocation(world)?.projects)).toEqual(projectsOf(world))
+      expect(invocation(world)).not.toHaveProperty('outcome')
+    })
+
+    it('replaces an older invocation record that carries another marker', () => {
+      const world = ciWorld({}, '1-1')
+      const first = start(world)
+      publish(world, first, { abort: true })
+      armCi(world, '2-1')
+      const second = start(world)
+
+      expect(invocation(world)).toMatchObject({
+        marker: '2-1',
+        phase: 'begun',
+        runId: second.runId,
+      })
+    })
+  })
+
+  describe('a run that ends without a publish', () => {
+    it('records the abort as a terminal failed record and keeps the projects', () => {
+      const world = ciWorld()
+      const run = start(world)
+      const aborted = ok(publish(world, run, { abort: true }))
+
+      expect(aborted.finalLine).toBe('Connect failed')
+      const record = invocation(world)
+      expect(record).toMatchObject({
+        marker: MARKER,
+        phase: 'terminal',
+        outcome: 'failed',
+        finalLine: 'Connect failed',
+        reason: 'aborted',
+        runId: run.runId,
+      })
+      expect(sorted(record?.projects)).toEqual(projectsOf(world))
+    })
+
+    it('takes no projects from a begun record that belongs to another run', () => {
+      const world = ciWorld()
+      const run = start(world)
+      const otherRun = '20200101T000000Z-deadbeef'
+      ok(
+        runHelperOp(
+          'publish',
+          { runId: otherRun, lock: run.lock, abort: true },
+          world.deps,
+        ),
+      )
+
+      const record = invocation(world)
+      expect(record).toMatchObject({
+        phase: 'terminal',
+        outcome: 'failed',
+        runId: otherRun,
+      })
+      expect(record).not.toHaveProperty('projects')
+    })
+
+    it('records a validate failure that released the lock as a terminal failed record', () => {
+      const world = ciWorld()
+      const run = start(world)
+      const body = failed(
+        runHelperOp(
+          'validate',
+          { runId: run.runId, lock: run.lock, batches: 'not-a-list' },
+          world.deps,
+        ),
+      )
+
+      expect(body.lockReleased).toBe(true)
+      expect(invocation(world)).toMatchObject({
+        phase: 'terminal',
+        outcome: 'failed',
+        reason: 'invalid-request',
+        runId: run.runId,
+      })
+    })
+
+    it('leaves the begun record when a publish fails and the lock was not released', () => {
+      const world = ciWorld()
+      const run = start(world)
+      const body = failed(
+        runHelperOp(
+          'publish',
+          {
+            runId: run.runId,
+            lock: { nonce: 'ffffffff-ffff', pid: run.lock.pid },
+          },
+          world.deps,
+        ),
+      )
+
+      expect(body.reason).toBe('lock-mismatch')
+      expect(invocation(world)).toMatchObject({
+        phase: 'begun',
+        runId: run.runId,
+      })
+    })
+  })
+
+  describe('a run that never reaches the lock', () => {
+    it('records busy as a terminal record and writes nothing else', () => {
+      const world = ciWorld({}, 'first-1')
+      const holder = start(world)
+      armCi(world, 'second-1')
+      const before = otherFiles(world)
+
+      const body = failed(begin(world))
+
+      expect(body.outcome).toBe('busy')
+      expect(invocation(world)).toEqual({
+        version: 1,
+        marker: 'second-1',
+        phase: 'terminal',
+        outcome: 'busy',
+        finalLine: 'Connect busy',
+        reason: body.reason,
+      })
+      expect(otherFiles(world)).toEqual(before)
+      // The holder's own lock is untouched.
+      ok(publish(world, holder, { abort: true }))
+    })
+
+    it('records an unsupported host as a terminal failed record with no lock and no run', () => {
+      const world = ciWorld()
+      const body = failed(
+        begin(world, { host: 'mystery-host', version: '1.0.0' }),
+      )
+
+      expect(body.reason).toBe('unsupported-host')
+      expect(invocation(world)).toEqual({
+        version: 1,
+        marker: MARKER,
+        phase: 'terminal',
+        outcome: 'failed',
+        finalLine: 'Connect failed',
+        reason: 'unsupported-host',
+      })
+      expect(otherFiles(world)).toEqual([])
+      expect(fs.existsSync(path.join(world.stateRoot, 'lock'))).toBe(false)
+    })
+
+    it('records a selection refusal as a terminal failed record with no lock and no other file', () => {
+      const world = ciWorld()
+      const body = failed(begin(world, { selection: ['group:nope'] }))
+
+      expect(body.reason).toBe('unknown-group')
+      expect(invocation(world)).toEqual({
+        version: 1,
+        marker: MARKER,
+        phase: 'terminal',
+        outcome: 'failed',
+        finalLine: 'Connect failed',
+        reason: 'unknown-group',
+      })
+      expect(otherFiles(world)).toEqual([])
+    })
+
+    it('records a conflicting selection and an unreadable request', () => {
+      const world = ciWorld({
+        groups: (source, target) => ({ a: [source], b: [target] }),
+      })
+      expect(
+        failed(begin(world, { selection: ['group:a', 'group:b'] })).reason,
+      ).toBe('conflicting-selection')
+      expect(invocation(world)).toMatchObject({
+        phase: 'terminal',
+        reason: 'conflicting-selection',
+      })
+      expect(failed(begin(world, { selection: 'group:a' })).reason).toBe(
+        'invalid-request',
+      )
+      expect(invocation(world)).toMatchObject({
+        phase: 'terminal',
+        reason: 'invalid-request',
+      })
+    })
+
+    it('writes no record while an interactive host is only asked for consent', () => {
+      const world = ciWorld()
+      const asked = failed(
+        begin(world, {
+          host: 'mystery-host',
+          version: '1.0.0',
+          mode: 'interactive',
+        }),
+      )
+      expect(asked.outcome).toBe('consent-required')
+      expect(invocation(world)).toBeUndefined()
+    })
+  })
+
+  describe('when the record cannot be written', () => {
+    const hooks = (phase: string) => ({
+      invocationHooks: {
+        beforeWrite: (record: { phase: string }) => {
+          if (record.phase === phase) throw new Error('disk full')
+        },
+      },
+    })
+
+    it('says so and keeps the begun record when the terminal write fails after the publish rename', () => {
+      const world = ciWorld()
+      const run = start(world)
+      const file = writeBatch(
+        run.workDir,
+        'batch-1.json',
+        batchJson(world, run.runId),
+      )
+      ok(validate(world, run, [file]))
+
+      const published = ok(
+        runHelperOp(
+          'publish',
+          { runId: run.runId, lock: run.lock },
+          { ...world.deps, ...hooks('terminal') },
+        ),
+      )
+
+      expect(published.outcome).toBe('complete')
+      expect(fs.existsSync(published.runRecordPath as string)).toBe(true)
+      expect(published.invocationRecord).toBe('unwritten')
+      expect(invocation(world)).toMatchObject({
+        phase: 'begun',
+        runId: run.runId,
+      })
+    })
+
+    it('fails the begin and releases the lock when the begun record cannot be written, and records the failure', () => {
+      const world = ciWorld()
+      const body = failed(
+        runHelperOp(
+          'begin',
+          { host: 'opencode-v2', version: '9999.0.0', mode: 'headless' },
+          { ...world.deps, ...hooks('begun') },
+        ),
+      )
+
+      expect(body.reason).toBe('invocation-write-failed')
+      expect(body).not.toHaveProperty('invocationRecord')
+      expect(invocation(world)).toMatchObject({
+        marker: MARKER,
+        phase: 'terminal',
+        outcome: 'failed',
+        reason: 'invocation-write-failed',
+      })
+      expect(fs.existsSync(path.join(world.stateRoot, 'lock'))).toBe(false)
+      expect(otherFiles(world)).toEqual([])
+      expect(start(world).body.status).toBe('begun')
+    })
+
+    it('says so when a refusal cannot be recorded', () => {
+      const world = ciWorld()
+      const body = failed(
+        runHelperOp(
+          'begin',
+          {
+            host: 'opencode-v2',
+            version: '9999.0.0',
+            mode: 'headless',
+            selection: ['group:nope'],
+          },
+          {
+            ...world.deps,
+            invocationHooks: {
+              beforeWrite: () => {
+                throw new Error('disk full')
+              },
+            },
+          },
+        ),
+      )
+
+      expect(body.reason).toBe('unknown-group')
+      expect(body.invocationRecord).toBe('unwritten')
+      expect(invocation(world)).toBeUndefined()
+    })
+  })
+
+  describe('a run with no usable CI run file', () => {
+    it('writes no record for any kind of run when the file is absent', () => {
+      const run = (world: World) => {
+        fs.rmSync(path.join(world.stateRoot, CI_RUN_FILE))
+        return world
+      }
+      const complete = run(ciWorld())
+      fullRun(complete, [])
+      const aborted = run(ciWorld())
+      publish(aborted, start(aborted), { abort: true })
+      const unsupported = run(ciWorld())
+      failed(begin(unsupported, { host: 'mystery-host', version: '1' }))
+      const refused = run(ciWorld())
+      failed(begin(refused, { selection: ['group:nope'] }))
+      const busyWorld = run(ciWorld())
+      start(busyWorld)
+      failed(begin(busyWorld))
+
+      for (const world of [
+        complete,
+        aborted,
+        unsupported,
+        refused,
+        busyWorld,
+      ]) {
+        expect(invocation(world)).toBeUndefined()
+      }
+    })
+
+    it('leaves a local refusal with the state root untouched', () => {
+      const world = buildWorld()
+      failed(begin(world, { selection: ['group:nope'] }))
+      failed(begin(world, { host: 'mystery-host', version: '1.0.0' }))
+      expect(fs.existsSync(world.stateRoot)).toBe(false)
+    })
+
+    it.each([
+      ['not json', '{ nope'],
+      ['an unknown version', '{"version":2,"marker":"1-1"}'],
+      ['an extra key', '{"version":1,"marker":"1-1","extra":1}'],
+      ['a marker with a space', '{"version":1,"marker":"1 1"}'],
+      ['an empty file', ''],
+    ])(
+      'treats a CI run file with %s as absent and runs as a local run',
+      (_name, content) => {
+        const world = ciWorld()
+        fs.writeFileSync(path.join(world.stateRoot, CI_RUN_FILE), content)
+        const { run, published } = fullRun(world, [])
+
+        expect(published.outcome).toBe('complete')
+        expect(run.runId).toBeTruthy()
+        expect(invocation(world)).toBeUndefined()
+      },
+    )
+
+    it('treats a CI run file that is a symlink as absent', () => {
+      const world = ciWorld()
+      const real = path.join(realTemp('connect-ops-ci-real-'), 'ci.json')
+      fs.writeFileSync(real, JSON.stringify({ version: 1, marker: '5-5' }))
+      fs.rmSync(path.join(world.stateRoot, CI_RUN_FILE))
+      fs.symlinkSync(real, path.join(world.stateRoot, CI_RUN_FILE))
+      start(world)
+      expect(invocation(world)).toBeUndefined()
+    })
+  })
+
+  describe('the portable identity in the run record', () => {
+    it('writes repo and commit for a clone with a GitHub origin', () => {
+      const world = ciWorld()
+      const { published } = fullRun(world, [])
+      const record = readRunRecord(published)
+      const byRoot = new Map(
+        (record.projects as Json[]).map((project) => [project.root, project]),
+      )
+
+      expect(byRoot.get(world.source)).toMatchObject({
+        repo: 'org/source',
+        commit: head(world.source),
+      })
+      expect(byRoot.get(world.target)).toMatchObject({
+        repo: 'org/target',
+        commit: head(world.target),
+      })
+      expect(record.schemaVersion).toBe(1)
+    })
+
+    it('omits both fields for a project with no GitHub origin', () => {
+      const world = buildWorld()
+      const { published } = fullRun(world, [])
+      for (const project of readRunRecord(published).projects as Json[]) {
+        expect(project).not.toHaveProperty('repo')
+        expect(project.commit).toBe(head(project.root as string))
+      }
+    })
+
+    it('puts no part of a remote credential into any state file', () => {
+      const world = ciWorld()
+      fullRun(world, [])
+      const files = Object.keys(snapshotTree(world.stateRoot))
+      expect(files.length).toBeGreaterThan(0)
+      for (const name of files) {
+        const text = fs.readFileSync(path.join(world.stateRoot, name), 'utf8')
+        expect(text).not.toContain(SECRET)
+        expect(text).not.toContain('user:')
+      }
+    })
   })
 })
