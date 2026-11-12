@@ -21,7 +21,7 @@ Delivery A (units U1-U7) is product code, shipped in one Systematic release:
 
 Delivery B (units U8-U10) is the workflow. `.github/workflows/connect.yaml` runs one headless slice daily over public repositories named in a repository variable. It keeps its ledger in an Actions cache and posts one rotating report issue per UTC date. The operator settles candidates with Promoted and Rejected boxes. Delivery B pins `systematic-version` to the release that ships Delivery A, and a manual dispatch proves it. The model-provider credential reaches only the action step, and no job screens text for secret values; the remaining exposure is documented.
 
-U0 is a spike that runs during Delivery A. It proves on a real runner that the `fro-bot/agent` action can run `ce:connect` under the planned layout. A failed spike is a stop-and-ask point, because the fallback is a change in another repository.
+U0 was a spike that ran during Delivery A. It exercised the `fro-bot/agent` action on a real runner and settled the layout (under the real `$GITHUB_WORKSPACE`), the route for the CI run marker (a file, not an environment variable), the credential inputs the action needs, and the checkout rule that U4 relaxes. Two findings, the post-action read of the resolved projects and the leftovers of a busy or aborted run, move to the first manual dispatch in U10.
 
 The plan depth is Deep: it crosses config, a bundled helper, a ledger format, a skill, a workflow with credentials, and a public write.
 
@@ -59,7 +59,7 @@ The origin defines R1-R21 and AE1-AE12. This plan covers all of them. Short form
 | R6 | Rotation, coverage and sweep progress kept per selection; a narrow run never covers the full list | U3 |
 | R7 | Digest and run record name the selection | U2, U3 |
 | R8 | Daily cron and manual dispatch; one run at a time | U8 |
-| R9 | Projects from `FRO_BOT_CONNECT_PROJECTS`; default-branch checkouts; runner-local allow list; headless run with no selection | U0, U8 |
+| R9 | Projects from `FRO_BOT_CONNECT_PROJECTS`; default-branch checkouts under the real workspace; runner-local allow list; headless run with no selection; a non-repository `.git` directory in the workspace does not refuse the state root | U0, U4, U8 |
 | R10 | Researcher model and variant from variables, written as a runner-local overlay; model required | U0, U8 |
 | R11 | Every listed repository is public | U8, U9 |
 | R12 | Configuration failures fail red before anything is read, post nothing, keep the previous report open | U8, U9 |
@@ -68,7 +68,7 @@ The origin defines R1-R21 and AE1-AE12. This plan covers all of them. Short form
 | R15 | Two boxes per candidate; ticks from the newest open report recorded before the run, idempotently, separate from any local ledger | U6, U8, U9 |
 | R16 | Every open CI candidate is listed, oldest first, until settled; hidden ones are counted; new ones are marked; each carries a fetch line for its originating run | U6, U8 |
 | R17 | One report per date; title cannot match the Fro Bot rule; same-date rerun rewrites in place; the previous report closes only after the write | U8, U9 |
-| R18 | Every outcome from `begin` onward is posted as itself, read from the invocation record; failed or no-final-line runs turn the job red | U4, U8, U9 |
+| R18 | Every outcome from `begin` onward is posted as itself, read from the invocation record (written only when the workflow's run-marker file is present and valid); failed or no-final-line runs turn the job red | U4, U8, U9 |
 | R19 | Inert report: decisions only from generated checkbox lines with ids; model text fenced; mentions and references neutralised; artifact read, never interpolated; hand-off artifacts carry an allowlist of connect files, never host state | U6, U8, U9 |
 | R20 | `fetch:<run>` downloads the record, maps projects by `owner/repo`, re-verifies fingerprints, prints the usual local lines, refuses changed candidates by name | U4, U5 |
 | R21 | The connections guide covers groups, picks, the workflow setup, the cache, the report, `fetch`, the public-only rule and the remaining credential exposure | U7, U10 |
@@ -154,9 +154,17 @@ Facts about `fro-bot/agent` at commit `f15b238b6` of its default branch, from th
 
 - Required inputs are `github-token` (presence only, no scope check) and `auth-json`. `systematic-version` defaults to 3.32.3 and must be an exact x.y.z. `response-mode: none` suppresses delivery.
 - Schedule and dispatch runs get the `provision` credential mode: `GH_TOKEN` is exported to later steps and `gh auth login` writes the token to a file the model can read. A read-only token probably works (live check); presetting `git user.name` and `user.email` avoids an identity lookup.
-- The action's v2 config sets `external_directory: deny`, allows only paths it controls, and strips any `permission`, `permissions` or `tools` an operator sets. An `external_directory` allow for the state directory cannot be passed through, so every connect path must sit inside the working directory (live check).
+- The action's v2 config sets `external_directory: deny`, allows only paths it controls, and strips any `permission`, `permissions` or `tools` an operator sets. An `external_directory` allow for the state directory cannot be passed through, so every connect path must sit inside the working directory. Live result: the action has no working-directory input, so that directory is the real `$GITHUB_WORKSPACE`, and the layout lives there.
 - The action runs stock OpenCode v2 2.2.6 pinned per platform digest, which matches a `HOST_SUPPORT_TABLE` row. The child process keeps `HOME` and `XDG_*`. Connect state lives at `$XDG_STATE_HOME/systematic/connect`.
 - No action output carries the final assistant text. A failed run calls `setFailed`; a deadline exits 130. A green step does not mean `Connect complete`.
+- Live findings from U0, on action v0.139.1:
+  - The action skips `push` events and draft pull requests. Overriding `GITHUB_EVENT_NAME`, `GITHUB_EVENT_PATH` or `GITHUB_WORKSPACE` in step env has no effect on it.
+  - `auth-json` alone fails provider authentication. The `opencode-config` input (from the `OPENCODE_CONFIG` secret) is also required.
+  - The action runs on the job token with `contents: read` and `issues: read`. Only its label calls return 403, which is harmless.
+  - Variables exported through `$GITHUB_ENV` reach the agent's shell (`XDG_STATE_HOME` did). Step-level `env:` does not.
+  - `XDG_CONFIG_HOME` is `/home/runner/.config` and `OPENCODE_CONFIG_DIR` is unset. A runner-local `systematic.jsonc` in that config directory was read.
+  - The action creates a non-repository `.git` directory in its workspace during the run. It is absent before the action step and present after.
+  - On pull-request events the action restores its repository-scoped session cache and continues an existing session, framing the prompt as a pull-request review.
 - Actions: use `actions/cache/restore` and `actions/cache/save`; keys are immutable, so use a unique key and restore by prefix; schedule runs use the default branch's cache scope; eviction after 7 days of no use is a default and storage pressure can evict sooner. `gh run download --repo O/R --name N` needs `actions:read`; a same-run `download-artifact` does not. `concurrency` accepts `queue: max` with `cancel-in-progress: false`.
 
 ### Related Past Work
@@ -311,23 +319,26 @@ Facts about `fro-bot/agent` at commit `f15b238b6` of its default branch, from th
   - Every body embeds a manifest marker, `<!-- connect-manifest:<sha256 prefix> -->`. The op writes the manifest of ids it rendered into a small store keyed by that hash and keeps the last 14. It never replaces an older manifest, so a post that fails leaves the visible report and its manifest still matched.
   - The body cap is 60,000 characters. Above it, the oldest open candidates are shown with their boxes, so hidden ones drain as visible ones are settled, followed by a count of the hidden open candidates, which stay open. A block is never cut in the middle.
   - The body also carries the outcome, degrade reasons, the sweep line, the selection, a "ledger reset" notice when no cache was restored, and one `fetch` line per originating run (`/ce:connect fetch:<run>`), so a carried candidate stays promotable. "New" means first shown on that UTC date.
-- KTD11. **`.github/workflows/connect.yaml`** runs on `schedule` (daily) and on `workflow_dispatch`. Concurrency group `ce-connect-scheduled` with `queue: max` and `cancel-in-progress: false`. Top-level `permissions: {}`. Every job carries `if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)`, which restricts dispatch to the default branch and keeps the cache scope. No step interpolates an issue title, an issue body or a variable value into `run:` text; values reach scripts through `env:` or files. Four jobs, each with its own permissions:
+- KTD11. **`.github/workflows/connect.yaml`** runs on `schedule` (daily) and on `workflow_dispatch`. Those stay the only triggers: the action skips `push` events and draft pull requests. The workflow does no `actions/checkout` of this repository; runner clones of the target repositories are plain `git clone`s. Concurrency group `ce-connect-scheduled` with `queue: max` and `cancel-in-progress: false`. Top-level `permissions: {}`. Every job carries `if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)`, which restricts dispatch to the default branch and keeps the cache scope. No step interpolates an issue title, an issue body or a variable value into `run:` text; values reach scripts through `env:` or files. Four jobs, each with its own permissions:
   - **prepare** (contents read, issues read).
     - Computes the UTC date once and exposes it as a job output, shape-checked, that `render` and `post` use.
     - Validates the variables (project list shape, model set) and checks that each repo is public. An API error counts as not public. Any configuration failure fails red here with nothing posted.
-    - Restores the cache by prefix, then finds open connect reports by exact title rule and the exact author login (the login the issue API returns for an issue created with the job token; U0 records the string). Zero reports is a normal first run. When several are open, whether leftovers of a post that failed before rotation or duplicates of one date, `prepare` takes the newest by title date and, among those sharing it, the lowest issue number; `post` closes the rest after its own write. A lookup error fails.
+    - Restores the cache by prefix, then finds open connect reports by exact title rule and the exact author login `fro-bot` (the login the issue API returns for an issue created with the job token). Zero reports is a normal first run. When several are open, whether leftovers of a post that failed before rotation or duplicates of one date, `prepare` takes the newest by title date and, among those sharing it, the lowest issue number; `post` closes the rest after its own write. A lookup error fails.
     - Fetches the chosen report's body to a file, runs `apply-ticks` with the body file, the report number and the pinned package's `connect.mjs`, and uploads the hand-off artifact.
   - **run** (contents read).
-    - Downloads the hand-off artifact and lays out `$RUNNER_TEMP/connect/` with `checkouts/<owner>__<repo>`, `state/` (`XDG_STATE_HOME`) and the config directory side by side. It sets the action's working directory to that non-git parent.
-    - Writes a runner-local `systematic.jsonc` with the allow list and the researcher model overlay.
-    - Runs `fro-bot/agent` with `response-mode: none`, the job-scoped `github.token` as `github-token`, `auth-json`, the pinned `systematic-version`, `SYSTEMATIC_CONNECT_RUN_MARKER=<run_id>-<attempt>` in its environment, and the prompt "Load the ce:connect skill and run it with mode:headless".
+    - Downloads the hand-off artifact and lays out `$GITHUB_WORKSPACE/connect/` with `checkouts/<owner>__<repo>` and `state/`. The action has no working-directory input, so the real workspace is the agent's working directory and the layout must live inside it. The workflow appends `XDG_STATE_HOME=$GITHUB_WORKSPACE/connect/state` to `$GITHUB_ENV`, the route that reaches the agent's shell, and creates the state root `state/systematic/connect` owner-only.
+    - Writes a runner-local `systematic.jsonc` with the allow list and the researcher model overlay into the runner's default config directory (`OPENCODE_CONFIG_DIR` is unset).
+    - Writes `<stateRoot>/ci-run.json`, `{"version":1,"marker":"<run_id>-<attempt>"}`, before dispatch (KTD16).
+    - Runs `fro-bot/agent` with `response-mode: none`, the job-scoped `github.token` as `github-token`, `auth-json`, `opencode-config: ${{ secrets.OPENCODE_CONFIG }}`, the pinned `systematic-version`, and a prompt that names the task explicitly: load the `ce:connect` skill and run it with `mode:headless` over the allowed projects. The prompt does not read as a review of a change.
+    - The workflow does not rely on step-level `env:` to reach the agent: it does not reach the agent's shell.
     - After the action, a fixed step outside the agent reads `invocation.json` from `state/systematic/connect/` and accepts it only when its marker equals this run's (KTD16). It compares the `repo` list of the resolved projects with the allow list that was written; a mismatch fails the job red and posts nothing. It records the envelope: no matching record is preflight, phase `begun` with no terminal record is "no final line", otherwise the terminal outcome.
     - Uploads the hand-off artifact for `render` (KTD15).
   - **render** (no permissions; `if: always()` after run, when prepare succeeded).
     - Downloads the hand-off artifact and validates it as untrusted input. Then, in this order: `render-report` with the pinned package's helper (payloads, manifest and body); save the cache under a unique key `connect-v1-<run_id>-<attempt>`; if the save failed, append a fixed line to the body; compute the digest; upload the body, the manifest and the envelope as a data-only artifact with the digest, and the public `connect-run-<run_id>-<attempt>` artifact.
-    - Rechecks visibility here if U0 shows the call works under `permissions: {}`. Otherwise the recheck runs in `post`, before it writes.
+    - Makes no API call. The visibility recheck runs in `post`, before it writes (the read works on a read-only token; `render` holds no token).
   - **post** (issues write only; no checkout, no repository code; `if: always()` when render produced a body).
     - Downloads the body and verifies its digest and size.
+    - Rechecks that every listed repository is still public; any error counts as not public, and a non-public result stops the job before it writes.
     - Creates or edits the report for the UTC date output. Title `ce:connect report — YYYY-MM-DD (UTC)`, which must not match Fro Bot's title rule. Closes older connect reports and duplicates of the date only after the write is confirmed. Every step is idempotent on a rerun.
 - KTD12. **Failure matrix.** Each row has one outcome, one job result and one report effect.
 
@@ -335,7 +346,7 @@ Facts about `fro-bot/agent` at commit `f15b238b6` of its default branch, from th
   |---------|-----------|--------|
   | Configuration failure in prepare (unset model, malformed list, non-public repo, issue lookup error) | Red | Nothing posted; the previous report stays open |
   | The resolved projects in the run's record differ from the written allow list | Red | Nothing posted |
-  | The action fails before `begin` (no `invocation.json` with this run's marker) | Red | Treated as preflight; nothing posted |
+  | The action fails before `begin` (no `invocation.json` with this run's marker, including when `ci-run.json` was absent or malformed and so no record was written) | Red | Treated as preflight; nothing posted |
   | From `begin` onward: complete, degraded, busy | Green | Posted as itself |
   | From `begin` onward: failed (including an unsupported host or a refusal), or phase `begun` with no terminal record | Red | Posted as itself, naming the failure or "ended with no final line" |
   | Cache save failure | Red | A fixed line in the body says so; the body is posted |
@@ -343,12 +354,13 @@ Facts about `fro-bot/agent` at commit `f15b238b6` of its default branch, from th
   | Post failure after the write and before rotation | Red | The next run rotates |
 
 - KTD13. **Spike U0 is a stop-and-ask gate.**
-  - A temporary workflow on a spike branch, with a push trigger and real secrets, runs the action with the layout from KTD11 against the released 3.32.3, with a bare run over two public repositories.
-  - It must show all of: the working-directory layout passes `external_directory`; the read-only token is enough (with preset `git user.name` and `user.email`); the post-action step can read the resolved projects and compare them with the allow list; a busy run and an aborted run leave state the workflow can tell apart; the run marker variable reaches the helper's process. It also probes the visibility call under `permissions: {}` and the exact author login string.
-  - Pushing the spike branch needs owner approval at that moment. If a required check fails, stop and report. The fallback is a change to `fro-bot/agent`, which this repository cannot make.
+  - A temporary workflow on a spike branch, with a ready-pull-request trigger and real secrets, ran the action with the layout from KTD11 against the released 3.32.3, with a bare run over two public repositories.
+  - It showed: the layout under the real workspace passes `external_directory`; the read-only token is enough; step-level `env:` does not reach the agent's shell while variables exported through `$GITHUB_ENV` do; the visibility call works on a read-only token; the report issue author login is `fro-bot`. It also showed that the action needs `opencode-config` as well as `auth-json`, and that the action creates a non-repository `.git` directory in its workspace, which the released helper counted as a checkout.
+  - Not reached, because the run stopped at the state-root refusal: the post-action read of the resolved projects (c) and the leftovers of a busy and an aborted run (d). They are recorded in U10's first manual dispatch, before the cron is enabled.
+  - Pushing the spike branch needed owner approval at that moment. The fallback for a failed gate was a change to `fro-bot/agent`, which this repository cannot make.
 - KTD14. **Ledger and cache.** The cache holds `ledger.json`, the payload store, the manifest store (last 14), and the allowlisted `runs/<id>/run.json` and `digest.md` files, and never `lock/`. When nothing is restored, the run starts fresh and the report says so: suppression and continuity are lost, and the next prepare reports the ticks it cannot resolve.
 - KTD15. **Credentials and artifacts.**
-  - `OPENCODE_AUTH_JSON` reaches only the action step's `auth-json` input. No other job or step references it, and U9 pins that.
+  - `OPENCODE_AUTH_JSON` and `OPENCODE_CONFIG` reach only the action step, as its `auth-json` and `opencode-config` inputs. No other job or step references either, and U9 pins that. `auth-json` alone fails provider authentication, so both inputs are required.
   - The run job uses its job-scoped `github.token` with `contents: read`, which expires when the job ends.
   - No job screens report or artifact text for secret values. A screen would need the credential in a second job, and it would still not stop an agent that has its own shell and network access. A recorded project constraint also rejects keyword and entropy screens as false assurance.
   - Residual, accepted and documented: the agent step can read the provider credential and the token on the runner, and a prompt-injected parent agent with shell and network access could leak them. Nothing screens report or artifact text.
@@ -356,7 +368,7 @@ Facts about `fro-bot/agent` at commit `f15b238b6` of its default branch, from th
   - The public `connect-run-<run_id>-<attempt>` artifact is uploaded by `render` only, when the run produced a record. It holds the run record only and has a fixed, explicit retention (provisional 30 days).
 - KTD16. **The invocation record is the outcome source.**
   - The helper writes `invocation.json` in the state root on every path from `begin` onward: an argument or selection refusal, `busy`, an unsupported host, the start of the run (phase `begun`, with the resolved projects), a publish (`complete` or `degraded`) and an abort (`failed`). The write is atomic and owner-only, like other state.
-  - It is tagged with a CI run marker read from an environment variable, provisionally `SYSTEMATIC_CONNECT_RUN_MARKER`, set to `<run_id>-<attempt>`. A run without the variable writes no record, so a local run keeps today's behavior, including a refusal that writes nothing.
+  - It is tagged with a CI run marker. The workflow writes `<stateRoot>/ci-run.json`, `{"version":1,"marker":"<run_id>-<attempt>"}`, before dispatch, where `<stateRoot>` is `$XDG_STATE_HOME/systematic/connect`. The marker is a file because step-level `env:` does not reach the agent's shell. `XDG_STATE_HOME` is exported through `$GITHUB_ENV`, which does reach it, so the helper resolves the same state root. The helper reads the file with a bounded read (a regular file, never a symlink) and writes `invocation.json` only when the file is present and valid; a malformed file counts as absent. A run without a valid file writes no record, so a local run keeps today's behavior, including a refusal that writes nothing.
   - The fixed step after the action accepts the record only when its marker equals the current run's. No matching record means preflight: red, nothing posted. Phase `begun` with no terminal record means "no final line". Otherwise the terminal outcome is used. This replaces reading the newest run directory, which a stale directory could mislead.
   - The record also carries the resolved projects' identities, which is what the allow-list comparison in KTD11 reads.
 
@@ -374,15 +386,19 @@ Facts about `fro-bot/agent` at commit `f15b238b6` of its default branch, from th
 - How does the run job report the outcome, given the action exposes no final text? The helper writes `invocation.json` on every CI path, tagged with a run marker; a fixed step accepts only a record with this run's marker (KTD16).
 - How is the effective config verified? After the action, a fixed step compares the resolved projects' `repo` list in this run's record with the allow list that was written; a mismatch fails the job red and posts nothing (KTD11).
 - How does the workflow keep the action's host version and the host-support table in step? It does not duplicate the pin. The action bump is a normal Renovate action-pin PR, `begin` in headless mode refuses a host and version not in the table (posted and red), and the dispatch proof records the pair (KTD11, U10).
-- How do runner checkouts satisfy the main-root identity rule? They are plain clones under `checkouts/`, each its own main root, and the state and config directories sit beside them, outside every checkout (KTD11).
+- How do runner checkouts satisfy the main-root identity rule? They are plain clones under `checkouts/`, each its own main root, and the state directory sits beside them, outside every checkout (KTD11). The workspace itself holds a non-repository `.git` directory that the action creates; U4 stops counting such a directory as a checkout.
+- How does the CI run marker reach the helper? As a file, `<stateRoot>/ci-run.json`, written before dispatch. Step-level `env:` does not reach the agent's shell, so no environment variable carries it (KTD16).
+- How does the connect config directory reach the action's child process? The runner-local `systematic.jsonc` goes in the runner's default config directory (`XDG_CONFIG_HOME`; `OPENCODE_CONFIG_DIR` is unset), and the helper read it (U0).
+- What author login does the issue API return for an issue created with the job token, and does the visibility call work? The login is `fro-bot`, and the visibility read works on a read-only token. The recheck runs in `post` (KTD11).
+- Does the action need more than `auth-json`? Yes, `opencode-config` from the `OPENCODE_CONFIG` secret (KTD15).
 - Does the workflow screen text for secret values? No. The credential reaches only the action step, hand-off artifacts carry an allowlist of connect files, and the residual exposure is documented (KTD15).
 
 ### Deferred to Implementation
 
 - The exact checkbox line format, the id marker and the manifest marker syntax (KTD10). The guard test pins whatever U6 chooses.
-- How the connect config directory reaches the action's child process: through `OPENCODE_CONFIG_DIR` or a relocated `HOME`. U0 decides; the helper's custom layer and the plugin's default-directory write behave differently under each.
-- Whether `SYSTEMATIC_CONNECT_RUN_MARKER` reaches the helper inside the action, and the fallback if it does not (U0 finding (e); KTD16).
-- The exact author login string the issue API returns for an issue created with the job token, and whether the visibility call works under `permissions: {}` (U0 finding (f); KTD11).
+- Whether the action offers an input that scopes or disables its repository-scoped session cache. The action restores and continues an existing session; until the answer is known, the prompt names the task explicitly (U8; Risks). U8 checks the action's inputs at the pinned commit, and the first manual dispatch records whether a prior session leaked into the run.
+- What U0 findings (c) and (d) show: the post-action read of the resolved projects against the allow list, and the leftovers of a busy and an aborted run. U10's first manual dispatch records them before the cron is enabled.
+- How the cron stays off until that dispatch has recorded them. The leading option is to ship the `schedule` entry disabled and enable it in a follow-up change; U8 decides.
 - Whether `gh run view` exposes the workflow path, or the skill needs the equivalent API call (KTD8). U5 decides.
 - Whether a literal `/ce:connect` prompt expands inside the action. The plan avoids the question by prompting for the skill by name.
 - Payload-store size bounds and the per-field limits for a candidate payload (KTD10). U6 sets them against the 60,000-character body cap.
@@ -420,8 +436,8 @@ sequenceDiagram
     Prep->>Prep: validate vars, public check, UTC date, restore cache
     Prep->>Prep: find newest open report, fetch body, apply-ticks (body file + report number)
     Prep->>Run: hand-off artifact (allowlisted connect files)
-    Run->>Run: lay out checkouts/ state/ config/
-    Run->>Run: fro-bot/agent, mode:headless, run marker in env
+    Run->>Run: lay out connect/checkouts and connect/state under the workspace; write ci-run.json
+    Run->>Run: fro-bot/agent, mode:headless, XDG_STATE_HOME via GITHUB_ENV
     Run->>Run: read invocation.json by marker, compare projects to allow list
     Run->>Rend: hand-off artifact (allowlisted files + envelope)
     Rend->>Rend: validate, render-report, save cache, append cache line if failed, digest
@@ -473,7 +489,15 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 
 ### Phase 0: Gate
 
-- [ ] U0. Spike: the action runs `ce:connect` under the planned layout
+- [x] U0. Spike: the action runs `ce:connect` under the planned layout
+
+**Spike result:** Done. A bare headless run on the released 3.32.3, with `fro-bot/agent` v0.139.1 and OpenCode v2 2.2.6, settled these findings.
+- (a) Partial: the agent read `checkouts/` without denial under `external_directory: deny`, with the layout inside the real `$GITHUB_WORKSPACE`. The action has no working-directory input and ignores step-level overrides of `GITHUB_*` variables, so the layout cannot live under `$RUNNER_TEMP`.
+- (b) Pass: the action runs on the job token with `contents: read` and `issues: read`. Only its label calls return 403, which is harmless.
+- (e) Fail for step-level `env:`: the marker variable was unset in the agent's shell. Variables exported through `$GITHUB_ENV` do reach it (`XDG_STATE_HOME` did). The CI run marker therefore travels as a file (KTD16).
+- (f) Pass: the visibility read works on a read-only token, and the report issue author login is `fro-bot`.
+- Also: provider authentication fails with `auth-json` alone, so `opencode-config` is required. The action skips `push` events and draft pull requests. The config directory route is the runner's default (`XDG_CONFIG_HOME`, `OPENCODE_CONFIG_DIR` unset), and the runner-local `systematic.jsonc` was read. The action creates a non-repository `.git` directory in its workspace during the run, and the released helper then refused the state root as `state-root-refused` with detail `checkout`; U4 relaxes that rule. On pull-request events the action restores and continues an existing session from its repository-scoped session cache (see Risks).
+- (c) and (d) were not reached, because the run stopped at that refusal. They move to U10's first manual dispatch, which must record them before the cron is enabled.
 
 **Goal:** Prove on a real runner, before Delivery B is built, that `fro-bot/agent` can run a bare headless `ce:connect` over checkouts under a working directory it controls, and that the workflow can read the outcome afterwards.
 
@@ -482,28 +506,28 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 **Dependencies:** None. Runs during Delivery A. Pushing the spike branch needs owner approval at that moment.
 
 **Files:**
-- Create (spike branch only, never merged): `.github/workflows/connect-spike.yaml` with a push trigger and the real `OPENCODE_AUTH_JSON` secret
+- Create (spike branch only, never merged): `.github/workflows/connect-spike.yaml` with a ready-pull-request trigger (the action skips `push` events and draft pull requests) and the real `OPENCODE_AUTH_JSON` and `OPENCODE_CONFIG` secrets
 - Test: none. The evidence is the spike run's logs, recorded in the PR description for U8 and in `HARNESSES.md` by U10
 
 **Approach:**
-- Lay out `$RUNNER_TEMP/connect/` with `checkouts/<owner>__<repo>` for two public repositories, `state/` as `XDG_STATE_HOME`, and the config directory beside them. Set the action's working directory to the non-git parent. Use the released 3.32.3 and a bare run.
+- Lay out `$GITHUB_WORKSPACE/connect/` with `checkouts/<owner>__<repo>` for two public repositories and `state/` as `XDG_STATE_HOME`, exported through `$GITHUB_ENV`. The action has no working-directory input, so the real workspace is the working directory. Use the released 3.32.3 and a bare run.
 - Write a runner-local `systematic.jsonc` with the allow list and a researcher model overlay. Preset `git user.name` and `user.email`. Give the action the job's `github.token` with `contents: read` only.
 - Record six findings:
   - (a) the checkouts are readable under `external_directory: deny`;
   - (b) the action accepts the read-only token;
   - (c) a post-action step can read the resolved project list from the state the run left and compare it with the allow list that was written (the released 3.32.3 records roots, not `repo`, so the spike compares roots);
   - (d) the state root is findable from `state/`, and a busy run (a lock held by a live process before dispatch) and an aborted run (cut off by a short action `timeout`, or ended through the helper's abort outcome) each leave something the workflow can tell apart. The released helper writes no `invocation.json`, so this records the raw leftovers that the invocation record replaces;
-  - (e) an environment variable set on the action step reaches the helper's process. A one-line probe prompt asks the agent whether `SYSTEMATIC_CONNECT_RUN_MARKER` is set;
-  - (f) a visibility API call works under `permissions: {}`, and the exact author login that the issue API returns for an issue created with the job token (compared with what `gh issue list --json author` shows).
-- Also record: how the config directory reaches the child process (see Open Questions), whether the action overwrote the runner-local file, and the host version the action reports, against `HOST_SUPPORT_TABLE`.
+  - (e) whether an environment variable set on the action step reaches the agent's shell, probed with a one-line prompt, compared with a variable exported through `$GITHUB_ENV`;
+  - (f) a visibility API call works on a read-only token, and the exact author login that the issue API returns for an issue created with the job token.
+- Also record: how the config directory reaches the child process, whether the action overwrote the runner-local file, and the host version the action reports, against `HOST_SUPPORT_TABLE`.
 
-**Execution note:** Throwaway proof. Stop and report to the owner if any of (a)-(e) fails. A failed (f) moves the visibility recheck to `post` or changes the author match; it does not stop the work. Do not start U8 on a failed spike.
+**Execution note:** Throwaway proof, now done. Findings (c) and (d) are carried by U10's first manual dispatch; do not enable the cron before they are recorded.
 
 **Test scenarios:**
 - Test expectation: none -- a one-off live proof with no shipped code. The six findings are the pass condition.
 
 **Verification:**
-- A run on the spike branch ends with a `Connect` final line, its state lists both projects, and (a)-(f) are each recorded as pass or fail with the evidence.
+- Findings (a), (b), (e) and (f) are recorded above with their evidence; (c) and (d) are recorded by U10's first manual dispatch.
 - The spike branch and workflow are deleted after the findings are copied out.
 
 ---
@@ -656,26 +680,28 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 
 - [ ] U4. Portable project identity and the invocation record
 
-**Goal:** Record `owner/repo` and the HEAD commit for each project in `run.json`, so a CI record can be mapped to the operator's own checkouts. Write an `invocation.json` on every path of a CI run, so the workflow reads a run's outcome from the helper and not from run directories.
+**Goal:** Record `owner/repo` and the HEAD commit for each project in `run.json`, so a CI record can be mapped to the operator's own checkouts. Write an `invocation.json` on every path of a CI run, so the workflow reads a run's outcome from the helper and not from run directories. Stop treating the non-repository `.git` directory that the action creates in its workspace as a checkout, so the state root can sit inside that workspace.
 
-**Requirements:** R18, R20 (foundation)
+**Requirements:** R9, R18, R20 (foundation)
 
 **Dependencies:** U2 (the selection refusals it records and the same helper files), U3 (ordering only)
 
 **Files:**
 - Create: `src/lib/connect-repo-identity.ts` (remote and HEAD readers)
 - Modify: `src/ce-connect-helper.ts` (add `repo` and `commit` to each `run.json` project entry; write the invocation record on every path from `begin` onward)
-- Modify: `src/lib/connect-state.ts` (the atomic, owner-only invocation writer)
-- Modify: `src/lib/AGENTS.md` (new module row; changed state exports), `ARCHITECTURE.md` (new codemap entry; changed state entry), `scripts/lib/generated-surfaces.ts` (add the module to the `connect-helper` triggers)
-- Regenerate: `skills/ce-connect/scripts/connect.mjs`
-- Test: `tests/unit/connect-repo-identity.test.ts`, `tests/unit/connect-state.test.ts`, `tests/unit/ce-connect-helper-ops.test.ts`, `tests/unit/connect-promotion-contract.test.ts`
+- Modify: `src/lib/connect-config.ts` (`containerRefusal`, the one predicate behind the state-root and config-dir refusals: what counts as a checkout)
+- Modify: `src/lib/connect-state.ts` (the atomic, owner-only invocation writer; the bounded `ci-run.json` reader)
+- Modify: `src/lib/AGENTS.md` (new module row; changed state and config exports), `ARCHITECTURE.md` (new codemap entry; changed state entry), `scripts/lib/generated-surfaces.ts` (add the module to the `connect-helper` triggers)
+- Regenerate: `skills/ce-connect/scripts/connect.mjs`, and any other surface that `bun run surfaces:affected --run` lists for the `connect-config.ts` edit
+- Test: `tests/unit/connect-repo-identity.test.ts`, `tests/unit/connect-config.test.ts`, `tests/unit/connect-state.test.ts`, `tests/unit/ce-connect-helper-ops.test.ts`, `tests/unit/connect-promotion-contract.test.ts`
 
 **Approach:**
 - Read `<main root>/.git/config` through the bounded reader and take `remote "origin"`'s `url` only. Normalize the three GitHub forms in KTD7 to lowercase `owner/repo`. Any other host, an enterprise host, a malformed URL or a missing remote records no `repo`. Userinfo in a URL is dropped before anything is recorded.
 - Read `.git/HEAD`: a symbolic ref resolves through the loose ref file and then `packed-refs`; a detached HEAD is the SHA itself. A missing or unreadable value records no `commit`.
 - When `.git` is not a directory at the main root, both fields are absent. No git subprocess and no network are used.
 - The fields are additive. `run.json` stays at `schemaVersion` 1, and the promotion-contract test proves `ce:compound`'s fixture still passes.
-- The invocation record follows KTD16. It is written only when `SYSTEMATIC_CONNECT_RUN_MARKER` is set to a well-formed `<run_id>-<attempt>`; a malformed value is an `invalid-request` failure. A local run sets no marker and writes nothing new, so a local refusal still leaves no state. In a CI run the record is written at each of these points: an argument or selection refusal, `busy`, an unsupported host, the start of the run (phase `begun`, with the resolved projects), a publish that ends `complete` or `degraded`, and an abort (`failed`). Pre-lock paths prepare the state root under its usual refusal rules to write the file, take no lock and write nothing else.
+- A `.git` entry counts as a checkout for the state-root and config-dir refusal only when it is a gitdir file (a regular file), a symlink, or a directory that holds `HEAD`. An empty-looking `.git` directory, which the action creates in its workspace during the run, no longer refuses. The refusal walk still continues to ancestors, and the containment check against allowed projects is unchanged. Git itself treats a directory without `HEAD` as no repository, so no real checkout is let through.
+- The invocation record follows KTD16. It is written only when `<stateRoot>/ci-run.json` is present and valid: a regular file (not a symlink) within a small bound, exactly `{"version":1,"marker":"<run_id>-<attempt>"}` with a well-formed marker. A missing, oversize, symlinked, unparsable or otherwise malformed file counts as absent, writes no record and is not an error. A local run has no such file and writes nothing new, so a local refusal still leaves no state. The state root must already exist for the file to be read, so a state-root refusal itself leaves no record, and the workflow reads that as preflight. In a CI run the record is written at each of these points: an argument or selection refusal, `busy`, an unsupported host, the start of the run (phase `begun`, with the resolved projects), a publish that ends `complete` or `degraded`, and an abort (`failed`). Pre-lock paths prepare the state root under its usual refusal rules to write the file, take no lock and write nothing else.
 - The record carries the marker, the phase, the outcome and final line when terminal, the reason, the connect run id when a run directory exists, and the resolved projects (key, name, and `repo` and `commit` when known). The terminal write happens after the publish rename; if it fails, the answer says so, and the workflow reads `begun` with no terminal record as "no final line", which is the conservative reading.
 
 **Execution note:** Test-first. Characterize against real temporary clones for the HEAD forms, and write the stale-run-directory cases for the invocation record before the writer.
@@ -696,13 +722,19 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 - Error path: a CI run that finds the lock held leaves a terminal `busy` record and writes nothing else. A CI run on an unsupported host leaves a terminal `failed` record with the host reason. A CI run that aborts after `begin` leaves a terminal `failed` record.
 - Error path: a CI run refused for a selection (unknown group) leaves a terminal `failed` record with the refusal reason, no lock and no other file.
 - Edge case: a CI run that stops after `begin` without publish or abort leaves phase `begun` with the resolved projects and no terminal record.
-- Edge case: with no marker set, a run of each kind above writes no `invocation.json` and a local refusal leaves the state root untouched. A malformed marker is an `invalid-request` failure.
+- Edge case: with no `ci-run.json`, a run of each kind above writes no `invocation.json` and a local refusal leaves the state root untouched.
+- Edge case: a `ci-run.json` that is malformed JSON, has another `version`, has a malformed or missing `marker`, is over the bound, or is a symlink counts as absent: no record and no failure.
+- Edge case: a state root that holds only `ci-run.json` is accepted by `prepareStateRoot`.
+- Edge case (checkout rule): a state root whose ancestor holds an empty `.git` directory is accepted; the same with a `.git` directory holding `HEAD`, with a gitdir `.git` file, and with a `.git` symlink (including a dangling one) is refused as inside a checkout. The same four cases hold for the config directory.
+- Edge case: an empty `.git` directory in the workspace with a real checkout in a further ancestor is still refused.
+- Edge case: a state root inside an allowed project is still refused whatever its `.git` looks like.
 - Error path: the terminal write fails after the publish rename; the answer reports it and the record still reads `begun`.
 - Integration: a run over a real clone writes `repo` and `commit` into `run.json`; the existing promotion-contract fixture and `ce:compound`'s consumer checks still accept the record.
 
 **Verification:**
 - `run.json` for a clone with a GitHub origin carries `repo` and `commit`; one without carries neither.
-- Every CI path from `begin` onward leaves one `invocation.json` whose marker equals the run's, whatever else is in `runs/`.
+- Every CI path from `begin` onward leaves one `invocation.json` whose marker equals the run's, whatever else is in `runs/`, and only when a valid `ci-run.json` was present.
+- A state root inside a workspace that holds an empty `.git` directory is accepted, and every real checkout form is still refused.
 - No credential text from a remote URL reaches any state file. Helper drift passes.
 
 ---
@@ -862,24 +894,31 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 
 **Requirements:** R8, R9, R10, R11, R12, R13, R14, R15, R16, R17, R18, R19
 
-**Dependencies:** U0 (passed), U6, U7, and the Systematic release that ships Delivery A (the workflow pins to that exact version)
+**Dependencies:** U0 (done), U4 (the relaxed checkout rule and the `ci-run.json` reader), U6, U7, and the Systematic release that ships Delivery A (the workflow pins to that exact version)
 
 **Files:**
-- Create: `.github/workflows/connect.yaml` (all job scripts inline; no checkout of Systematic and no repository script runs in `render` or `post`)
+- Create: `.github/workflows/connect.yaml` (all job scripts inline; no `actions/checkout` of this repository in any job and no repository script runs in `render` or `post`)
 - Test: `tests/unit/connect-workflow.test.ts` (U9)
 
 **Approach:**
 - Triggers, concurrency and permissions follow KTD11: daily `schedule` at a fixed off-hour minute, `workflow_dispatch`, group `ce-connect-scheduled` with `queue: max` and `cancel-in-progress: false`, top-level `permissions: {}`, per-job permissions as listed there, and a `timeout-minutes` on each job (the run job's exceeds the action's own 30-minute default). Every job carries `if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)`, which is what restricts dispatch to the default branch.
 - One workflow-level value holds the Systematic version. The action's `systematic-version` input and the `npm install` of the helper package in `prepare` and `render` read it, so the skill the action loads and the helper that wrote the state are one version. The install uses the exact version and `--ignore-scripts`. The action is pinned by full commit SHA with a version comment, as `fro-bot.yaml` does.
-- Variables: `FRO_BOT_CONNECT_PROJECTS` (whitespace- or comma-separated `owner/repo`, shape-checked, deduplicated, bounded; provisional maximum 16), `FRO_BOT_CONNECT_MODEL` (required) and `FRO_BOT_CONNECT_VARIANT` (optional). The provider credential is the `OPENCODE_AUTH_JSON` secret already used by `fro-bot.yaml`. It is referenced once, as the action step's `auth-json` input, and nowhere else (KTD15). The run job's `github-token` is the job's own `github.token` with `contents: read`.
+- Variables: `FRO_BOT_CONNECT_PROJECTS` (whitespace- or comma-separated `owner/repo`, shape-checked, deduplicated, bounded; provisional maximum 16), `FRO_BOT_CONNECT_MODEL` (required) and `FRO_BOT_CONNECT_VARIANT` (optional). The provider credentials are the `OPENCODE_AUTH_JSON` and `OPENCODE_CONFIG` secrets. Each is referenced once, as the action step's `auth-json` and `opencode-config` input, and nowhere else (KTD15); `auth-json` alone fails provider authentication. The run job's `github-token` is the job's own `github.token` with `contents: read`.
 - No step interpolates an issue title, an issue body or a variable value into `run:` text. Values reach scripts through `env:` or files.
 - `prepare` computes the UTC date once, shape-checks it, and exposes it as a job output that `render` and `post` read. It passes the chosen report's issue number to `apply-ticks`.
-- Visibility: `prepare` checks each repository through the API and treats any error or non-public result as not public. The recheck before the write runs in `render` if U0 shows the call works under `permissions: {}`; otherwise it runs in `post`, which holds `issues: write` and no repository code, before it writes.
-- Checkouts are default-branch clones of public repositories made without credentials, placed under the layout in KTD11 and U0. The config directory reaches the action's child process by the route U0 found. The runner-local `systematic.jsonc` carries the allow list and the researcher model overlay.
+- Action behavior the workflow works around (from U0):
+  - The action skips `push` events and draft pull requests, so the triggers stay `schedule` and `workflow_dispatch` and no other trigger is added.
+  - It restores and continues an existing session from its repository-scoped session cache (see Risks), so the prompt names the task explicitly: a headless `ce:connect` run with `mode:headless` over the allowed projects, not a review of a change. U8 also checks the action's inputs at the pinned commit for one that scopes or disables the session (Open Questions).
+  - It has no working-directory input and ignores step-level overrides of `GITHUB_*` variables, so the layout is made under the real `$GITHUB_WORKSPACE`.
+  - Step-level `env:` does not reach the agent's shell. `XDG_STATE_HOME` is exported by appending to `$GITHUB_ENV`, and the run marker travels as `<stateRoot>/ci-run.json`, written before the action step (KTD16).
+  - It creates a non-repository `.git` directory in the workspace, which U4's rule no longer treats as a checkout.
+- Visibility: `prepare` checks each repository through the API and treats any error or non-public result as not public. The recheck before the write runs in `post`, which holds `issues: write` and no repository code, before it writes. The read works on a read-only token (U0).
+- Checkouts are default-branch clones of public repositories made without credentials, placed under `$GITHUB_WORKSPACE/connect/checkouts/` (KTD11 and U0). The runner-local `systematic.jsonc` is written to the runner's default config directory (`OPENCODE_CONFIG_DIR` is unset) and carries the allow list and the researcher model overlay.
+- The cron is enabled only after the first manual dispatch has recorded U0 findings (c) and (d) (U10).
 - After the action, a fixed step reads this run's `invocation.json` (KTD16), accepting it only when its marker equals `<run_id>-<attempt>`, and compares the `repo` list of its resolved projects with the allow list that was written. A mismatch fails the job red and posts nothing. No matching record means preflight; phase `begun` with no terminal record means no final line; otherwise the terminal outcome is used. The step records that as the envelope. The model overlay is not observable per run, so the U10 dispatch proof records that it took effect.
 - Artifacts follow KTD15: hand-off artifacts carry only the allowlisted connect files and set `retention-days: 1`; `render` alone uploads the public `connect-run-<run_id>-<attempt>` artifact, which holds the run record at a fixed path (U5 reads only that path) and has a fixed retention (provisional 30 days). The `fetch:<run>` argument is the GitHub run id.
 - `render` runs in the order set in KTD11: `render-report`, cache save, the cache-failure line if the save failed, the digest, then the uploads. The cache holds what KTD14 lists.
-- Report lookup and rotation are shell steps small enough to run in the U9 sandbox against a stub `gh`. A report is found by the exact title rule `ce:connect report — YYYY-MM-DD (UTC)` and the exact author login the API returns for an issue created with the job token (U0 records the string; U9 pins it), never by a search term alone. The lookup step only fetches the body to a file; `apply-ticks` parses it.
+- Report lookup and rotation are shell steps small enough to run in the U9 sandbox against a stub `gh`. A report is found by the exact title rule `ce:connect report — YYYY-MM-DD (UTC)` and the exact author login `fro-bot` (U9 pins it), never by a search term alone. The lookup step only fetches the body to a file; `apply-ticks` parses it.
 - The post job writes through the issue API by number when the date's report exists and creates it otherwise, then re-reads to confirm before closing any older connect report and any duplicate of the date. It never opens a second issue for a date.
 - Exit status follows the failure matrix (KTD12): configuration failures, a project-list mismatch and an action failure before `begin` are red with nothing posted; failed and no-final-line runs are posted and then red; cache-save failures are reported and red.
 
@@ -895,7 +934,7 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 
 **Verification:**
 - `actionlint` (or the repo's workflow lint, if any) passes on the file, and U9 passes.
-- A dry read of the file shows: no write permission outside `post`, no checkout in `render` or `post`, a default-branch guard on every job, and `OPENCODE_AUTH_JSON` referenced once, as the action step's `auth-json` input.
+- A dry read of the file shows: no write permission outside `post`, no checkout in `render` or `post`, a default-branch guard on every job, and `OPENCODE_AUTH_JSON` and `OPENCODE_CONFIG` each referenced once, as the action step's `auth-json` and `opencode-config` inputs, and no `actions/checkout` of this repository in any job.
 
 - [ ] U9. Workflow guard tests
 
@@ -910,8 +949,9 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 - Test: `tests/unit/fro-bot-workflow.test.ts` (read only; its helpers are the model)
 
 **Approach:**
-- Structure tests read the YAML and assert triggers, concurrency, top-level and per-job permissions, the default-branch guard on every job, `needs` and `if: always()` conditions, absence of checkout in `render` and `post`, the action pin form (full SHA with a version comment, and the same ref as `fro-bot.yaml` unless the files legitimately diverge, in which case the form only), the Systematic version used in all three places, artifact names and retention, variable names, and that the report title does not match Fro Bot's rule while Fro Bot's title does not match connect's.
-- Credential pins: `OPENCODE_AUTH_JSON` appears only as the action step's `auth-json` input, in no other job, step or env block. The run job's `github-token` is the job's `github.token` and its permissions are `contents: read` only.
+- Structure tests read the YAML and assert triggers, concurrency, top-level and per-job permissions, the default-branch guard on every job, `needs` and `if: always()` conditions, triggers exactly `schedule` and `workflow_dispatch` (no `push` or `pull_request`), no `actions/checkout` of this repository in any job, the action pin form (full SHA with a version comment, and the same ref as `fro-bot.yaml` unless the files legitimately diverge, in which case the form only), the Systematic version used in all three places, artifact names and retention, variable names, and that the report title does not match Fro Bot's rule while Fro Bot's title does not match connect's.
+- Credential pins: `OPENCODE_AUTH_JSON` and `OPENCODE_CONFIG` appear only as the action step's `auth-json` and `opencode-config` inputs, in no other job, step or env block. The run job's `github-token` is the job's `github.token` and its permissions are `contents: read` only.
+- Layout and marker pins: the layout is made under `$GITHUB_WORKSPACE`, never `$RUNNER_TEMP`; `XDG_STATE_HOME` is appended to `$GITHUB_ENV`; `ci-run.json` is written before the action step; no step passes the run marker through `env:`; the action prompt names the `ce:connect` task and `mode:headless` and does not describe a review.
 - Injection pins: no `run:` body contains a `${{` expression for an issue title, an issue body or a variable value; those reach scripts through `env:` or files.
 - Script tests extract each named step's script and run it in a sandbox with a stub `gh` that records calls and serves fixtures.
 - Op-level scenarios run the bundled `connect.mjs` against a temporary state directory, so the report, marker and tick format that U6 chose is the format the ops read.
@@ -931,6 +971,8 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 - Edge case: several open reports share the newest date. `prepare` picks the lowest issue number, and `post` closes the others after its write; the run does not fail.
 - Edge case: a report over the 60,000-character cap shows the hidden-count line and posts; the post step refuses a body over the cap or with a digest mismatch.
 - Edge case: the cache save fails. `render` appends the fixed cache-failure line to the body before it computes the digest; `post` posts that body and the job is red.
+- Happy path: the run job writes `ci-run.json` with the shape `{"version":1,"marker":"<run_id>-<attempt>"}` in the state root before the action step, and the fixed read step accepts only an `invocation.json` whose marker equals it.
+- Error path: a repository that was public in `prepare` is private when `post` rechecks. `post` stops before any create, edit or close, and the job is red.
 - Error path (AE6): a private repository in the list, an API error on the visibility call, an empty list, a malformed entry and an unset model each fail `prepare` red before any checkout; the stub records no post and no close.
 - Error path: an error from the issue lookup fails `prepare`.
 - Error path: after the action, the projects in this run's `invocation.json` differ from the allow list that was written. The job is red and nothing is posted.
@@ -947,7 +989,7 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 - Integration: the hand-off artifacts list only allowlisted paths and set `retention-days: 1`; the public `connect-run-<run_id>-<attempt>` artifact is uploaded by `render` only and holds the run record only.
 
 **Verification:**
-- The suite fails when a permission is widened, when `render` or `post` gains a checkout, when a job loses the default-branch guard, when the title rule drifts to match Fro Bot's, when the Systematic version differs between uses, when `OPENCODE_AUTH_JSON` is referenced anywhere but the action step's `auth-json` input, when a `${{` expression appears in a `run:` body for an issue title, an issue body or a variable value, and when a decision can be parsed from model text.
+- The suite fails when a permission is widened, when `render` or `post` gains a checkout, when a job loses the default-branch guard, when the title rule drifts to match Fro Bot's, when the Systematic version differs between uses, when `OPENCODE_AUTH_JSON` or `OPENCODE_CONFIG` is referenced anywhere but the action step's `auth-json` and `opencode-config` inputs, when the layout moves out of the workspace, when the run marker moves into step `env:`, when a `${{` expression appears in a `run:` body for an issue title, an issue body or a variable value, and when a decision can be parsed from model text.
 - `bun test tests/unit/connect-workflow.test.ts` passes without network.
 
 - [ ] U10. Delivery B documentation and live dispatch proof
@@ -956,10 +998,10 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 
 **Requirements:** R21 (Delivery B part), R9, R10, R17, R18 (proof)
 
-**Dependencies:** U8, U9, and the repository variables and secret set by the owner
+**Dependencies:** U8, U9, and the repository variables and secrets set by the owner
 
 **Files:**
-- Modify: `docs/src/content/docs/guides/cross-project-connections.mdx` (a "Scheduled runs" section: the three variables and the secret, what the cache holds and when it resets, the report and its boxes, `fetch`, the public-only rule, the pin and how to bump it, and the residual exposure)
+- Modify: `docs/src/content/docs/guides/cross-project-connections.mdx` (a "Scheduled runs" section: the three variables and the two secrets (`OPENCODE_AUTH_JSON`, `OPENCODE_CONFIG`), what the cache holds and when it resets, the report and its boxes, `fetch`, the public-only rule, the pin and how to bump it, and the residual exposure)
 - Modify: `docs/src/content/docs/privacy.mdx` (a scheduled run sends content from public repositories to the model provider and posts a public issue)
 - Modify: `ARCHITECTURE.md` (the report issue as the one unattended write, the four-job split and the artifact handoff)
 - Modify: `HARNESSES.md` (the live dispatch proof: workflow run URL, action SHA, host version the run reported, Systematic version, outcome line)
@@ -969,7 +1011,7 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 **Approach:**
 - The guide states plainly: the agent step can read the model-provider credential and the token on the runner, and the parent agent has shell and network access, so a prompt injection hidden in a public repository's text could try to leak them. Nothing screens report or artifact text for secret values. The mitigations are public-only repositories, a job-scoped read-only token, no write path to any repository, a credential that reaches only the action step, hand-off artifacts limited to connect files, and an inert report. None of them stops an agent that has its own shell and network. The guide says this is accepted and documented.
 - It also states: tick one box per candidate; ticks in a closed report are ignored; the first run after a cache eviction restarts the sweep; and each report prints a `fetch` line per run group. An expired artifact is reported as expired, and the operator can then tick Rejected or wait for the candidate to be proposed again.
-- The live proof is a manual dispatch on the default branch after merge. Record the run, the outcome line, the report issue, and a second same-day dispatch that rewrites the report in place (AE12). Record the host version and Systematic version pair beside the `HOST_SUPPORT_TABLE` row it matches.
+- The live proof is a manual dispatch on the default branch after merge, and it runs before the cron is enabled. The first dispatch must record U0 findings (c) and (d): that the post-action step reads the resolved projects from the state the run left and matches them to the allow list, and that a busy run (a lock held by a live process before dispatch) and an aborted run (cut off by a short action `timeout`) leave records the workflow tells apart through `invocation.json`. It also records whether a prior session leaked into the run (Risks) and that the `post` visibility recheck works under that job's token. Record the run, the outcome line, the report issue, and a second same-day dispatch that rewrites the report in place (AE12). Record the host version and Systematic version pair beside the `HOST_SUPPORT_TABLE` row it matches.
 - After the proof, capture the layout and credential findings from U0 and U8 with `ce:compound`.
 
 **Execution note:** none. Documentation plus a recorded manual proof.
@@ -982,13 +1024,14 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 
 **Verification:**
 - `bun scripts/content-integrity.ts`, `bunx markdownlint-cli2` and `bun run docs:build` pass.
+- The first dispatch recorded findings (c) and (d) before the cron was enabled.
 - A live dispatch ended with a `Connect` final line and a posted report; a second same-day dispatch edited that report and opened no second issue; the HARNESSES entry names the run.
 
 ---
 
 ## System-Wide Impact
 
-- **Interaction graph:** the skill's `begin` request gains a `selection` list; the helper gains the `import`, `apply-ticks` and `render-report` ops and writes an invocation record on every path of a CI run; the workflow runs the helper from the pinned package in `prepare` and `render`, and reads the invocation record in `run`. `ce:compound`, `ce:compound-refresh` and the researcher agent are unchanged.
+- **Interaction graph:** the skill's `begin` request gains a `selection` list; the helper gains the `import`, `apply-ticks` and `render-report` ops and writes an invocation record on every path of a CI run that has a valid `ci-run.json`; the workflow runs the helper from the pinned package in `prepare` and `render`, writes the run-marker file `ci-run.json` before dispatch, and reads the invocation record in `run`. `ce:compound`, `ce:compound-refresh` and the researcher agent are unchanged.
 - **Helper version coupling:** the helper that wrote the cached ledger, the skill the action loads and the helpers `prepare` and `render` run must be one version. A single workflow-level value feeds all three and U9 pins that. A Systematic release that changes ledger or record formats needs a workflow pin bump in the same or the next PR.
 - **Ledger format:** version 2 adds a coverage namespace. The first write by the new helper migrates version 1; the shipped helper reads a version-2 ledger as `ledger-unreadable` and writes nothing, so a downgrade stops safely. A CI cache restored by a helper that predates version 2 would be refused the same way, which the report would show.
 - **Error propagation:** a selection refusal and a `fetch` refusal happen before any lock or ledger write; in CI the refusal leaves only the invocation record. The workflow follows the matrix in KTD12; no failure after `begin` is silent.
@@ -1011,8 +1054,10 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 | Cache eviction or a missing cache resets the CI ledger. | The daily cadence keeps the cache warm. The report says the ledger was reset. Settled candidates can reappear once and unresolved ticks are reported. The cost is one fresh sweep. |
 | The agent step can read the provider credential and the job token, and a prompt-injected parent agent with shell and network access could leak either. Nothing screens report or artifact text for secret values. | Accepted residual, documented in the guide and privacy page (KTD15). Mitigations: public repositories only, a job-scoped read-only token that expires with the job, no write path to any repository, a credential that reaches only the action step, hand-off artifacts limited to an allowlist of connect files, and an inert report. None of these stops an agent that has its own shell and network. |
 | The report body outgrows the issue limit. | A 60,000-character cap with whole blocks only; hidden candidates stay open and are counted. |
-| A repository turns private between the check and the post. | Visibility is rechecked before the write, in `render` or, if U0 shows `render` cannot make the call, in `post`; any error counts as not public. |
-| The run marker does not reach the helper inside the action, so no invocation record matches. | U0 probes it. If it fails, the workflow places the marker where the helper reads it, or the spike fails and stops the work. A run that cannot be matched is red with nothing posted, never misreported. |
+| A repository turns private between the check and the post. | Visibility is rechecked in `post`, before the write; the read works on a read-only token, and any error counts as not public. |
+| The run marker file is missing, malformed or unreadable inside the action, so no invocation record is written. | The marker is a file in the state root, not an environment variable, because step-level `env:` does not reach the agent's shell (U0). A malformed file counts as absent, so a run that cannot be matched is red with nothing posted, never misreported. U9 pins that the file is written before the action step. |
+| The action restores and continues an existing session from its repository-scoped session cache, so a prior session's context (framed as a pull-request review) could shape a scheduled run. | The prompt names the `ce:connect` task and `mode:headless` explicitly rather than a review. U8 checks the action for an input that scopes the session, and the first manual dispatch records whether a prior session leaked in. The helper owns the outcome through `invocation.json`, so a run that goes off task is posted as failed or red, not accepted. |
+| Relaxing the checkout rule lets a state root sit inside a directory with a `.git` entry that is not a repository. | Only a gitdir file, a symlink, or a directory holding `HEAD` counts as a checkout, which matches what git itself recognizes. The containment check against allowed projects is unchanged, and U4 tests every form. |
 | The manifest for the visible report is no longer in the store (more than 14 revisions, or a cache reset). | `apply-ticks` reports every tick as unresolved and records none; the operator can tick again on the next report. |
 | A ledger migration corrupts or loses coverage. | The migration is temp-and-rename, version 1 data keeps its meaning as the `all` namespace, and any unknown version is refused untouched. |
 | A same-day dispatch races the scheduled run. | The concurrency group serializes runs with `queue: max`; the second run reads the first's ticks and rewrites the same report. |
@@ -1023,8 +1068,8 @@ Units that change exports update the existing module row in `src/lib/AGENTS.md` 
 
 ## Documentation / Operational Notes
 
-- The owner sets the repository variables `FRO_BOT_CONNECT_PROJECTS`, `FRO_BOT_CONNECT_MODEL` and optionally `FRO_BOT_CONNECT_VARIANT`. The secret `OPENCODE_AUTH_JSON` already exists. These settings and the spike-branch push need the owner's approval at the time (workflow and settings changes are Ask First).
-- Release order: merge Delivery A, release, bump the workflow pin to that exact version, merge Delivery B, dispatch once for the proof. Later Systematic releases that change ledger or record formats need a pin bump.
+- The owner sets the repository variables `FRO_BOT_CONNECT_PROJECTS`, `FRO_BOT_CONNECT_MODEL` and optionally `FRO_BOT_CONNECT_VARIANT`. The secrets `OPENCODE_AUTH_JSON` and `OPENCODE_CONFIG` already exist. These settings and the spike-branch push need the owner's approval at the time (workflow and settings changes are Ask First).
+- Release order: merge Delivery A, release, bump the workflow pin to that exact version, merge Delivery B, dispatch once for the proof. That first dispatch records U0 findings (c) and (d), and the cron is enabled only after they are recorded. Later Systematic releases that change ledger or record formats need a pin bump.
 - Rollback: disable the workflow in the repository settings. Delete the `connect-v1-` caches to reset the CI ledger. Open report issues can be closed by hand.
 - The local ledger and the CI ledger are separate. An operator who promotes locally through `fetch` still ticks Promoted in the report so the CI ledger settles the candidate.
 - Run `bun run surfaces:affected --run` then `bun run surfaces:drift` before each commit in Delivery A, and regenerate the helper after the final source edit (`registry-drift-on-skill-description-change-2026-05-20`).
