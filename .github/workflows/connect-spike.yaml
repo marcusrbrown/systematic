@@ -1,0 +1,221 @@
+---
+# THROWAWAY live spike for plan unit U0 (connect-groups-scheduled-runs).
+# Never merged: delete this branch and workflow once the findings are copied out.
+name: Connect Spike
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  spike:
+    name: spike
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # issues: write is only for finding (f): the job token must be the kind that
+    # could create an issue. The spike itself never creates one.
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      # No actions/checkout on purpose: the action's workspace must not be a git
+      # repo, and nothing in this spike needs this repository's tree.
+      - name: Lay out the connect root
+        shell: bash
+        run: |
+          set -euo pipefail
+          R="${GITHUB_WORKSPACE}"
+          mkdir -p "$R/checkouts" "$R/state" "$R/config"
+          {
+            echo "CONNECT_ROOT=$R"
+            echo "XDG_STATE_HOME=$R/state"
+          } >> "$GITHUB_ENV"
+
+          for repo in marcusrbrown/metacogs marcusrbrown/dev-like; do
+            dest="$R/checkouts/${repo/\//__}"
+            git clone --depth 1 "https://github.com/${repo}.git" "$dest"
+          done
+
+          # The parent root must not be inside any git repo.
+          if git -C "$R" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            echo "::error::$R is inside a git work tree; layout assumption broken"
+            exit 1
+          fi
+          echo "OK: $R is not inside a git repo"
+          echo "GITHUB_WORKSPACE (runner-set) = ${GITHUB_WORKSPACE}"
+          ls -la "$R" "$R/checkouts"
+
+      - name: Write runner-local config and git identity
+        shell: bash
+        env:
+          FRO_BOT_MODEL: ${{ vars.FRO_BOT_MODEL }}
+        run: |
+          set -euo pipefail
+          R="$CONNECT_ROOT"
+          mkdir -p "$HOME/.config/opencode"
+          cfg="$HOME/.config/opencode/systematic.jsonc"
+
+          jq -n \
+            --arg a "$R/checkouts/marcusrbrown__metacogs" \
+            --arg b "$R/checkouts/marcusrbrown__dev-like" \
+            --arg model "$FRO_BOT_MODEL" \
+            '{
+              connect: {allow_projects: [$a, $b]},
+              agents: {"connections-researcher": {model: $model}}
+            }' > "$cfg"
+
+          # Keep a pristine copy to diff against after the action has run.
+          cp "$cfg" "$R/config/systematic.jsonc.written"
+          echo "--- $cfg"
+          cat "$cfg"
+
+          # No fro-bot identity string lives in this repo's workflows (they resolve
+          # an App identity dynamically), so use a placeholder.
+          git config --global user.name spike
+          git config --global user.email spike@example.invalid
+          git config --global --list | grep -E '^user\.' || true
+
+      # Finding (d) busy/abort probes: none in this first pass.
+
+      # fro-bot/agent has no working-directory input. Its workspace is
+      # GITHUB_WORKSPACE (packages/runtime/src/shared/env.ts getGitHubWorkspace,
+      # falling back to process.cwd()), and `working-directory` is not valid on a
+      # `uses:` step. So this step overrides GITHUB_WORKSPACE through step env;
+      # whether the runner honors that is itself a spike finding (the appended
+      # `pwd` request in the prompt records what the agent actually saw).
+      - name: Before agent - .git ancestors
+        if: always()
+        shell: bash
+        run: |
+          d="$GITHUB_WORKSPACE/state/systematic/connect"
+          while :; do
+            if [ -e "$d/.git" ] || [ -L "$d/.git" ]; then ls -ld "$d/.git"; echo "FOUND .git at $d"; fi
+            [ "$d" = / ] && break
+            d=$(dirname "$d")
+          done
+          echo "ancestor scan done"
+
+      - name: Run the agent
+        id: agent
+        continue-on-error: true
+        uses: fro-bot/agent@dc05527ab5a54fcc142040b04c7a4ef94f84210c # v0.139.1
+        env:
+          SYSTEMATIC_CONNECT_RUN_MARKER: ${{ github.run_id }}-${{ github.run_attempt }}
+        with:
+          github-token: ${{ github.token }}
+          auth-json: ${{ secrets.OPENCODE_AUTH_JSON }}
+          model: ${{ vars.FRO_BOT_MODEL }}
+          opencode-config: ${{ secrets.OPENCODE_CONFIG }}
+          systematic-version: 3.32.3
+          response-mode: none
+          timeout: 1500000
+          prompt: >-
+            This is not a PR review; do not review anything and do not run any tools. Reply with the single word OK.
+
+      - name: After agent - .git ancestors
+        if: always()
+        shell: bash
+        run: |
+          d="$GITHUB_WORKSPACE/state/systematic/connect"
+          while :; do
+            if [ -e "$d/.git" ] || [ -L "$d/.git" ]; then ls -ld "$d/.git"; echo "FOUND .git at $d"; fi
+            [ "$d" = / ] && break
+            d=$(dirname "$d")
+          done
+          echo "ancestor scan done"
+
+      - name: Findings
+        if: always()
+        shell: bash
+        env:
+          AGENT_OUTCOME: ${{ steps.agent.outcome }}
+          AGENT_CONCLUSION: ${{ steps.agent.conclusion }}
+          AGENT_OUTPUTS: ${{ toJSON(steps.agent.outputs) }}
+        run: |
+          R="${CONNECT_ROOT:-${RUNNER_TEMP}/connect}"
+          S="${XDG_STATE_HOME:-$R/state}/systematic/connect"
+
+          echo "::group::action outcome and outputs"
+          echo "outcome=$AGENT_OUTCOME conclusion=$AGENT_CONCLUSION"
+          printf '%s\n' "$AGENT_OUTPUTS"
+          echo "::endgroup::"
+
+          echo "::group::state tree under $S"
+          if [ -d "$S" ]; then
+            find "$S" -mindepth 1 -printf '%y %s %P\n' | sort -k3
+          else
+            echo "MISSING: $S"
+            echo "--- anything else under XDG_STATE_HOME / default state dir:"
+            find "${XDG_STATE_HOME:-$R/state}" "$HOME/.local/state" -maxdepth 4 2>/dev/null | head -50
+          fi
+          echo "::endgroup::"
+
+          echo "::group::ledger.json"
+          if [ -f "$S/ledger.json" ]; then cat "$S/ledger.json"; else echo "no ledger.json"; fi
+          echo "::endgroup::"
+
+          echo "::group::run.json project roots vs allow list"
+          cfg_written="$R/config/systematic.jsonc.written"
+          jq -r '.connect.allow_projects[]' "$cfg_written" | sort -u > "$R/allow.txt" || true
+          echo "allow list (written):"; cat "$R/allow.txt"
+          : > "$R/roots.txt"
+          shopt -s nullglob
+          for f in "$S"/runs/*/run.json; do
+            echo "--- $f"
+            jq -c 'keys' "$f" || true
+            # Shape of run.json is not known to the spike, so collect every string
+            # under the connect root rather than assuming a field name.
+            jq -r --arg r "$R/checkouts" '[.. | strings | select(startswith($r))] | unique[]' "$f" >> "$R/roots.txt" || true
+          done
+          sort -u "$R/roots.txt" -o "$R/roots.txt"
+          echo "project roots found in run.json:"; cat "$R/roots.txt"
+          echo "comm (col1 = allowed but not recorded, col2 = recorded but not allowed, col3 = both):"
+          comm "$R/allow.txt" "$R/roots.txt" || true
+          echo "::endgroup::"
+
+          echo "::group::opencode version"
+          if command -v opencode >/dev/null 2>&1; then opencode --version; else echo "opencode not on PATH"; fi
+          echo "::endgroup::"
+
+          echo "::group::runner-local systematic.jsonc vs written"
+          cfg="$HOME/.config/opencode/systematic.jsonc"
+          if [ -f "$cfg" ]; then
+            if diff -u "$cfg_written" "$cfg"; then echo "UNCHANGED"; else echo "CHANGED (diff above)"; fi
+          else
+            echo "MISSING: $cfg (the action removed it)"
+          fi
+          echo "::endgroup::"
+
+          echo "::group::config dir and any systematic.json the action wrote"
+          ls -la "$HOME/.config/opencode" || true
+          if [ -f "$HOME/.config/opencode/systematic.json" ]; then
+            cat "$HOME/.config/opencode/systematic.json"
+          else
+            echo "no systematic.json"
+          fi
+          echo "::endgroup::"
+
+      - name: Visibility probes (finding f)
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "metacogs visibility:"
+          gh api repos/marcusrbrown/metacogs --jq .visibility || echo "visibility call FAILED rc=$?"
+          echo "latest issue author login via the REST API (read only, no issue created):"
+          gh api 'repos/marcusrbrown/systematic/issues?per_page=1' --jq '.[0].user.login' || echo "issues call FAILED rc=$?"
+
+      - name: Upload connect state
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: connect-spike-state
+          retention-days: 1
+          if-no-files-found: warn
+          path: |
+            ${{ github.workspace }}/state/systematic/connect/ledger.json
+            ${{ github.workspace }}/state/systematic/connect/runs/**
