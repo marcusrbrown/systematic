@@ -8,6 +8,7 @@ import {
   runConnectHelper,
   runHelperOp,
 } from '../../src/ce-connect-helper.js'
+import { decisionLine, parseReportBody } from '../../src/lib/connect-ci.js'
 import type { HostSupportRow } from '../../src/lib/connect-config.js'
 import { CONNECT_BOUNDS } from '../../src/lib/connect-evidence.js'
 import {
@@ -18,9 +19,11 @@ import {
   ruleIdFor,
 } from '../../src/lib/connect-helper-core.js'
 import {
+  acquireLock,
   CI_RUN_FILE,
   INVOCATION_FILE,
   type ProcessTable,
+  releaseLock,
 } from '../../src/lib/connect-state.js'
 import { cleanupTempDirs, git, makeDir } from './git-worktree-fixtures'
 
@@ -3292,5 +3295,373 @@ describe('the invocation record of a CI run', () => {
         expect(text).not.toContain('user:')
       }
     })
+  })
+})
+
+// ── The CI report operations at the helper entry ───────────────────────────
+
+describe('the report operations at the helper entry', () => {
+  const CONNECT_RUN = '20261112T010000Z-abcd1234'
+
+  function candidateId(index: number): string {
+    return sha256(`ci-candidate-${index}`)
+  }
+
+  /** A state root holding a ledger with open candidates, a run record and an invocation record. */
+  function reportWorld(count: number): World {
+    const world = buildWorld()
+    const runDir = path.join(world.stateRoot, 'runs', CONNECT_RUN)
+    fs.mkdirSync(runDir, { recursive: true, mode: 0o700 })
+    const numbers = Array.from({ length: count }, (_, i) => i + 1)
+    fs.writeFileSync(
+      path.join(world.stateRoot, 'ledger.json'),
+      JSON.stringify({
+        version: 2,
+        entries: numbers.map((n) => ({
+          id: candidateId(n),
+          kind: 'transferable-lesson',
+          target: world.target,
+          ruleId: world.ruleId,
+          sources: [
+            {
+              role: 'source',
+              path: `docs/solutions/lesson-${n}.md`,
+              fingerprint: sha256(`fingerprint-${n}`),
+            },
+          ],
+          targetEvidence: [],
+          status: 'candidate',
+          history: [],
+          recordedAt: new Date(Date.UTC(2026, 10, 1, 0, n)).toISOString(),
+        })),
+      }),
+    )
+    fs.writeFileSync(
+      path.join(runDir, 'run.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        runId: CONNECT_RUN,
+        outcome: 'complete',
+        degradeReasons: [],
+        selection: { kind: 'all' },
+        projects: [
+          {
+            name: 'target',
+            root: world.target,
+            key: projectKey(world.target),
+            repo: 'org/target',
+          },
+        ],
+        sweep: { total: 4, covered: 1, coveredThisRun: 1, runsLeft: 3 },
+        candidateBlock: {
+          schemaVersion: 1,
+          candidates: numbers.map((n) => ({
+            id: candidateId(n),
+            kind: 'transferable-lesson',
+            target: world.target,
+            targetName: 'target',
+            title: `Lesson ${n}`,
+            summary: `Summary of lesson ${n}.`,
+            nextStep: 'compound-learning',
+            sources: [
+              {
+                projectName: 'source',
+                path: `docs/solutions/lesson-${n}.md`,
+                excerpt: `Excerpt ${n}`,
+              },
+            ],
+          })),
+        },
+      }),
+    )
+    fs.writeFileSync(
+      path.join(world.stateRoot, INVOCATION_FILE),
+      JSON.stringify({
+        version: 1,
+        marker: '900-1',
+        phase: 'terminal',
+        outcome: 'complete',
+        finalLine: 'Connect complete',
+        runId: CONNECT_RUN,
+        projects: [],
+      }),
+    )
+    return world
+  }
+
+  const RENDER = {
+    date: '2026-11-12',
+    runId: '900',
+    attempt: '1',
+    cacheRestored: true,
+  }
+
+  function render(world: World, over: Json = {}): HelperResult {
+    return runHelperOp('render-report', { ...RENDER, ...over }, world.deps)
+  }
+
+  function bodyFileFor(text: string): string {
+    const file = path.join(realTemp('connect-ops-body-'), 'body.md')
+    fs.writeFileSync(file, text)
+    return file
+  }
+
+  function tick(body: string, index: number, status: 'promoted' | 'rejected') {
+    return body.replace(
+      decisionLine(candidateId(index), status, false),
+      decisionLine(candidateId(index), status, true),
+    )
+  }
+
+  it('names both operations in the usage line', () => {
+    const errors: string[] = []
+    runConnectHelper({ argv: [], errorSink: (line) => errors.push(line) })
+    expect(errors.join('\n')).toContain('|import|apply-ticks|render-report|')
+  })
+
+  it('renders a report from the state root and answers with its facts, not its text', () => {
+    const world = reportWorld(3)
+    const body = ok(render(world))
+    expect(body).toMatchObject({
+      op: 'render-report',
+      open: 3,
+      shown: 3,
+      hidden: 0,
+      fresh: 3,
+      runs: ['900'],
+      outcome: 'complete',
+      red: false,
+    })
+    expect(body).not.toHaveProperty('body')
+    const text = fs.readFileSync(String(body.bodyFile), 'utf8')
+    expect(body.bodyFile).toBe(path.join(world.stateRoot, 'report.md'))
+    expect(parseReportBody(text).manifest).toBe(String(body.manifest))
+    expect(parseReportBody(text).boxes).toHaveLength(6)
+  })
+
+  it('records the ticks of a posted body with the report number', () => {
+    const world = reportWorld(2)
+    const rendered = ok(render(world))
+    const posted = tick(
+      tick(fs.readFileSync(String(rendered.bodyFile), 'utf8'), 1, 'rejected'),
+      2,
+      'promoted',
+    )
+    const result = ok(
+      runHelperOp(
+        'apply-ticks',
+        { bodyFile: bodyFileFor(posted), issue: 41 },
+        world.deps,
+      ),
+    )
+    expect(result).toMatchObject({
+      op: 'apply-ticks',
+      report: 41,
+      section: 'ok',
+      accepted: [
+        { id: candidateId(1), status: 'rejected' },
+        { id: candidateId(2), status: 'promoted' },
+      ],
+      skipped: [],
+      unresolved: [],
+    })
+    const shown = ok(runHelperOp('ledger-show', {}, world.deps))
+    expect((shown.entries as Json[]).map((e) => [e.status, e.reason])).toEqual([
+      ['rejected', 'settled in report #41'],
+      ['promoted', 'settled in report #41'],
+    ])
+  })
+
+  it('takes the report number as a digit string too', () => {
+    const world = reportWorld(1)
+    const rendered = ok(render(world))
+    const posted = tick(
+      fs.readFileSync(String(rendered.bodyFile), 'utf8'),
+      1,
+      'rejected',
+    )
+    const result = ok(
+      runHelperOp(
+        'apply-ticks',
+        { bodyFile: bodyFileFor(posted), issue: '12' },
+        world.deps,
+      ),
+    )
+    expect(result.report).toBe(12)
+  })
+
+  it.each([
+    {},
+    { date: '2026-02-30' },
+    { date: 20261112 },
+    { runId: 900 },
+    { attempt: '' },
+    { cacheRestored: 'yes' },
+    { cacheRestored: undefined },
+  ])('refuses the render request %j', (over) => {
+    const world = reportWorld(1)
+    const request =
+      Object.keys(over).length === 0 ? 'not an object' : { ...RENDER, ...over }
+    expect(
+      failed(runHelperOp('render-report', request, world.deps)).reason,
+    ).toBe('invalid-request')
+    expect(fs.existsSync(path.join(world.stateRoot, 'report.md'))).toBe(false)
+  })
+
+  it.each([
+    {},
+    { bodyFile: 'relative/body.md', issue: 1 },
+    { bodyFile: '', issue: 1 },
+    { bodyFile: '/tmp/x\u0000y', issue: 1 },
+    { bodyFile: '/tmp/body.md' },
+    { bodyFile: '/tmp/body.md', issue: 0 },
+    { bodyFile: '/tmp/body.md', issue: 1.5 },
+    { bodyFile: '/tmp/body.md', issue: 'one' },
+    { bodyFile: '/tmp/body.md', issue: '99999999999' },
+  ])('refuses the apply-ticks request %j', (request) => {
+    const world = reportWorld(1)
+    expect(failed(runHelperOp('apply-ticks', request, world.deps)).reason).toBe(
+      'invalid-request',
+    )
+  })
+
+  it('names the reason when the body file cannot be read', () => {
+    const world = reportWorld(1)
+    const dir = realTemp('connect-ops-body-')
+    fs.writeFileSync(path.join(dir, 'real.md'), 'x')
+    fs.symlinkSync(path.join(dir, 'real.md'), path.join(dir, 'link.md'))
+    const reasons = ['missing.md', 'link.md'].map(
+      (name) =>
+        failed(
+          runHelperOp(
+            'apply-ticks',
+            { bodyFile: path.join(dir, name), issue: 1 },
+            world.deps,
+          ),
+        ).reason,
+    )
+    expect(reasons).toEqual(['body-missing', 'body-symlink'])
+  })
+
+  it('refuses to render without an invocation record for this workflow run', () => {
+    const world = reportWorld(1)
+    const body = failed(render(world, { runId: '901' }))
+    expect(body).toMatchObject({ outcome: 'failed', reason: 'no-invocation' })
+    expect(fs.existsSync(path.join(world.stateRoot, 'report.md'))).toBe(false)
+  })
+
+  it('answers busy and changes nothing while a run holds the lock', () => {
+    const world = reportWorld(1)
+    const rendered = ok(render(world))
+    const text = fs.readFileSync(String(rendered.bodyFile), 'utf8')
+    const before = snapshotTree(world.stateRoot)
+    const held = acquireLock(world.stateRoot)
+    if (held.status !== 'acquired') throw new Error('lock not taken')
+    try {
+      const during = snapshotTree(world.stateRoot)
+      const busyRender = failed(render(world))
+      const busyTicks = failed(
+        runHelperOp(
+          'apply-ticks',
+          { bodyFile: bodyFileFor(tick(text, 1, 'rejected')), issue: 3 },
+          world.deps,
+        ),
+      )
+      expect(busyRender).toMatchObject({ outcome: 'busy', reason: 'held' })
+      expect(busyTicks).toMatchObject({ outcome: 'busy', reason: 'held' })
+      expect(snapshotTree(world.stateRoot)).toEqual(during)
+      expect(Object.keys(before)).not.toContain('lock/holder.json')
+    } finally {
+      releaseLock(held.lock)
+    }
+  })
+
+  it('runs from the command line with a JSON request on stdin', () => {
+    const world = reportWorld(1)
+    const lines: string[] = []
+    const code = runConnectHelper({
+      argv: ['render-report'],
+      isTTY: false,
+      deps: world.deps,
+      readRequest: () => JSON.stringify(RENDER),
+      outputSink: (line) => lines.push(line),
+    })
+    expect(code).toBe(0)
+    expect(JSON.parse(lines[0] ?? '{}')).toMatchObject({
+      ok: true,
+      op: 'render-report',
+      shown: 1,
+    })
+    const applied: string[] = []
+    const posted = fs.readFileSync(
+      path.join(world.stateRoot, 'report.md'),
+      'utf8',
+    )
+    const status = runConnectHelper({
+      argv: ['apply-ticks'],
+      isTTY: false,
+      deps: world.deps,
+      readRequest: () =>
+        JSON.stringify({
+          bodyFile: bodyFileFor(tick(posted, 1, 'rejected')),
+          issue: 7,
+        }),
+      outputSink: (line) => applied.push(line),
+    })
+    expect(status).toBe(0)
+    expect(JSON.parse(applied[0] ?? '{}').accepted).toHaveLength(1)
+  })
+
+  it.each(['render-report', 'apply-ticks'])(
+    'refuses a terminal for %s',
+    (op) => {
+      const world = reportWorld(1)
+      const errors: string[] = []
+      const code = runConnectHelper({
+        argv: [op],
+        isTTY: true,
+        deps: world.deps,
+        errorSink: (line) => errors.push(line),
+        outputSink: () => {},
+      })
+      expect(code).toBe(2)
+      expect(errors.join('\n')).toContain('reads one JSON request from stdin')
+    },
+  )
+
+  it('touches no allowed project and writes no invocation record', () => {
+    const world = reportWorld(2)
+    fs.writeFileSync(
+      path.join(world.stateRoot, CI_RUN_FILE),
+      JSON.stringify({ version: 1, marker: '900-1' }),
+    )
+    const projects = [snapshotTree(world.source), snapshotTree(world.target)]
+    const invocationBefore = fs.readFileSync(
+      path.join(world.stateRoot, INVOCATION_FILE),
+      'utf8',
+    )
+    const rendered = ok(render(world))
+    ok(
+      runHelperOp(
+        'apply-ticks',
+        {
+          bodyFile: bodyFileFor(
+            tick(
+              fs.readFileSync(String(rendered.bodyFile), 'utf8'),
+              1,
+              'rejected',
+            ),
+          ),
+          issue: 2,
+        },
+        world.deps,
+      ),
+    )
+    expect([snapshotTree(world.source), snapshotTree(world.target)]).toEqual(
+      projects,
+    )
+    expect(
+      fs.readFileSync(path.join(world.stateRoot, INVOCATION_FILE), 'utf8'),
+    ).toBe(invocationBefore)
   })
 })

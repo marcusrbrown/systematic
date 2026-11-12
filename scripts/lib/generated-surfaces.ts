@@ -163,6 +163,7 @@ export const GENERATED_SURFACES: readonly GeneratedSurface[] = [
     triggers: [
       'scripts/generate-ce-connect-helper.ts',
       'src/ce-connect-helper.ts',
+      'src/lib/connect-ci.ts',
       'src/lib/connect-config.ts',
       'src/lib/connect-evidence.ts',
       'src/lib/connect-helper-core.ts',

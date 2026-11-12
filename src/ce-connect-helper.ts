@@ -3,6 +3,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  applyTicks,
+  type CiOptions,
+  type RenderRequest,
+  readReportBody,
+  renderReport,
+} from './lib/connect-ci.js'
+import {
   type AllowEntryMissReason,
   type ConnectConfigOptions,
   checkHostSupport,
@@ -141,7 +148,7 @@ import { isMainModule } from './lib/main-module.js'
  */
 
 export const CE_CONNECT_USAGE =
-  'Usage: node connect.mjs <begin|validate|publish|decide|import|ledger show [--offset N]|ledger clear|ledger unlock>'
+  'Usage: node connect.mjs <begin|validate|publish|decide|import|apply-ticks|render-report|ledger show [--offset N]|ledger clear|ledger unlock>'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -178,6 +185,8 @@ const OPS = [
   'publish',
   'decide',
   'import',
+  'apply-ticks',
+  'render-report',
   'ledger-show',
   'ledger-clear',
   'ledger-unlock',
@@ -3162,6 +3171,136 @@ function importRun(request: unknown, deps: HelperDeps): HelperResult {
   return importWrite(parsed, sourceRunId, verified, state.root, deps)
 }
 
+// ── apply-ticks and render-report ───────────────────────────────────────────
+
+const ISSUE_DIGITS = /^[0-9]{1,10}$/
+
+interface TicksRequest {
+  readonly bodyFile: string
+  readonly issue: number
+}
+
+/** The report body as a file and the report's issue number, as a number or a string of digits. */
+function parseTicksRequest(request: unknown): TicksRequest | undefined {
+  if (!isRecord(request)) return undefined
+  const { bodyFile, issue } = request
+  if (
+    typeof bodyFile !== 'string' ||
+    bodyFile === '' ||
+    bodyFile.length > MAX_DIRECTORY_LENGTH ||
+    CONTROL_IN_PATH.test(bodyFile) ||
+    !path.isAbsolute(bodyFile)
+  ) {
+    return undefined
+  }
+  const number =
+    typeof issue === 'string' && ISSUE_DIGITS.test(issue)
+      ? Number(issue)
+      : issue
+  if (typeof number !== 'number' || !Number.isSafeInteger(number)) {
+    return undefined
+  }
+  return number < 1 ? undefined : { bodyFile, issue: number }
+}
+
+/** The date, the GitHub run and attempt, and whether a cache came back. Their values are checked by the renderer. */
+function parseRenderRequest(request: unknown): RenderRequest | undefined {
+  if (!isRecord(request)) return undefined
+  const { date, runId, attempt, cacheRestored } = request
+  if (
+    typeof date !== 'string' ||
+    typeof runId !== 'string' ||
+    typeof attempt !== 'string' ||
+    typeof cacheRestored !== 'boolean'
+  ) {
+    return undefined
+  }
+  return { date, runId, attempt, cacheRestored }
+}
+
+function ciOptions(deps: HelperDeps): CiOptions {
+  return {
+    ...(deps.processes === undefined ? {} : { processes: deps.processes }),
+    ...(deps.now === undefined ? {} : { now: deps.now }),
+  }
+}
+
+function busyAnswer(
+  op: string,
+  reason: string,
+  extra: Json = {},
+): HelperResult {
+  return {
+    ok: false,
+    body: { ok: false, op, outcome: 'busy', reason, ...extra },
+  }
+}
+
+/**
+ * Record the ticks of a posted report body. The body is a file the workflow
+ * fetched; the manifest it names is looked up in the state root. A tick that
+ * cannot be matched to it is reported, never fatal, and nothing is recorded
+ * from a body that does not name a stored manifest.
+ */
+function applyTicksOp(request: unknown, deps: HelperDeps): HelperResult {
+  const parsed = parseTicksRequest(request)
+  if (parsed === undefined) return failure('apply-ticks', 'invalid-request')
+  const read = readReportBody(parsed.bodyFile)
+  if (read.status === 'failed') return failure('apply-ticks', read.reason)
+  const prepared = prepare('apply-ticks', deps)
+  if (!prepared.ok) return prepared.result
+  const result = applyTicks(
+    prepared.root,
+    { body: read.body, issue: parsed.issue },
+    ciOptions(deps),
+  )
+  if (result.status === 'busy') {
+    return busyAnswer('apply-ticks', result.reason, {
+      accepted: result.accepted,
+    })
+  }
+  if (result.status === 'failed') {
+    return failure('apply-ticks', result.reason, { accepted: result.accepted })
+  }
+  return success('apply-ticks', {
+    report: parsed.issue,
+    section: result.section,
+    accepted: result.accepted,
+    skipped: result.skipped,
+    unresolved: result.unresolved,
+  })
+}
+
+/**
+ * Render the report body into `report.md` in the state root. The answer holds
+ * the facts about the body (counts, the manifest hash, the outcome and whether
+ * the job should end red) and never the body itself.
+ */
+function renderReportOp(request: unknown, deps: HelperDeps): HelperResult {
+  const parsed = parseRenderRequest(request)
+  if (parsed === undefined) return failure('render-report', 'invalid-request')
+  const prepared = prepare('render-report', deps)
+  if (!prepared.ok) return prepared.result
+  const result = renderReport(prepared.root, parsed, ciOptions(deps))
+  if (result.status === 'busy')
+    return busyAnswer('render-report', result.reason)
+  if (result.status === 'failed') {
+    return failure('render-report', result.reason)
+  }
+  return success('render-report', {
+    bodyFile: result.bodyFile,
+    bodyChars: result.body.length,
+    manifest: result.manifest,
+    open: result.open,
+    shown: result.shown,
+    hidden: result.hidden,
+    fresh: result.fresh,
+    runs: result.runs,
+    outcome: result.outcome,
+    red: result.red,
+  })
+}
+
 // ── Dispatch ────────────────────────────────────────────────────────────────
 
 /**
@@ -3186,6 +3325,10 @@ export function runHelperOp(
         return decide(request, deps)
       case 'import':
         return importRun(request, deps)
+      case 'apply-ticks':
+        return applyTicksOp(request, deps)
+      case 'render-report':
+        return renderReportOp(request, deps)
       case 'ledger-show':
         return ledgerShow(request, deps)
       case 'ledger-clear':
@@ -3254,6 +3397,8 @@ const REQUEST_OPS = new Set<Op>([
   'publish',
   'decide',
   'import',
+  'apply-ticks',
+  'render-report',
 ])
 
 function resolveCliOp(argv: readonly string[]): Op | undefined {

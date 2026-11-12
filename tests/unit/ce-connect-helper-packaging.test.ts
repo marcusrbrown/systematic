@@ -27,6 +27,7 @@ import {
   generateHelperContent,
 } from '../../scripts/generate-ce-connect-helper.ts'
 import { generateRegistryContent } from '../../scripts/generate-registry.ts'
+import { decisionLine } from '../../src/lib/connect-ci.js'
 import { ruleIdFor } from '../../src/lib/connect-helper-core.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
@@ -409,6 +410,7 @@ function exerciseHelper(scriptPath: string, label: string): void {
   ).toEqual(before)
 
   exerciseImport(scriptPath, label)
+  exerciseReportOps(scriptPath, label)
 }
 
 const IMPORT_FIXTURES = path.join(REPO_ROOT, 'tests/fixtures/connect-import')
@@ -489,6 +491,127 @@ function exerciseImport(scriptPath: string, label: string): void {
     [snapshotTree(source), snapshotTree(target)],
     `${label}: an allowed project changed`,
   ).toEqual(before)
+}
+
+/** `render-report` and `apply-ticks` through the real command line, against a state root a CI run left behind. */
+function exerciseReportOps(scriptPath: string, label: string): void {
+  const scenario = buildScenario()
+  const stateRoot = path.join(scenario.stateHome, 'systematic', 'connect')
+  const connectRun = '20261112T010000Z-abcd1234'
+  fs.mkdirSync(path.join(stateRoot, 'runs', connectRun), {
+    recursive: true,
+    mode: 0o700,
+  })
+  const ids = [sha256('pack-candidate-1'), sha256('pack-candidate-2')]
+  fs.writeFileSync(
+    path.join(stateRoot, 'ledger.json'),
+    JSON.stringify({
+      version: 2,
+      entries: ids.map((id, index) => ({
+        id,
+        kind: 'transferable-lesson',
+        target: scenario.target,
+        ruleId: 'rule-0123456789abcdef',
+        sources: [
+          {
+            role: 'source',
+            path: `docs/solutions/lesson-${index}.md`,
+            fingerprint: sha256(`fingerprint-${index}`),
+          },
+        ],
+        targetEvidence: [],
+        status: 'candidate',
+        history: [],
+        recordedAt: new Date(Date.UTC(2026, 10, 1, 0, index)).toISOString(),
+      })),
+    }),
+  )
+  fs.writeFileSync(
+    path.join(stateRoot, 'runs', connectRun, 'run.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      runId: connectRun,
+      selection: { kind: 'all' },
+      projects: [],
+      candidateBlock: {
+        schemaVersion: 1,
+        candidates: ids.map((id, index) => ({
+          id,
+          kind: 'transferable-lesson',
+          target: scenario.target,
+          targetName: 'target',
+          title: `Lesson ${index}`,
+          summary: `Summary ${index}.`,
+          nextStep: 'compound-learning',
+          sources: [
+            {
+              projectName: 'source',
+              path: `docs/solutions/lesson-${index}.md`,
+            },
+          ],
+        })),
+      },
+    }),
+  )
+  fs.writeFileSync(
+    path.join(stateRoot, 'invocation.json'),
+    JSON.stringify({
+      version: 1,
+      marker: '900-1',
+      phase: 'terminal',
+      outcome: 'complete',
+      finalLine: 'Connect complete',
+      runId: connectRun,
+      projects: [],
+    }),
+  )
+
+  const rendered = runHelper(scriptPath, ['render-report'], scenario, {
+    date: '2026-11-12',
+    runId: '900',
+    attempt: '1',
+    cacheRestored: true,
+  })
+  expect(rendered.exitCode, `${label}: render ${rendered.stdout}`).toBe(0)
+  expect(rendered.json).toMatchObject({
+    shown: 2,
+    hidden: 0,
+    outcome: 'complete',
+  })
+  const posted = fs
+    .readFileSync(String(rendered.json?.bodyFile), 'utf8')
+    .replace(
+      decisionLine(ids[0] ?? '', 'rejected', false),
+      decisionLine(ids[0] ?? '', 'rejected', true),
+    )
+  const bodyFile = path.join(makeTempDir('connect-pack-body-'), 'body.md')
+  fs.writeFileSync(bodyFile, posted)
+
+  const applied = runHelper(scriptPath, ['apply-ticks'], scenario, {
+    bodyFile,
+    issue: 5,
+  })
+  expect(applied.exitCode, `${label}: apply ${applied.stdout}`).toBe(0)
+  expect(applied.json?.accepted).toEqual([{ id: ids[0], status: 'rejected' }])
+  const again = runHelper(scriptPath, ['apply-ticks'], scenario, {
+    bodyFile,
+    issue: 5,
+  })
+  expect(again.exitCode).toBe(0)
+  expect(again.json?.accepted).toEqual([])
+  expect(again.json?.skipped).toEqual([
+    { id: ids[0], status: 'rejected', reason: 'already-recorded' },
+  ])
+  const shown = runHelper(scriptPath, ['ledger', 'show'], scenario)
+  expect(
+    ((shown.json?.entries ?? []) as Array<Json>).map((entry) => entry.status),
+  ).toEqual(['rejected', 'candidate'])
+
+  const invalid = runHelper(scriptPath, ['render-report'], scenario, {
+    date: 'yesterday',
+  })
+  expect(invalid.exitCode).toBe(1)
+  expect(invalid.json?.reason).toBe('invalid-request')
 }
 
 function assertRunsUnderRealNode(scriptPath: string, label: string): void {
