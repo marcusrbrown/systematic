@@ -1634,6 +1634,123 @@ export function readRunRecord(root: string, runId: string): unknown {
   }
 }
 
+// ── Import runs ─────────────────────────────────────────────────────────────
+
+/** The name every import run directory starts with. */
+export const IMPORT_RUN_PREFIX = 'import-'
+
+/** Import runs a view lists, newest first. */
+const MAX_IMPORT_RUNS_LISTED = 50
+
+/** A sortable, unique id for an import run. */
+export function newImportRunId(now: number = Date.now()): string {
+  return `${IMPORT_RUN_PREFIX}${newRunId(now)}`
+}
+
+/** The ids of the import runs that are kept, newest first. Symlinks, files and staging directories are ignored. */
+function listImportRuns(root: string): string[] {
+  let names: string[]
+  try {
+    names = fs.readdirSync(path.join(root, RUNS_DIR))
+  } catch {
+    return []
+  }
+  return names
+    .filter((name) => name.startsWith(IMPORT_RUN_PREFIX) && isRunId(name))
+    .filter((name) =>
+      lstatMaybe(path.join(root, RUNS_DIR, name))?.isDirectory(),
+    )
+    .sort((a, b) => codepointOrder(b, a))
+    .slice(0, MAX_IMPORT_RUNS_LISTED)
+}
+
+/** What an import sees once it holds the lock. */
+export interface ImportView {
+  readonly ledger: Ledger
+  /** The import runs that are kept, newest first. */
+  readonly importRuns: readonly string[]
+}
+
+/** What an import decides to write. */
+export type ImportPlan =
+  | { readonly publish: false }
+  | {
+      readonly publish: true
+      readonly runId: string
+      readonly files: Readonly<Record<string, string>>
+      readonly candidates: readonly CandidateRecord[]
+    }
+
+export type ImportInsertResult =
+  | { readonly status: 'busy'; readonly reason: LockBusyReason }
+  | {
+      readonly status: 'failed'
+      readonly reason: 'lock-failed' | 'ledger-unreadable' | PublishFailure
+    }
+  /** The plan wrote nothing. */
+  | { readonly status: 'unchanged' }
+  | {
+      readonly status: 'published'
+      readonly runDir: string
+      readonly ledger:
+        | { readonly written: true }
+        | { readonly written: false; readonly error: string }
+    }
+
+/**
+ * Insert an import run under the lock. `plan` sees the ledger and the kept
+ * import runs, and returns the run to write or nothing. A plan that returns
+ * nothing leaves the state root as it was. The run is published the way a
+ * local run is (staged, renamed, then the ledger is rewritten), with no
+ * coverage, so an import never changes what a sweep has covered. A busy lock
+ * writes nothing, and the lock is always released.
+ */
+export function insertImportRun(
+  root: string,
+  plan: (view: ImportView) => ImportPlan,
+  options: LockOptions & PublishOptions = {},
+): ImportInsertResult {
+  const acquired = acquireLock(root, options)
+  if (acquired.status === 'busy') return acquired
+  if (acquired.status === 'failed') {
+    return { status: 'failed', reason: 'lock-failed' }
+  }
+  try {
+    const read = readLedger(root)
+    if (read.status !== 'ok') {
+      return { status: 'failed', reason: 'ledger-unreadable' }
+    }
+    const decision = plan({
+      ledger: read.ledger,
+      importRuns: listImportRuns(root),
+    })
+    if (!decision.publish) return { status: 'unchanged' }
+    if (!decision.runId.startsWith(IMPORT_RUN_PREFIX)) {
+      return { status: 'failed', reason: 'invalid-run-id' }
+    }
+    const published = publishRun(
+      root,
+      acquired.lock,
+      {
+        runId: decision.runId,
+        files: decision.files,
+        candidates: decision.candidates,
+      },
+      options,
+    )
+    if (published.status === 'failed') {
+      return { status: 'failed', reason: published.reason }
+    }
+    return {
+      status: 'published',
+      runDir: published.runDir,
+      ledger: published.ledger,
+    }
+  } finally {
+    releaseLock(acquired.lock)
+  }
+}
+
 // ── Invocation record ───────────────────────────────────────────────────────
 
 /** Written by a CI workflow into the state root before the run; its marker tags the invocation record. */

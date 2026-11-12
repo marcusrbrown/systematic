@@ -34,6 +34,19 @@ A stop here happens in `begin`, so no lock is taken and nothing is written. End 
 
 The digest header and the run record name the selection: `all`, the group, or the picked projects, with an id that depends on the selected projects only.
 
+## Reading a fetch
+
+A `fetch:<run>` word is read from the same place as the mode tokens and the selection words. It brings the candidates of a scheduled CI run to this machine and follows `fetch-and-import.md`.
+
+| Words found | Result |
+|---|---|
+| One `fetch:<run>`, or the same word twice or more | A fetch of that run. It observes no host, dispatches no agent and asks nothing, so `mode:` has no effect. |
+| `fetch:` with a `group:` or `projects:` word | Stop: `conflicting-selection`. |
+| Two different `fetch:` words | Stop: `conflicting-selection`. |
+| An empty value, or a value that is not digits only | Stop: `invalid-request`. |
+
+A stop here happens before any command. End as for a failed run: the reason on a line of its own, then `Connect failed`.
+
 ## What headless changes
 
 Headless mode asks no question and offers nothing after the digest. It does not wait for input of any kind.
@@ -60,10 +73,10 @@ Every run ends with exactly one of these lines as its last line. The reason and 
 
 | Final line | When |
 |---|---|
-| `Connect complete` | `publish` answered `complete`: every project read, every offered rule covered by a complete family, nothing failed, and the run committed. Rules the run was not offered are not a degrade reason, and neither is the stale-citation check reaching its cap: the digest notes it under "Not read or not covered" and the run record keeps the counts, and the outcome is unchanged. Nothing found is still `complete`, labeled "no candidate in searched scope". |
-| `Connect degraded` | `publish` answered `degraded`: something was not read, an offered rule was not covered, a file a candidate cited changed or vanished during the run (`evidence-changed`, `unresolved-source`; the rule of that candidate is then not counted as covered), or a bound on the file inventory, a family or a batch was reached. The digest names what. A degraded run is never proof that nothing is there. A dropped candidate never changes the outcome; the digest lists each one under "Dropped candidates" with its reason and quoted title, and the run record keeps the same list. |
-| `Connect busy` | `begin` answered `busy`: another run holds the lock, or the holder cannot be verified. Nothing was written and nothing was dispatched. |
-| `Connect failed` | Any other stop: a bad mode token, a refused selection, the helper missing, an unsupported host in headless mode, consent declined, no allowed projects, a malformed batch, or a helper error. Nothing was published. |
+| `Connect complete` | `import` answered `complete` (a fetch whose candidates were all checked and none refused), or `publish` answered `complete`: every project read, every offered rule covered by a complete family, nothing failed, and the run committed. Rules the run was not offered are not a degrade reason, and neither is the stale-citation check reaching its cap: the digest notes it under "Not read or not covered" and the run record keeps the counts, and the outcome is unchanged. Nothing found is still `complete`, labeled "no candidate in searched scope". |
+| `Connect degraded` | `import` answered `degraded` (at least one candidate of the fetched record was refused; the summary names each), or `publish` answered `degraded`: something was not read, an offered rule was not covered, a file a candidate cited changed or vanished during the run (`evidence-changed`, `unresolved-source`; the rule of that candidate is then not counted as covered), or a bound on the file inventory, a family or a batch was reached. The digest names what. A degraded run is never proof that nothing is there. A dropped candidate never changes the outcome; the digest lists each one under "Dropped candidates" with its reason and quoted title, and the run record keeps the same list. |
+| `Connect busy` | `begin` or `import` answered `busy`: another run holds the lock, or the holder cannot be verified. Nothing was written and nothing was dispatched. |
+| `Connect failed` | Any other stop: a bad mode token, a bad `fetch:` word, a run that is not a scheduled `ce:connect` run, a missing or expired artifact, a record `import` cannot use, a refused selection, the helper missing, an unsupported host in headless mode, consent declined, no allowed projects, a malformed batch, or a helper error. Nothing was published. |
 
 Copy the final line from the helper's `finalLine` when `publish` answers. For every other stop, print the line from this table.
 
@@ -84,7 +97,7 @@ Print the helper's `reason` as it is, then add the hint when one fits.
 | `helper-unavailable` | The skill could not start the helper (node is missing or the helper file is gone). Nothing was published. Not a data problem. |
 | `unsupported-host` | The host and version have no observed tool limits. Run interactively and accept the warning, or use a supported host. |
 | `no-allowed-projects` | The allow list is empty or no entry matched a project. List the entries that did not match, with the reason the helper gives for each. |
-| `conflicting-selection` | The words name more than one selection. The helper's `detail` says which combination. Use one `group:` word, or one `projects:` word. |
+| `conflicting-selection` | The words name more than one selection. The helper's `detail` says which combination. Use one `group:` word, or one `projects:` word. A `fetch:` word stands alone. |
 | `unknown-group` | No group of that name is in the user's config (`group`). |
 | `unknown-project` | No allowed project has that directory name or key (`project`). |
 | `ambiguous-project` | Two allowed projects share that directory name (`project`). The helper lists their `keys`; a key picks one of them. |

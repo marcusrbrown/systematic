@@ -35,8 +35,8 @@ The `ce:connect` helper hands a read-only subagent its inputs as files in a run 
 
 Write every file the model must read as short lines, and give it an index so it never has to read a whole file.
 
-- **Indent the JSON.** `rules.json` is written with `JSON.stringify(..., null, 1)` in the `writeWorkFile` call (`src/ce-connect-helper.ts:1306-1310`). The file is still one valid document, and the observed index no longer has a line near the cap. Indentation does not wrap a long string value, so an individual value or entry can still exceed a line or read-window limit.
-- **Add line-oriented indexes.** `files.tsv` has one tab-separated line per inventoried file (fingerprint, role, project root, path) and is built by `fingerprintIndex` (`src/ce-connect-helper.ts:403-419`). `rules.tsv` has one line per rule (id, project, path, title, `applies_when`, offered or later) and is built by `rulesOverview` (`src/ce-connect-helper.ts:375-401`). Control characters are collapsed or the line is dropped, so a path cannot break the format.
+- **Indent the JSON.** `rules.json` is written with `JSON.stringify(..., null, 1)` in the `writeWorkFile` call (`src/ce-connect-helper.ts:1326-1330`). The file is still one valid document, and the observed index no longer has a line near the cap. Indentation does not wrap a long string value, so an individual value or entry can still exceed a line or read-window limit.
+- **Add line-oriented indexes.** `files.tsv` has one tab-separated line per inventoried file (fingerprint, role, project root, path) and is built by `fingerprintIndex` (`src/ce-connect-helper.ts:423-439`). `rules.tsv` has one line per rule (id, project, path, title, `applies_when`, offered or later) and is built by `rulesOverview` (`src/ce-connect-helper.ts:395-421`). Control characters are collapsed or the line is dropped, so a path cannot break the format.
 - **Tell the agent how to find an entry.** The agent's input description says to search the rules file for `"id": "<rule id>"` and read about 45 lines from the line the search reports, and to take fingerprints from the files index (`agents/research/connections-researcher.md:35-36`).
 
 ## Why This Works

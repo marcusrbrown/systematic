@@ -24,7 +24,7 @@ The `ce:connect` helper (`src/ce-connect-helper.ts`) is a Node script that a ski
 
 ### 1. The lock holder is the host, not the shell
 
-Each helper call is a short process, and the shell that launched it exits right away. A lock that records the helper's pid, or the shell's, would look dead the moment the call returned. `findHolderPid` walks up the process tree and records the nearest ancestor that is not a shell (`src/ce-connect-helper.ts:255-276`); the host outlives the run. If the host dies, the lock is reclaimable. If it lives on after a crashed run, `ledger unlock` is the manual escape.
+Each helper call is a short process, and the shell that launched it exits right away. A lock that records the helper's pid, or the shell's, would look dead the moment the call returned. `findHolderPid` walks up the process tree and records the nearest ancestor that is not a shell (`src/ce-connect-helper.ts:275-296`); the host outlives the run. If the host dies, the lock is reclaimable. If it lives on after a crashed run, `ledger unlock` is the manual escape.
 
 The lock itself is a directory with a holder file (`src/lib/connect-state.ts:407-446`, `createLock`). The holder records pid, the process start time, and a `randomUUID` nonce. `judgeLock` decides what to do with an existing lock (`src/lib/connect-state.ts:457-495`):
 
@@ -55,7 +55,7 @@ One run is bounded at 6 families of at most 8 rules each, so at most 48 rules (`
 Three rules keep this honest:
 
 - Coverage is recorded only on commit, in the same ledger rewrite as the run (`applyCoverage`, `src/lib/connect-state.ts:1339-1399`). A run that fails to commit covers nothing.
-- Only the offered rules must be covered. The rest of the index waits for a later run and is not a reason to degrade this one (`src/ce-connect-helper.ts:1901-1917`, `checkCoverage` is called with `snapshot.offer.offered`).
+- Only the offered rules must be covered. The rest of the index waits for a later run and is not a reason to degrade this one (`src/ce-connect-helper.ts:1921-1937`, `checkCoverage` is called with `snapshot.offer.offered`).
 - A rule whose candidate was lost because its evidence changed during the run is held back and not counted as covered (`heldBackRuleIds` in the same span).
 
 The digest carries a `Sweep:` line, covered X of Y rules and about N runs left (`renderSweepLine`, `src/lib/connect-helper-core.ts:611-620`), so a person can see that a clean run covers a slice and not the corpus. In a four-project evaluation set that included 12 planted documents, the ledger recorded all 376 indexed rules as covered over nine runs. That is bookkeeping from the researcher's self-report: the helper checks that a complete batch names every offered rule, not that each one was searched.
@@ -68,7 +68,7 @@ Three choices keep a nondeterministic researcher from re-proposing what a person
 - **Identity excludes fingerprints.** `candidateIdentity` hashes kind, target, rule id and the normalized (role, path) of each source (`src/lib/connect-state.ts:767-785`). A changed file is the same entry.
 - **Reopen only on a change both runs can see.** `classifyCandidate` compares source fingerprints, and compares target-evidence fingerprints only for paths that both the stored entry and the new candidate cite (`sameTargetEvidence`, `src/lib/connect-state.ts:1091-1100`). If nothing the two runs share changed, the standing is `suppressed` whatever the prior status (promoted, rejected or candidate). A changed source reopens as "sources changed" with a refresh pointer when the prior entry was promoted. A source with no fingerprint is `unresolved`, not `changed` (`src/lib/connect-state.ts:1103-1157`).
 
-`ledger show` pages the ledger 500 entries at a time with `total` and `nextOffset` (`MAX_LEDGER_ENTRIES_SHOWN`, `src/ce-connect-helper.ts:2468-2483`).
+`ledger show` pages the ledger 500 entries at a time with `total` and `nextOffset` (`MAX_LEDGER_ENTRIES_SHOWN`, `src/ce-connect-helper.ts:2488-2503`).
 
 ## Why This Matters
 

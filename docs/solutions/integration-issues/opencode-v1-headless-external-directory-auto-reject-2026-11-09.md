@@ -31,7 +31,7 @@ A skill that reads other projects' checkouts and keeps its work files under a st
 
 - Standard error carries `permission requested: external_directory (<path>/docs/solutions/*); auto-rejecting`. The exit code is 0 and nothing hangs.
 - The researcher's tool call is rejected, so the parent's answer does not contain the planted marker.
-- When the rejected read was the parent's own read of a work file in the state directory, the session ended before any final line. No digest was published and the lock stayed held until the next run found its holder gone (`skills/ce-connect/references/headless-and-outcomes.md:45-55`).
+- When the rejected read was the parent's own read of a work file in the state directory, the session ended before any final line. No digest was published and the lock stayed held until the next run found its holder gone (`skills/ce-connect/references/headless-and-outcomes.md:58-68`).
 
 ## What Didn't Work
 
@@ -52,7 +52,7 @@ Two allows, in two places, because two sessions are involved.
    { "permission": { "external_directory": { "<state directory>/*": "allow" } } }
    ```
 
-   With that line a headless run on 1.19.5 ran the whole pipeline and ended `Connect complete`. Systematic never writes this line for the user; the skill's reference tells the user to add it (`skills/ce-connect/references/headless-and-outcomes.md:45-55`).
+   With that line a headless run on 1.19.5 ran the whole pipeline and ended `Connect complete`. Systematic never writes this line for the user; the skill's reference tells the user to add it (`skills/ce-connect/references/headless-and-outcomes.md:58-68`).
 
 The agent-level allow widens reads to any path, which is already the documented limit that read tools are not path-scoped.
 

@@ -71,6 +71,20 @@ import {
   workDirPath,
   writeWorkFile,
 } from './lib/connect-helper-core.js'
+import {
+  type ImportAccepted,
+  type ImportedCandidate,
+  type ImportModel,
+  type ImportProvenance,
+  type ImportRefusal,
+  type LocalCheckout,
+  readImportRecord,
+  renderImportDigest,
+  renderImportSummary,
+  type SkippedCandidate,
+  type Verification,
+  verifyRecord,
+} from './lib/connect-import.js'
 import { readRepoIdentity } from './lib/connect-repo-identity.js'
 import {
   acquireLock,
@@ -83,11 +97,16 @@ import {
   type DecideInput,
   decideLedgerEntry,
   forceUnlock,
+  type ImportInsertResult,
+  type ImportPlan,
   type InvocationProject,
   type InvocationWriteOptions,
+  insertImportRun,
   type Ledger,
+  type LedgerEntry,
   type LockHandle,
   type LockReclaim,
+  newImportRunId,
   newRunId,
   type ProcessTable,
   type PublishOptions,
@@ -122,7 +141,7 @@ import { isMainModule } from './lib/main-module.js'
  */
 
 export const CE_CONNECT_USAGE =
-  'Usage: node connect.mjs <begin|validate|publish|decide|ledger show [--offset N]|ledger clear|ledger unlock>'
+  'Usage: node connect.mjs <begin|validate|publish|decide|import|ledger show [--offset N]|ledger clear|ledger unlock>'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -158,6 +177,7 @@ const OPS = [
   'validate',
   'publish',
   'decide',
+  'import',
   'ledger-show',
   'ledger-clear',
   'ledger-unlock',
@@ -2647,6 +2667,501 @@ function ledgerUnlock(deps: HelperDeps): HelperResult {
   })
 }
 
+// ── import ──────────────────────────────────────────────────────────────────
+
+const GITHUB_REPO = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/
+const GITHUB_RUN_ID = /^[0-9]{1,20}$/
+const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+const MAX_DIRECTORY_LENGTH = 4096
+
+interface ImportRequest {
+  readonly directory: string
+  readonly provenance: ImportProvenance
+}
+
+/** The downloaded directory and where the run came from. The skill supplies both; neither comes from the record. */
+function parseImportRequest(request: unknown): ImportRequest | undefined {
+  if (!isRecord(request)) return undefined
+  const { directory, provenance } = request
+  if (
+    typeof directory !== 'string' ||
+    directory === '' ||
+    directory.length > MAX_DIRECTORY_LENGTH ||
+    CONTROL_IN_PATH.test(directory) ||
+    !path.isAbsolute(directory)
+  ) {
+    return undefined
+  }
+  if (!isRecord(provenance)) return undefined
+  const { repo, runId, commit } = provenance
+  if (typeof repo !== 'string' || !GITHUB_REPO.test(repo)) return undefined
+  if (typeof runId !== 'string' || !GITHUB_RUN_ID.test(runId)) return undefined
+  if (
+    commit !== undefined &&
+    !(typeof commit === 'string' && COMMIT_ID.test(commit))
+  ) {
+    return undefined
+  }
+  return {
+    directory,
+    provenance: {
+      repo,
+      runId,
+      ...(commit === undefined ? {} : { commit }),
+    },
+  }
+}
+
+function importFailure(reason: string, extra: Json = {}): HelperResult {
+  return failure('import', reason, { finalLine: 'Connect failed', ...extra })
+}
+
+function importLocals(environment: Environment): LocalCheckout[] {
+  return environment.resolved.resolved.map(({ mainRoot }) => ({
+    root: mainRoot,
+    key: projectKey(mainRoot),
+    name: projectName(mainRoot),
+    ...readRepoIdentity(mainRoot),
+  }))
+}
+
+/** The tracked files of a local checkout, or nothing when it cannot be read. */
+function importFacts(
+  deps: HelperDeps,
+): (root: string) => ProjectFacts | undefined {
+  const limits = bounds(deps)
+  return (root) => {
+    // A root with such a character cannot be cited from, as in a local run.
+    if (UNSAFE_PATH_CHARACTER.test(root)) return undefined
+    const inventory = inventoryProject(root, {
+      bounds: limits,
+      ...(deps.gitBinary === undefined ? {} : { gitBinary: deps.gitBinary }),
+    })
+    return inventory.status === 'ok'
+      ? toProjectFacts(inventory.mainRoot, inventory.files)
+      : undefined
+  }
+}
+
+/** A candidate to be written into the new import run. */
+interface Fresh extends AcceptedCandidate {
+  readonly kind: 'fresh'
+  readonly record: CandidateRecord
+}
+
+/** A candidate already open in the ledger, with the import run that holds it. */
+interface Open {
+  readonly kind: 'open'
+  readonly accepted: ImportAccepted
+  readonly runRecordPath: string
+}
+
+interface Placement {
+  readonly fresh: readonly Fresh[]
+  readonly open: readonly Open[]
+  readonly skipped: readonly SkippedCandidate[]
+  /** The accepted candidates in record order. */
+  readonly order: ReadonlyArray<Fresh | Open>
+}
+
+const NO_PLACEMENT: Placement = {
+  fresh: [],
+  open: [],
+  skipped: [],
+  order: [],
+}
+
+/** The ids each kept import run holds, newest run first. */
+function keptImportRuns(
+  root: string,
+  runs: readonly string[],
+): Array<{ runId: string; ids: ReadonlySet<string> }> {
+  const out: Array<{ runId: string; ids: ReadonlySet<string> }> = []
+  for (const runId of runs) {
+    const record = readRunRecord(root, runId)
+    if (!isRecord(record) || record.kind !== 'import') continue
+    const block = record.candidateBlock
+    if (!isRecord(block) || !Array.isArray(block.candidates)) continue
+    const ids = new Set<string>()
+    for (const item of block.candidates as unknown[]) {
+      if (isRecord(item) && typeof item.id === 'string') ids.add(item.id)
+    }
+    out.push({ runId, ids })
+  }
+  return out
+}
+
+function freshOf(
+  item: ImportAccepted,
+  standing: Standing,
+  extra: {
+    refreshPointer?: string
+    possibleMatches?: readonly string[]
+  } = {},
+): Fresh {
+  return {
+    kind: 'fresh',
+    id: item.id,
+    standing,
+    ...(extra.refreshPointer === undefined
+      ? {}
+      : { refreshPointer: extra.refreshPointer }),
+    possibleMatches: extra.possibleMatches ?? [],
+    candidate: item.candidate,
+    record: item.record,
+  }
+}
+
+/** A candidate decided here, named so it is skipped; a promoted one carries where it lives. */
+function skippedOf(
+  item: ImportAccepted,
+  entry: LedgerEntry | undefined,
+): SkippedCandidate | undefined {
+  const title = item.candidate.title
+  if (entry?.status === 'rejected') {
+    return { id: item.id, title, reason: 'rejected-locally' }
+  }
+  if (entry?.status !== 'promoted') return undefined
+  return {
+    id: item.id,
+    title,
+    reason: 'promoted-locally',
+    ...(entry.destination === undefined
+      ? {}
+      : { refreshPointer: entry.destination }),
+  }
+}
+
+type Placed =
+  | { readonly placed: Fresh | Open }
+  | { readonly skipped: SkippedCandidate }
+
+function placeOne(
+  item: ImportAccepted,
+  ledger: Ledger,
+  heldIn: (id: string) => string | undefined,
+): Placed {
+  const outcome = classifyCandidate(ledger, item.record)
+  if (outcome.standing === 'new') {
+    return {
+      placed: freshOf(item, 'new', {
+        possibleMatches: [
+          ...new Set([
+            ...outcome.possibleMatches,
+            ...findRenamedEntries(ledger, item.record, item.id),
+          ]),
+        ],
+      }),
+    }
+  }
+  if (outcome.standing === 'reopened') {
+    return {
+      placed: freshOf(
+        item,
+        outcome.reason,
+        outcome.refreshPointer === undefined
+          ? {}
+          : { refreshPointer: outcome.refreshPointer },
+      ),
+    }
+  }
+  const skipped = skippedOf(
+    item,
+    ledger.entries.find((known) => known.id === item.id),
+  )
+  if (skipped !== undefined) return { skipped }
+  const held = heldIn(item.id)
+  return {
+    placed:
+      held === undefined
+        ? freshOf(item, 'new')
+        : { kind: 'open', accepted: item, runRecordPath: held },
+  }
+}
+
+/**
+ * Sort the accepted candidates by what the ledger says about each. A new or
+ * reopened one is written. One decided here is skipped and named. One already
+ * open is listed again with the import run that holds it; when that run is no
+ * longer kept it is written again, and its ledger entry stays as it is.
+ */
+function placeCandidates(
+  accepted: readonly ImportAccepted[],
+  ledger: Ledger,
+  root: string,
+  runs: readonly string[],
+): Placement {
+  let kept: ReturnType<typeof keptImportRuns> | undefined
+  const heldIn = (id: string): string | undefined => {
+    kept ??= keptImportRuns(root, runs)
+    const holder = kept.find((run) => run.ids.has(id))
+    return holder === undefined
+      ? undefined
+      : path.join(root, 'runs', holder.runId, 'run.json')
+  }
+  const fresh: Fresh[] = []
+  const open: Open[] = []
+  const skipped: SkippedCandidate[] = []
+  const order: Array<Fresh | Open> = []
+  for (const item of accepted) {
+    const result = placeOne(item, ledger, heldIn)
+    if ('skipped' in result) {
+      skipped.push(result.skipped)
+      continue
+    }
+    order.push(result.placed)
+    if (result.placed.kind === 'fresh') fresh.push(result.placed)
+    else open.push(result.placed)
+  }
+  return { fresh, open, skipped, order }
+}
+
+function countByReason(
+  refused: readonly ImportRefusal[],
+): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const item of refused) count(counts, item.reason)
+  return counts
+}
+
+function importRunRecord(
+  model: ImportModel,
+  createdAt: string,
+  verified: Verification,
+  placement: Placement,
+): Json {
+  return {
+    schemaVersion: 1,
+    runId: model.runId,
+    createdAt,
+    kind: 'import',
+    outcome: model.outcome,
+    degradeReasons: model.refused.length > 0 ? ['candidates-refused'] : [],
+    provenance: model.provenance,
+    source: { runId: model.sourceRunId },
+    projects: verified.projects,
+    counts: {
+      candidates: placement.fresh.length,
+      alreadyImported: placement.open.length,
+      skipped: placement.skipped.length,
+      refused: model.refused.length,
+    },
+    refused: model.refused,
+    skipped: placement.skipped,
+    candidateBlock: buildCandidateBlock(placement.fresh),
+  }
+}
+
+/** What the answer and the digest say, with the run record each candidate sits in. */
+function importModel(
+  parsed: ImportRequest,
+  sourceRunId: string,
+  verified: Verification,
+  placement: Placement,
+  runId: string | undefined,
+  newRecordPath: string,
+): ImportModel {
+  const candidates: ImportedCandidate[] = placement.order.map((entry) =>
+    entry.kind === 'fresh'
+      ? { item: entry, runRecordPath: newRecordPath }
+      : {
+          item: {
+            id: entry.accepted.id,
+            standing: 'new',
+            possibleMatches: [],
+            candidate: entry.accepted.candidate,
+          },
+          runRecordPath: entry.runRecordPath,
+        },
+  )
+  return {
+    runId,
+    outcome: verified.refused.length > 0 ? 'degraded' : 'complete',
+    provenance: parsed.provenance,
+    sourceRunId,
+    projects: verified.projects,
+    imported: placement.fresh.length,
+    candidates,
+    skipped: placement.skipped,
+    refused: verified.refused,
+  }
+}
+
+function importAnswer(
+  model: ImportModel,
+  verified: Verification,
+  written: { runDir: string } | undefined,
+): HelperResult {
+  const runRecordPath =
+    written === undefined ? undefined : path.join(written.runDir, 'run.json')
+  const digestPath =
+    written === undefined ? undefined : path.join(written.runDir, 'digest.md')
+  return success('import', {
+    outcome: model.outcome,
+    finalLine: `Connect ${model.outcome}`,
+    ...(written === undefined || model.runId === undefined
+      ? {}
+      : {
+          runId: model.runId,
+          runDir: written.runDir,
+          runRecordPath,
+          digestPath,
+        }),
+    imported: model.imported,
+    alreadyImported: model.candidates.length - model.imported,
+    candidates: model.candidates.map(({ item, runRecordPath: held }) => ({
+      id: item.id,
+      kind: item.candidate.kind,
+      title: item.candidate.title,
+      standing: item.standing,
+      runRecordPath: held,
+    })),
+    skipped: model.skipped,
+    refused: model.refused,
+    refusedBy: countByReason(model.refused),
+    projects: verified.projects,
+    provenance: model.provenance,
+    degradeReasons: model.refused.length > 0 ? ['candidates-refused'] : [],
+    summary: renderImportSummary(model, digestPath),
+  })
+}
+
+/** The busy lock, a failed insert and a ledger that was not written, each as the answer. */
+function insertFailure(inserted: ImportInsertResult): HelperResult | undefined {
+  if (inserted.status === 'busy') {
+    return {
+      ok: false,
+      body: {
+        ok: false,
+        op: 'import',
+        outcome: 'busy',
+        reason: inserted.reason,
+        finalLine: 'Connect busy',
+        hint: 'Another run holds the lock. If no run is active, `ledger unlock` clears it.',
+      },
+    }
+  }
+  if (inserted.status === 'failed') {
+    return importFailure(
+      inserted.reason === 'lock-failed' ||
+        inserted.reason === 'ledger-unreadable'
+        ? inserted.reason
+        : `publish-${inserted.reason}`,
+    )
+  }
+  if (inserted.status === 'published' && !inserted.ledger.written) {
+    return importFailure('ledger-write-failed', { runDir: inserted.runDir })
+  }
+  return undefined
+}
+
+/** Place the verified candidates under the lock and write the import run, if there is one to write. */
+function importWrite(
+  parsed: ImportRequest,
+  sourceRunId: string,
+  verified: Verification,
+  root: string,
+  deps: HelperDeps,
+): HelperResult {
+  const now = deps.now ?? Date.now
+  let placement: Placement = NO_PLACEMENT
+  let localRunId: string | undefined
+  const inserted = insertImportRun(
+    root,
+    (view): ImportPlan => {
+      placement = placeCandidates(
+        verified.accepted,
+        view.ledger,
+        root,
+        view.importRuns,
+      )
+      if (placement.fresh.length === 0) return { publish: false }
+      const runId = newImportRunId(now())
+      localRunId = runId
+      const createdAt = new Date(now()).toISOString()
+      const model = importModel(
+        parsed,
+        sourceRunId,
+        verified,
+        placement,
+        runId,
+        path.join(root, 'runs', runId, 'run.json'),
+      )
+      return {
+        publish: true,
+        runId,
+        files: {
+          'digest.md': renderImportDigest(model, placement.fresh, createdAt),
+          'run.json': `${JSON.stringify(importRunRecord(model, createdAt, verified, placement), null, 2)}\n`,
+        },
+        candidates: placement.fresh.map((item) => item.record),
+      }
+    },
+    {
+      now,
+      ...(deps.processes === undefined ? {} : { processes: deps.processes }),
+      ...(deps.publishHooks === undefined ? {} : { hooks: deps.publishHooks }),
+    },
+  )
+  const failed = insertFailure(inserted)
+  if (failed !== undefined) return failed
+  const written =
+    inserted.status === 'published' ? { runDir: inserted.runDir } : undefined
+  return importAnswer(
+    importModel(
+      parsed,
+      sourceRunId,
+      verified,
+      placement,
+      localRunId,
+      written === undefined ? '' : path.join(written.runDir, 'run.json'),
+    ),
+    verified,
+    written,
+  )
+}
+
+/**
+ * Import the candidates of a scheduled run's record. Everything before the
+ * lock only reads: the record, then the local checkouts. A request or a record
+ * that cannot be used changes no state, and neither does an import that has
+ * nothing to write.
+ */
+function importRun(request: unknown, deps: HelperDeps): HelperResult {
+  const parsed = parseImportRequest(request)
+  if (parsed === undefined) return importFailure('invalid-request')
+  const read = readImportRecord(parsed.directory)
+  if (read.status === 'failed') return importFailure(read.reason)
+  const environment = describeEnvironment(deps)
+  if (environment.resolved.resolved.length === 0) {
+    return importFailure('no-allowed-projects', {
+      unmatched: environment.resolved.unmatched,
+      configWarnings: environment.warnings,
+    })
+  }
+  const verified = verifyRecord({
+    record: read.record,
+    locals: importLocals(environment),
+    factsFor: importFacts(deps),
+  })
+  const sourceRunId = read.record.runId
+  if (verified.accepted.length === 0) {
+    return importAnswer(
+      importModel(parsed, sourceRunId, verified, NO_PLACEMENT, undefined, ''),
+      verified,
+      undefined,
+    )
+  }
+
+  const state = prepareStateRoot(environment.stateRoot, {
+    allowedRoots: environment.allowedRoots,
+  })
+  if (state.status === 'refused') {
+    return importFailure('state-root-refused', { detail: state.reason })
+  }
+  return importWrite(parsed, sourceRunId, verified, state.root, deps)
+}
+
 // ── Dispatch ────────────────────────────────────────────────────────────────
 
 /**
@@ -2669,6 +3184,8 @@ export function runHelperOp(
         return publish(request, deps)
       case 'decide':
         return decide(request, deps)
+      case 'import':
+        return importRun(request, deps)
       case 'ledger-show':
         return ledgerShow(request, deps)
       case 'ledger-clear':
@@ -2731,7 +3248,13 @@ export interface CliOptions {
   readonly errorSink?: (line: string) => void
 }
 
-const REQUEST_OPS = new Set<Op>(['begin', 'validate', 'publish', 'decide'])
+const REQUEST_OPS = new Set<Op>([
+  'begin',
+  'validate',
+  'publish',
+  'decide',
+  'import',
+])
 
 function resolveCliOp(argv: readonly string[]): Op | undefined {
   const [first, second] = argv

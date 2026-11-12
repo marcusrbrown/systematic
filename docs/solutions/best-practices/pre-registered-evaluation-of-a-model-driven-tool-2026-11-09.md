@@ -71,7 +71,7 @@ All nine runs of the main sweep ended `degraded`, and every one carried the reas
 The frozen digest then blocked the fix: the file that classified the outcome was a file under test. The recorded way through:
 
 1. Score and record the results as they happened, including the nine degraded runs.
-2. Make the change after scoring. Reaching the cap became a reported fact: `scanGaps` (`src/ce-connect-helper.ts:887-926`) lists it under what was not read and adds no degrade reason, and the run record keeps per-project `citationsChecked` and `citationsTruncated` (`src/ce-connect-helper.ts:450-461`). A project with another gap still ends `degraded` and still reports the cap (`tests/unit/ce-connect-helper-ops.test.ts:1219-1277`).
+2. Make the change after scoring. Reaching the cap became a reported fact: `scanGaps` (`src/ce-connect-helper.ts:907-946`) lists it under what was not read and adds no degrade reason, and the run record keeps per-project `citationsChecked` and `citationsTruncated` (`src/ce-connect-helper.ts:470-481`). A project with another gap still ends `degraded` and still reports the cap (`tests/unit/ce-connect-helper-ops.test.ts:1219-1277`).
 3. Split the frozen-digest test in two: the registered digest never changes, and the last digest line must match the tree (`tests/unit/connect-eval-fixture.test.ts:415-435`).
 4. Append each later change as a new digest line under the results, with a statement that no earlier figure is re-measured for the new files (`tests/manual/connect-eval/PRE-REGISTRATION.md:283-305`).
 

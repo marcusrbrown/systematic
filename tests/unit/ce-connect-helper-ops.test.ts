@@ -2657,6 +2657,94 @@ describe('a validate request that cannot be used', () => {
   })
 })
 
+// ── The import operation at the entry ──────────────────────────────────────
+
+describe('the import operation at the helper entry', () => {
+  it('is named in the usage line', () => {
+    const errors: string[] = []
+    const code = runConnectHelper({
+      argv: [],
+      errorSink: (line) => errors.push(line),
+    })
+    expect(code).toBe(2)
+    expect(errors.join('\n')).toContain('|import|')
+  })
+
+  it('reads one JSON request from stdin and refuses a terminal', () => {
+    const world = buildWorld()
+    const errors: string[] = []
+    const code = runConnectHelper({
+      argv: ['import'],
+      isTTY: true,
+      deps: world.deps,
+      errorSink: (line) => errors.push(line),
+      outputSink: () => {},
+    })
+    expect(code).toBe(2)
+    expect(errors.join('\n')).toContain('reads one JSON request from stdin')
+  })
+
+  it('answers a request that is not JSON with exit 2 and the reason', () => {
+    const world = buildWorld()
+    const lines: string[] = []
+    const code = runConnectHelper({
+      argv: ['import'],
+      isTTY: false,
+      deps: world.deps,
+      readRequest: () => '{ not json',
+      outputSink: (line) => lines.push(line),
+    })
+    expect(code).toBe(2)
+    const body = JSON.parse(lines[0] ?? '{}') as Json
+    expect(body).toMatchObject({
+      op: 'import',
+      outcome: 'failed',
+      reason: 'request-not-json',
+    })
+  })
+
+  it('leaves no invocation record, even when the workflow wrote the run file', () => {
+    const world = buildWorld()
+    fs.mkdirSync(world.stateRoot, { recursive: true, mode: 0o700 })
+    fs.writeFileSync(
+      path.join(world.stateRoot, CI_RUN_FILE),
+      JSON.stringify({ version: 1, marker: '9001-1' }),
+    )
+    const provenance = { repo: 'o/r', runId: '1' }
+    const missing = failed(
+      runHelperOp(
+        'import',
+        { directory: path.join(world.home, 'nowhere'), provenance },
+        world.deps,
+      ),
+    )
+    expect(missing.reason).toBe('directory-unreadable')
+    const dir = realTemp('connect-ops-import-')
+    fs.writeFileSync(
+      path.join(dir, 'run.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        runId: 'r1',
+        projects: [
+          {
+            name: 'p',
+            root: '/ci/p',
+            key: projectKey('/ci/p'),
+          },
+        ],
+        candidateBlock: { schemaVersion: 1, candidates: [] },
+      }),
+    )
+    const empty = ok(
+      runHelperOp('import', { directory: dir, provenance }, world.deps),
+    )
+    expect(empty.outcome).toBe('complete')
+    expect(fs.existsSync(path.join(world.stateRoot, INVOCATION_FILE))).toBe(
+      false,
+    )
+  })
+})
+
 // ── The invocation record of a CI run ──────────────────────────────────────
 
 describe('the invocation record of a CI run', () => {

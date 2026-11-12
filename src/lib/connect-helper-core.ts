@@ -842,7 +842,7 @@ function parseOverlap(value: unknown): OverlapCheck | Drop {
   return { queries: checked, result, note: text }
 }
 
-function pathProblem(rel: unknown): DropReason | undefined {
+export function pathProblem(rel: unknown): DropReason | undefined {
   if (typeof rel !== 'string' || rel === '') return 'malformed-candidate'
   if (rel.length > CANDIDATE_LIMITS.pathLength || CONTROL.test(rel)) {
     return 'malformed-candidate'
@@ -1448,7 +1448,7 @@ export function nameDropped(
 }
 
 /** Render untrusted prose as a block quote, so it cannot become a heading or a list. */
-function quote(text: string): string {
+export function quote(text: string): string {
   return sanitizeText(text)
     .split('\n')
     .map((line) => (line === '' ? '>' : `> ${line}`))
@@ -1472,7 +1472,7 @@ function fenced(text: string): string {
   return `${fence}\n${clean}\n${fence}`
 }
 
-function inline(text: string): string {
+export function inline(text: string): string {
   const clean = sanitizeText(text).replaceAll('\n', ' ')
   const fence = '`'.repeat(longestRun(clean, '`') + 1)
   const pad = clean.startsWith('`') || clean.endsWith('`') ? ' ' : ''
@@ -1503,7 +1503,10 @@ function renderSourceBlock(
   return out
 }
 
-function renderCandidate(item: DigestCandidate, index: number): string[] {
+export function renderCandidate(
+  item: DigestCandidate,
+  index: number,
+): string[] {
   const { candidate } = item
   const out = [
     `### Candidate ${index + 1}: ${candidate.kind} (${item.standing})`,
@@ -1727,7 +1730,7 @@ export function renderDigest(model: DigestModel): string {
 const MAX_SUMMARY_TITLES = 10
 
 /** A run record path that can be pasted as one `candidate:` token: no whitespace, no control character. */
-function isPasteablePath(file: string): boolean {
+export function isPasteablePath(file: string): boolean {
   return !/\s/.test(file) && sanitizeText(file) === file
 }
 
@@ -1766,7 +1769,7 @@ const REFRESH_PATH = /^docs\/solutions\/[A-Za-z0-9._/-]+\.md$/
  * target's own learning, which `ce:compound` refuses. A candidate to
  * investigate has nothing to promote yet.
  */
-function handoffLine(
+export function handoffLine(
   item: DigestModel['candidates'][number],
   runRecordPath: string,
   pasteable: boolean,

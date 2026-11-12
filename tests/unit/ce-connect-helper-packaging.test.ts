@@ -90,9 +90,10 @@ function git(cwd: string, args: string[]): void {
   }
 }
 
-function createProject(files: Record<string, string>): string {
+function createProject(files: Record<string, string>, remote?: string): string {
   const work = makeTempDir('connect-pack-project-')
   git(work, ['init', '-q', '-b', 'main'])
+  if (remote !== undefined) git(work, ['remote', 'add', 'origin', remote])
   git(work, ['config', 'gc.auto', '0'])
   git(work, ['config', 'maintenance.auto', 'false'])
   for (const [rel, content] of Object.entries(files)) {
@@ -404,6 +405,88 @@ function exerciseHelper(scriptPath: string, label: string): void {
 
   expect(
     [snapshotTree(scenario.source), snapshotTree(scenario.target)],
+    `${label}: an allowed project changed`,
+  ).toEqual(before)
+
+  exerciseImport(scriptPath, label)
+}
+
+const IMPORT_FIXTURES = path.join(REPO_ROOT, 'tests/fixtures/connect-import')
+
+function fixtureTree(base: string): Record<string, string> {
+  const root = path.join(IMPORT_FIXTURES, 'files', base)
+  const out: Record<string, string> = {}
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else out[path.relative(root, full)] = fs.readFileSync(full, 'utf8')
+    }
+  }
+  walk(root)
+  return out
+}
+
+/** The `import` operation through the real command line, against clones of the recorded repositories. */
+function exerciseImport(scriptPath: string, label: string): void {
+  const source = createProject(
+    fixtureTree('source'),
+    'https://github.com/acme/source.git',
+  )
+  const target = createProject(
+    fixtureTree('target'),
+    'https://github.com/acme/target.git',
+  )
+  const home = makeTempDir('connect-pack-import-home-')
+  const configDir = path.join(home, '.config', 'opencode')
+  fs.mkdirSync(configDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(configDir, 'systematic.json'),
+    JSON.stringify({ connect: { allow_projects: [source, target] } }),
+  )
+  const stateHome = path.join(makeTempDir('connect-pack-import-state-'), 'xdg')
+  const scenario: Scenario = {
+    source,
+    target,
+    stateHome,
+    env: {
+      PATH: process.env.PATH ?? '',
+      HOME: home,
+      XDG_STATE_HOME: stateHome,
+    },
+  }
+  const before = [snapshotTree(source), snapshotTree(target)]
+  const directory = makeTempDir('connect-pack-download-')
+  fs.copyFileSync(
+    path.join(IMPORT_FIXTURES, 'good', 'run.json'),
+    path.join(directory, 'run.json'),
+  )
+  const request = {
+    directory,
+    provenance: { repo: 'marcusrbrown/systematic', runId: '123456789' },
+  }
+
+  const imported = runHelper(scriptPath, ['import'], scenario, request)
+  expect(imported.exitCode, `${label}: import ${imported.stdout}`).toBe(0)
+  expect(imported.json?.outcome).toBe('complete')
+  expect(imported.json?.imported).toBe(2)
+  expect(String(imported.json?.summary)).toContain('candidate-id:')
+
+  const again = runHelper(scriptPath, ['import'], scenario, request)
+  expect(again.exitCode, `${label}: second import ${again.stdout}`).toBe(0)
+  expect(again.json?.imported).toBe(0)
+  expect(again.json?.alreadyImported).toBe(2)
+
+  const missing = runHelper(scriptPath, ['import'], scenario, {
+    ...request,
+    directory: makeTempDir('connect-pack-empty-'),
+  })
+  expect(missing.exitCode).toBe(1)
+  expect(missing.json?.reason).toBe('record-missing')
+  expect(missing.json?.finalLine).toBe('Connect failed')
+
+  expect(
+    [snapshotTree(source), snapshotTree(target)],
     `${label}: an allowed project changed`,
   ).toEqual(before)
 }
