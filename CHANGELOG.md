@@ -4,6 +4,34 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.32.3](https://github.com/marcusrbrown/systematic/compare/v3.32.2...v3.32.3) (2026-11-12)
+
+### Bug Fixes
+
+* keep the connections researcher read-only on OpenCode v2 when another definition of it exists ([#1375](https://github.com/marcusrbrown/systematic/issues/1375)) ([b2a1580](https://github.com/marcusrbrown/systematic/commit/b2a1580f36e67b6dadec76a4b9dc911462dd627e))
+* keep the connections researcher read-only when another config entry defines the same agent ([#1370](https://github.com/marcusrbrown/systematic/issues/1370)) ([3ec583b](https://github.com/marcusrbrown/systematic/commit/3ec583b2a1c215e75d38553e394b352d626ba4be))
+
+### Build System
+
+* **deps:** update OpenCode v2 to v2.2.6 ([#1359](https://github.com/marcusrbrown/systematic/issues/1359)) ([92f0aeb](https://github.com/marcusrbrown/systematic/commit/92f0aeb866f9ccce9d621b50579584fbb0eb5cd1))
+
+### Documentation
+
+* **solutions:** record that a restated pin version follows the pin through Renovate ([#1376](https://github.com/marcusrbrown/systematic/issues/1376)) ([88de8eb](https://github.com/marcusrbrown/systematic/commit/88de8eb9842d81b56366ead9e219d37879f9a10a))
+
+### Tests
+
+* stop tying the host-support table to the host version pins ([#1369](https://github.com/marcusrbrown/systematic/issues/1369)) ([d0d42b6](https://github.com/marcusrbrown/systematic/commit/d0d42b61bd7ba3223ca437a0515838c2da6a001f))
+
+### Continuous Integration
+
+* **renovate:** bump the ce:connect host-support rows with their host pins ([#1371](https://github.com/marcusrbrown/systematic/issues/1371)) ([c2be200](https://github.com/marcusrbrown/systematic/commit/c2be2009c83325283ffbf89b5a9429f14465577c))
+
+### Miscellaneous Chores
+
+* apply three local fixes from the cross-project learnings sweep ([#1373](https://github.com/marcusrbrown/systematic/issues/1373)) ([933267d](https://github.com/marcusrbrown/systematic/commit/933267d7029215f2939789221421075e8dbf69b0))
+* **deps:** update fro-bot/agent to v0.138.0 ([#1363](https://github.com/marcusrbrown/systematic/issues/1363)) ([b8009b4](https://github.com/marcusrbrown/systematic/commit/b8009b4c471cd1cee6be39ff4574e16f24a78eea))
+
 ## [3.32.2](https://github.com/marcusrbrown/systematic/compare/v3.32.1...v3.32.2) (2026-11-11)
 
 ### Bug Fixes
