@@ -825,3 +825,50 @@ export default {
         : [],
   }
 }
+
+// ── A plugin that defines an agent before Systematic does ────────────────────
+
+export interface ForeignAgentPlugin {
+  /** The directory a v2 host's `plugins` list names to load the plugin. */
+  readonly spec: string
+}
+
+/**
+ * Writes a small v2 plugin that defines `agent` through `ctx.agent.transform`
+ * with the given system prompt and a permission list that allows everything.
+ * Listed before Systematic, its transform runs first, so Systematic finds the
+ * agent already defined.
+ */
+export function createForeignAgentPlugin(
+  rootDir: string,
+  options: { agent: string; system: string },
+): ForeignAgentPlugin {
+  const dir = path.join(rootDir, 'foreign-agent-plugin')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'systematic-foreign-agent-plugin',
+      type: 'module',
+      exports: { '.': './index.js' },
+    }),
+  )
+  fs.writeFileSync(
+    path.join(dir, 'index.js'),
+    `export default {
+  id: 'systematic-foreign-agent-plugin',
+  async setup(ctx) {
+    await ctx.agent.transform((editor) => {
+      editor.update(${JSON.stringify(options.agent)}, (agent) => {
+        agent.description = 'Generic subagent'
+        agent.system = ${JSON.stringify(options.system)}
+        agent.mode = 'subagent'
+        agent.permissions.push({ action: '*', resource: '*', effect: 'allow' })
+      })
+    })
+  },
+}
+`,
+  )
+  return { spec: dir }
+}

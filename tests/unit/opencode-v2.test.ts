@@ -22,6 +22,7 @@ import {
   type V2Installer,
   type V2Snapshot,
 } from '../../src/lib/opencode-v2.js'
+import { READ_ONLY_AGENT_NAMES } from '../../src/lib/opencode-v2-tool-guard.js'
 
 const PACKAGE_ROOT = path.resolve(import.meta.dir, '../..')
 
@@ -890,14 +891,20 @@ function skeleton(id: string): HostAgent {
 
 /** A fresh editor, as the host builds one for each replay. */
 function createHostEditor(
-  preexisting: readonly string[] = [],
+  preexisting: readonly (string | HostAgent)[] = [],
   failingIds: readonly string[] = [],
 ) {
   const agents = new Map<string, HostAgent>()
-  for (const id of preexisting) agents.set(id, skeleton(id))
+  for (const entry of preexisting) {
+    if (typeof entry === 'string') agents.set(entry, skeleton(entry))
+    else agents.set(entry.id, entry)
+  }
   return {
     agents,
     get: (id: string) => agents.get(id),
+    remove(id: string) {
+      agents.delete(id)
+    },
     update(id: string, update: (agent: HostAgent) => void) {
       if (failingIds.includes(id)) throw new Error(`update failed for ${id}`)
       const agent = agents.get(id) ?? skeleton(id)
@@ -1084,6 +1091,233 @@ describe('applyPlannedAgent', () => {
   })
 })
 
+describe('a read-only agent another plugin already defined', () => {
+  const RESEARCHER = 'connections-researcher'
+  const FOREIGN_MARKER = 'FOREIGN-PROMPT-MARKER'
+  const DENIES: PlannedAgent['permission'] = {
+    kind: 'managed',
+    rules: [
+      { permission: 'bash', pattern: '*', setting: 'deny' },
+      { permission: 'edit', pattern: '*', setting: 'deny' },
+      { permission: 'webfetch', pattern: '*', setting: 'deny' },
+    ],
+  }
+  const PLANNED_CONFIG: PlannedAgent['config'] = {
+    description: 'Reads allowed projects (Connections-Researcher - Systematic)',
+    prompt: 'SYSTEMATIC-PROMPT',
+    mode: 'subagent',
+  }
+
+  function researcher(): PlannedAgent {
+    return planned(PLANNED_CONFIG, DENIES, RESEARCHER)
+  }
+
+  /** A generic definition that allows everything and carries its own settings. */
+  function foreignResearcher(model?: HostAgent['model']): HostAgent {
+    return {
+      ...skeleton(RESEARCHER),
+      description: 'FOREIGN-DESCRIPTION generic subagent',
+      system: `${FOREIGN_MARKER} do whatever the user asks`,
+      mode: 'all',
+      hidden: true,
+      color: '#00ff00',
+      steps: 99,
+      ...(model === undefined ? {} : { model }),
+      request: {
+        settings: { timeout: 1 },
+        headers: { 'x-foreign': 'FOREIGN-HEADER' },
+        body: { foreign: 'FOREIGN-BODY' },
+      },
+      permissions: [
+        { action: '*', resource: '*', effect: 'allow' },
+        { action: 'shell', resource: '*', effect: 'allow' },
+        { action: 'edit', resource: '*', effect: 'allow' },
+      ],
+    }
+  }
+
+  test('takes Systematic prompt, description, mode and denies and keeps the other entry model and variant', () => {
+    const editor = createHostEditor([
+      foreignResearcher({
+        providerID: 'openai',
+        id: 'gpt-5',
+        variant: 'high',
+      }),
+    ])
+
+    applyPlannedAgent(editor, researcher())
+
+    const agent = editor.agents.get(RESEARCHER)
+    expect(agent?.system).toBe('SYSTEMATIC-PROMPT')
+    expect(agent?.description).toBe(PLANNED_CONFIG.description)
+    expect(agent?.mode).toBe('subagent')
+    expect(agent?.model).toEqual({
+      providerID: 'openai',
+      id: 'gpt-5',
+      variant: 'high',
+    })
+    // Replaced, not merged: the host default rules and the denies, nothing else.
+    expect(agent?.permissions).toEqual([
+      ...skeleton('x').permissions,
+      { action: 'shell', resource: '*', effect: 'deny' },
+      { action: 'edit', resource: '*', effect: 'deny' },
+      { action: 'webfetch', resource: '*', effect: 'deny' },
+    ])
+    // Nothing else the other entry set survives.
+    expect(agent?.hidden).toBe(false)
+    expect(agent?.color).toBeUndefined()
+    expect(agent?.steps).toBeUndefined()
+    expect(agent?.request).toEqual({ settings: {}, headers: {}, body: {} })
+    expect(JSON.stringify(agent)).not.toContain('FOREIGN-')
+  })
+
+  test('a foreign model that is not a string pair is dropped', () => {
+    const entry = foreignResearcher()
+    Object.assign(entry, { model: { providerID: 7, id: 'gpt-5' } })
+    const editor = createHostEditor([entry])
+
+    applyPlannedAgent(editor, researcher())
+
+    expect(editor.agents.get(RESEARCHER)?.model).toBeUndefined()
+  })
+
+  test('a foreign variant that is not a string is dropped, the model stays', () => {
+    const entry = foreignResearcher()
+    Object.assign(entry, {
+      model: { providerID: 'openai', id: 'gpt-5', variant: 3 },
+    })
+    const editor = createHostEditor([entry])
+
+    applyPlannedAgent(editor, researcher())
+
+    expect(editor.agents.get(RESEARCHER)?.model).toEqual({
+      providerID: 'openai',
+      id: 'gpt-5',
+    })
+  })
+
+  test('without a model on the other entry the plan model applies', () => {
+    const editor = createHostEditor([foreignResearcher()])
+
+    applyPlannedAgent(
+      editor,
+      planned(
+        { ...PLANNED_CONFIG, model: 'anthropic/claude-sonnet-5-5' },
+        DENIES,
+        RESEARCHER,
+      ),
+    )
+
+    expect(editor.agents.get(RESEARCHER)?.model).toEqual({
+      providerID: 'anthropic',
+      id: 'claude-sonnet-5-5',
+    })
+  })
+
+  test('after the replacement the agent equals one created with no other entry', () => {
+    const fresh = createHostEditor()
+    const replaced = createHostEditor([foreignResearcher()])
+
+    applyPlannedAgent(fresh, researcher())
+    applyPlannedAgent(replaced, researcher())
+
+    expect(replaced.agents.get(RESEARCHER)).toEqual(
+      fresh.agents.get(RESEARCHER) as HostAgent,
+    )
+    expect(fresh.agents.get(RESEARCHER)?.system).toBe('SYSTEMATIC-PROMPT')
+    expect(errorMessages()).toHaveLength(1)
+  })
+
+  test('an ordinary agent another plugin defined is left as it is', () => {
+    const entry: HostAgent = {
+      ...skeleton('ordinary'),
+      system: `${FOREIGN_MARKER} ordinary`,
+    }
+    const editor = createHostEditor([entry])
+
+    applyPlannedAgent(
+      editor,
+      planned({ prompt: 'SYSTEMATIC-PROMPT' }, DENIES, 'ordinary'),
+    )
+
+    expect(editor.agents.get('ordinary')).toEqual(entry)
+    expect(errorMessages()).toHaveLength(1)
+    expect(errorMessages()[0]).toContain('skipping the bundled agent')
+  })
+
+  test('one diagnostic, repeated runs included, and none of the other entry in it', () => {
+    const reported = new Set<string>()
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const editor = createHostEditor([
+        foreignResearcher({ providerID: 'openai', id: 'gpt-5-FOREIGN-MODEL' }),
+      ])
+      applyPlannedAgent(editor, researcher(), reported)
+    }
+
+    const messages = errorMessages()
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toStartWith('systematic: ')
+    expect(messages[0]).toContain(RESEARCHER)
+    expect(messages[0]).toContain('read-only')
+    for (const leaked of [FOREIGN_MARKER, 'FOREIGN', 'gpt-5', 'allow']) {
+      expect(messages[0]).not.toContain(leaked)
+    }
+  })
+
+  test('a second run over its own output changes nothing and stays quiet', () => {
+    const reported = new Set<string>()
+    const editor = createHostEditor([
+      foreignResearcher({ providerID: 'openai', id: 'gpt-5', variant: 'high' }),
+    ])
+
+    applyPlannedAgent(editor, researcher(), reported)
+    const first = structuredClone(editor.agents.get(RESEARCHER))
+    errorSpy.mockClear()
+    applyPlannedAgent(editor, researcher(), reported)
+
+    expect(editor.agents.get(RESEARCHER)).toEqual(first as HostAgent)
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  test('the installed transform enforces the bundled researcher over an allow-everything entry', async () => {
+    const fake = createFakeContext(projectDir)
+    let captured: V2Snapshot | undefined
+    await setupOpenCodeV2(
+      fake.ctx,
+      deps({
+        installers: {
+          skills: ({ snapshot }) => {
+            captured = snapshot
+          },
+        },
+      }),
+    )
+    const plannedResearcher = captured?.plan.agents[RESEARCHER]
+    if (plannedResearcher === undefined) {
+      throw new Error('expected the bundled researcher in the plan')
+    }
+    const editor = createHostEditor([foreignResearcher()])
+
+    for (const callback of fake.transforms as unknown as ((
+      editor: HostEditor,
+    ) => unknown)[]) {
+      callback(editor)
+    }
+
+    const agent = editor.agents.get(RESEARCHER)
+    expect(agent?.system).toBe(plannedResearcher.config.prompt)
+    expect(agent?.system).not.toContain(FOREIGN_MARKER)
+    const denied = new Set(
+      agent?.permissions
+        .filter((rule) => rule.effect === 'deny')
+        .map((rule) => rule.action),
+    )
+    expect(denied.has('shell')).toBe(true)
+    expect(denied.has('edit')).toBe(true)
+    expect(JSON.stringify(agent)).not.toContain('FOREIGN-')
+  })
+})
+
 describe('agents installer', () => {
   async function registerTransforms(
     overrides: Partial<OpenCodeV2Deps> = {},
@@ -1156,7 +1390,9 @@ describe('agents installer', () => {
 
   test('an id another plugin already defined is skipped with one diagnostic, even across replays', async () => {
     const { replay, snapshot } = await registerTransforms()
-    const [taken, other] = Object.keys(snapshot.plan.agents)
+    const [taken, other] = Object.keys(snapshot.plan.agents).filter(
+      (name) => !READ_ONLY_AGENT_NAMES.includes(name),
+    )
     if (taken === undefined || other === undefined) {
       throw new Error('expected at least two bundled agents')
     }

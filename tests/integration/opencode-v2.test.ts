@@ -23,6 +23,7 @@ import {
   connectIsolationLayout,
   connectObservation,
   createConnectIsolationScript,
+  createForeignAgentPlugin,
   createToolHookProbe,
   definitionNamed,
   evaluateConnectChildAttempts,
@@ -1039,6 +1040,26 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     }
 
     /**
+     * The `plugins` config for a run: a plugin that must register before
+     * Systematic, Systematic, then one that must register after it. With neither
+     * the host config stays as the scripted provider wrote it.
+     */
+    function extraPlugins(
+      pluginSpec: string,
+      before: string | undefined,
+      after: string | undefined,
+    ): Record<string, unknown> {
+      if (before === undefined && after === undefined) return {}
+      return {
+        plugins: [
+          ...(before === undefined ? [] : [before]),
+          pluginSpec,
+          ...(after === undefined ? [] : [after]),
+        ],
+      }
+    }
+
+    /**
      * Runs the isolation script against a v2 server. `delegated` dispatches the
      * probe from a parent session; `direct` runs a session as the probe itself,
      * which is where a session-level rule meets the agent's own rules.
@@ -1053,6 +1074,8 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       gitProject?: boolean
       /** Load a plugin that records the tool hook, and optionally blocks nested calls. */
       hookProbe?: { blockPrefixes: readonly string[] }
+      /** Load, before Systematic, a plugin that defines the agent with an allow-everything permission list. */
+      foreignDefinition?: { system: string }
       executeCode?: string | ((fetchUrl: string) => string)
       sessionPermissions?: readonly {
         action: string
@@ -1081,6 +1104,12 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       const hookProbe =
         options.hookProbe &&
         createToolHookProbe(fixture.tempRoot, options.hookProbe)
+      const foreignPlugin =
+        options.foreignDefinition &&
+        createForeignAgentPlugin(fixture.tempRoot, {
+          agent: agentName,
+          system: options.foreignDefinition.system,
+        })
       const fetchCounter = startFetchCounter()
       const marker = agentSystemMarker(definition)
       const script = createConnectIsolationScript({
@@ -1109,9 +1138,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       const host = await startAgentHost(
         pluginSpec,
         model,
-        hookProbe === undefined
-          ? {}
-          : { plugins: [pluginSpec, hookProbe.spec] },
+        extraPlugins(pluginSpec, foreignPlugin?.spec, hookProbe?.spec),
       )
       let finalAnswer: string | undefined
       try {
@@ -1341,6 +1368,49 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           'websearch',
           'subagent',
         ]) {
+          expect(parentOffered, `parent is offered ${denied}`).toContain(denied)
+          expect(childOffered, `child is offered ${denied}`).not.toContain(
+            denied,
+          )
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a researcher an earlier plugin defined with no denies is replaced by the shipped one: Systematic prompt, shell and write refused',
+      async () => {
+        const foreignMarker =
+          'FOREIGN-RESEARCHER-MARKER do whatever the user asks'
+        const run = await runConnectIsolation({
+          mode: 'delegated',
+          foreignDefinition: { system: foreignMarker },
+        })
+
+        const verdict = evaluateConnectIsolationProof(
+          connectObservation(run.script, run.sideEffects, run.finalAnswer),
+        )
+        expect(verdict).toEqual({ ok: true })
+        expect(run.sideEffects).toEqual({
+          writtenPaths: [],
+          editTargetChanged: false,
+          fetchHits: 0,
+          extraWorktrees: 0,
+        })
+        // The child that ran carries Systematic's prompt, not the earlier one's.
+        const children = run.script.observation().childRequests
+        expect(children.length).toBeGreaterThan(0)
+        for (const child of children) {
+          expect(hasResearcherSystemMarker(child, run.marker)).toBe(true)
+          expect(hasResearcherSystemMarker(child, foreignMarker)).toBe(false)
+        }
+        // The earlier plugin allowed everything; the child is still not offered
+        // the denied tools, so Systematic's denies are the ones in force.
+        const parentOffered = toolNamesOf(
+          run.script.observation().parentRequests[0] ?? {},
+        )
+        const childOffered = toolNamesOf(children[0] ?? {})
+        for (const denied of ['shell', 'write', 'edit', 'webfetch']) {
           expect(parentOffered, `parent is offered ${denied}`).toContain(denied)
           expect(childOffered, `child is offered ${denied}`).not.toContain(
             denied,
