@@ -59,6 +59,8 @@ The `ce:connect` skill reads the learnings and tracked code of projects you list
 
 The one command that reaches GitHub is `fetch:<run>`, and it runs only when you type it. The skill then runs `gh api` and `gh run download` with your own `gh` login, against the run and artifact of one run of the Systematic repository. The requests carry the run id and your `gh` token to GitHub, and nothing from your projects. The downloaded record goes to a temporary directory that is removed afterwards, and the candidates that pass the local checks are written to the same state directory as any other run. The helper still opens no connection.
 
+A scheduled run is different, and it exists only where someone sets up Systematic's `ce:connect` workflow in a GitHub repository. It reads public repositories only. The text its agent reads reaches the model provider named in that repository's secrets, and nothing is redacted from it. It then posts a report as an issue in the repository that runs it, which is public when that repository is public. The report quotes excerpts from the repositories it read. The run record is also saved as a workflow artifact for 30 days, readable by anyone who can read the repository's artifacts. The agent step can read the provider credential and the job's token, and nothing screens the report or the artifacts for secret values. The [connect guide](/systematic/guides/cross-project-connections/#scheduled-runs) lists the mitigations and says plainly what they do not stop.
+
 The [connect guide](/systematic/guides/cross-project-connections/#limits) explains the limits.
 
 ## Contact
