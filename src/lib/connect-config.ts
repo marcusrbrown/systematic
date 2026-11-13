@@ -694,7 +694,7 @@ export const HOST_SUPPORT_TABLE: readonly HostSupportRow[] = [
   {
     host: 'pi',
     // renovate: datasource=npm depName=@earendil-works/pi-coding-agent
-    version: '1.5.0',
+    version: '1.5.1',
     observedBy:
       'tests/unit/pi-delegate-session.test.ts > the shipped researcher reaches createAgentSession with read, grep and find and none of bash, write, edit or systematic_delegate',
   },
