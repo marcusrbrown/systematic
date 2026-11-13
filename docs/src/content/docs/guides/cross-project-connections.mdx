@@ -242,7 +242,7 @@ A promoted learning never copies another project's text. It cites each source as
 
 ### Bring a scheduled run's candidates here
 
-A lesson found on another machine cannot be promoted from its own record: the paths in it belong to a runner that is gone. `fetch:<run>` brings the candidates of a run of Systematic's `ce:connect` workflow to your machine and re-checks them against your own checkouts, so you can promote them with the usual line. This release does not include that workflow.
+A lesson found on another machine cannot be promoted from its own record: the paths in it belong to a runner that is gone. `fetch:<run>` brings the candidates of a run of Systematic's `ce:connect` workflow to your machine and re-checks them against your own checkouts, so you can promote them with the usual line. The workflow is described in [Scheduled runs](#scheduled-runs).
 
 ```text
 /ce:connect fetch:<run>
@@ -287,7 +287,7 @@ The next run reads the ticks back with the helper's `apply-ticks` operation and 
 - **Only candidates the report listed.** Each body names the list of ids it rendered. A tick for an id outside that list, or for one the ledger no longer knows, is reported as unresolved. It is never fatal.
 - **One decision per candidate.** Ticking both boxes is a conflict and is skipped. A tick already recorded with the same status and reason is skipped, so reading the same body twice changes nothing.
 
-The ledger a scheduled run keeps is separate from your local ledger, and nothing flows between them. Promoting locally through `fetch` does not settle the candidate on the report; tick Promoted for that. The helper carries `apply-ticks` and `render-report`, which writes the report body, so that a workflow can post and read these reports. This release does not include that workflow, and a local run never calls either operation.
+The ledger a scheduled run keeps is separate from your local ledger, and nothing flows between them. Promoting locally through `fetch` does not settle the candidate on the report; tick Promoted for that. The workflow in [Scheduled runs](#scheduled-runs) calls the helper's `apply-ticks` and `render-report` operations, which read these ticks and write the report body. A local run never calls either operation.
 
 ### Record the decision
 
@@ -308,6 +308,99 @@ The ledger holds identities, source paths, fingerprints, statuses, reasons and r
 The ledger file is at version 2. A version 1 ledger is converted by the first run that writes it: its coverage becomes the whole-list sweep, and its entries are unchanged. A ledger with any other version cannot be read and is never replaced. A helper that predates version 2 reads a version 2 ledger as unreadable and overwrites nothing, so update the skill and its helper together.
 
 A lock held by a process that has died is reclaimed by the next run without any help. `ledger unlock` is for a run that ended without releasing its lock while its host process is still alive. The skill never runs `ledger unlock` for a busy lock, and never in headless mode. The one exception is a failed `validate` whose reply does not confirm that the lock was released: the skill then unlocks the lock its own run took before it stops.
+
+## Scheduled runs
+
+Systematic's repository runs one headless `ce:connect` slice a day over public repositories, and posts what it found as a GitHub issue. The workflow is `.github/workflows/connect.yaml`. It starts every day at 05:41 UTC, and you can start it by hand with `workflow_dispatch`. Both triggers run only on the repository's default branch; on any other branch every job is skipped.
+
+The run is headless, so it asks nothing and decides nothing. It proposes candidates. You settle them by ticking boxes on the report ([Settle a candidate on a report](#settle-a-candidate-on-a-report)) or by fetching them to your machine ([Bring a scheduled run's candidates here](#bring-a-scheduled-runs-candidates-here)).
+
+### Set it up
+
+The workflow reads three repository variables and two repository secrets.
+
+| Name | Kind | What it holds |
+|---|---|---|
+| `FRO_BOT_CONNECT_PROJECTS` | Variable | The projects to read, as `owner/repo` entries separated by whitespace or commas. Case is folded, duplicates are dropped, and a list must hold between 1 and 16 entries. An entry's checkout name, `owner__repo`, may be at most 100 characters, because the workflow reads the repository back from that name. A longer entry stops the run. |
+| `FRO_BOT_CONNECT_MODEL` | Variable | Required. The researcher's model, as `provider/model`. |
+| `FRO_BOT_CONNECT_VARIANT` | Variable | Optional. A model variant for the researcher. |
+| `OPENCODE_AUTH_JSON` | Secret | The model provider's credential. |
+| `OPENCODE_CONFIG` | Secret | The OpenCode configuration the action needs next to the credential. The credential alone fails provider authentication, so both are required. |
+
+The two secrets reach only the step that runs the agent, as the action's `auth-json` and `opencode-config` inputs. No other job or step references them.
+
+A bad variable stops the run in its first job, before anything is cloned or posted, and the workflow ends red. That covers a missing or malformed model, an entry that is not `owner/repo`, an empty list and a list over 16.
+
+**Only public repositories are read.** The first job asks the GitHub API for each repository's visibility and treats an error as not public. One repository that is not public stops the whole run. The render job checks again before it saves the cache or uploads anything, and the last job checks again right before it writes, so a repository made private during the run is caught too. Both rechecks cover every repository the cached state names, shown or not: the repositories behind all stored candidates and every retained run record, including ones that have left the list. The first job runs the same check before it uploads the restored cache, and a repository that is no longer public fails the run with nothing uploaded, cached or posted. A repository that cannot be named fails the run too. To recover, delete the connect cache with `gh cache list --key connect-v1- --limit 100 --json id --jq '.[].id' | xargs -n 1 gh cache delete`. The next run then starts with an empty ledger. Each repository is cloned without credentials, at its default branch, with its history cut to the latest commit.
+
+The four jobs split the work by what each may touch:
+
+1. **Prepare** has read-only access. It checks the variables and the repositories, restores the ledger cache, and records the ticks left on the newest open report.
+2. **Run** has a read-only token. It is the only job that runs the agent.
+3. **Render** has no permissions and no secrets. It renders the report from what the run left, rechecks visibility, saves the ledger cache and checks that the save left a cache behind.
+4. **Post** is the only job that can write, and it can write only issues. It writes the report and closes the reports it replaces.
+
+No job checks out Systematic's repository or runs a script from it. The jobs pass files to each other as artifacts, and an artifact carries only the connect files on an allow list: the ledger, the stores behind the report, the invocation record, and each run's `run.json` and `digest.md`. These artifacts are kept for one day.
+
+### Pin the Systematic version
+
+The workflow installs one exact release of `@fro.bot/systematic`. The same version feeds the action's `systematic-version` input and the helper that renders the report and reads the ticks, so the skill that wrote the state and the helper that reads it are the same release. Bump it by editing `SYSTEMATIC_VERSION` at the top of the workflow. Do it with each Systematic release that changes the format of the ledger or the run records.
+
+The `fro-bot/agent` action is pinned by commit, and its pin follows Renovate. A headless run refuses a host and version that `HOST_SUPPORT_TABLE` does not list ([Supported hosts](#supported-hosts)): the run ends `Connect failed` with the reason `unsupported-host`, and the workflow turns red.
+
+### Read the report
+
+Each UTC date has one report, titled `ce:connect report — YYYY-MM-DD (UTC)`. A second run on the same date edits that report in place and opens no second issue. When a new date's report is posted, each older open report gets a comment, `Superseded by #<n>.`, and is closed. The workflow finds a report by its exact title and by its author, `github-actions[bot]` or `fro-bot`. An issue that only looks like a report is ignored.
+
+The report lists the candidates that are still open, oldest first, as many as fit under the size cap. Each candidate has:
+
+- the sources and the target evidence, shown as quoted text,
+- a `fetch:<run>` line for the run that found it, to bring it to your machine, and
+- two boxes, **Promoted** and **Rejected**.
+
+Tick **one** box per candidate. Ticking both is a conflict, and neither is recorded. The next run reads the ticks from the newest open report. Ticks on a closed report are ignored, so settle a candidate before the next report supersedes the report that lists it. A box ticked on any line the report did not generate records nothing.
+
+A box you tick while a run is going is kept. Before the last job edits or closes a report, it reads that report again and ticks the same boxes in the new body, for the candidates the new body still lists. It reads only the generated boxes inside the report's decision section and never inside a code fence. The next run then records those ticks. A tick for a candidate the new body no longer lists is dropped.
+
+The report also says how the run ended: `Connect complete`, `Connect degraded`, `Connect busy`, `Connect failed`, or no final line. A degraded or busy run is posted and the workflow stays green. A failed run, or one that began and never reported an outcome, is posted and the workflow then turns red.
+
+A failure before the report can be rendered turns the workflow red and posts nothing. This covers an agent step that stopped before `ce:connect` began, a run record that does not belong to this run, projects that differ from the allow list the workflow wrote, a store that cannot be read, and a lock that is held. The next run starts from the last good state and reads the same open report again.
+
+### What the cache holds
+
+The ledger lives in a GitHub Actions cache, because no other job or run keeps files between runs. The cache holds:
+
+- `ledger.json`, the candidates and their decisions,
+- the store of candidate text that the report is rendered from,
+- the manifests of the last 14 reports, which say which ticks still count, and
+- `run.json` and `digest.md` for each run.
+
+It never holds the lock, OpenCode's own state, the configuration directory or a credential. Every run saves under a new key and restores the newest one. The save is checked: the render job looks the cache up by its key afterwards, because the save step reports success even when it saved nothing. If the cache cannot be saved, or the lookup finds nothing, the report says so and the workflow ends red, because the next run may list settled candidates again.
+
+GitHub evicts caches that go unused for seven days or push a repository over its cache limit. After an eviction, the first run starts with an empty ledger. It restarts the sweep from the beginning, forgets earlier decisions, and may list a settled candidate again. Its report opens with a notice that no cache was restored, and a tick for a candidate the ledger no longer knows is reported as unresolved.
+
+### Fetch a candidate
+
+The run saves its run record as an artifact named `connect-run-<run>-<attempt>`, kept for 30 days. It holds the run record and nothing else. `fetch:<run>` reads it ([Bring a scheduled run's candidates here](#bring-a-scheduled-runs-candidates-here)). Once the artifact has expired, `fetch` reports `artifact-expired`. Tick **Rejected** on the report, or wait for a later run to propose the candidate again. After a workflow rerun, `fetch:<run>` reads that run's newest attempt.
+
+`fetch:` reads runs of `marcusrbrown/systematic` only. A copy of the workflow in another repository posts its own reports and ticks, but its runs cannot be fetched.
+
+### What the credential can reach
+
+This is a documented exposure, and it is accepted.
+
+The agent step can read the model provider's credential and the job's token on the runner. The parent agent has shell and network access. A prompt injection hidden in the text of a public repository could try to make it leak either one. Nothing screens the report or the artifacts for secret values, because a keyword or entropy screen gives false assurance and would not stop an agent that has its own shell and network.
+
+The mitigations narrow what a leak is worth. None of them stops the leak:
+
+- Only public repositories are read.
+- The run job's token is scoped to the job, read-only, and expires when the job ends.
+- No job has a write path to any repository. The one unattended write is the report issue.
+- The credential reaches only the action step.
+- Artifacts between jobs carry only the connect files on the allow list.
+- The report is inert: model text is fenced and neutralised, and a quoted checkbox records nothing.
+
+If that exposure is more than you accept, do not enable the workflow, or use a provider credential that you can scope and revoke.
 
 ## Supported hosts
 
@@ -344,12 +437,13 @@ Read these before you add a project.
 - **Coverage is self-reported.** The helper records a rule as covered from the researcher's own report of what it searched. A run steered by a hostile learning can mark rules covered without searching them. `ledger clear` resets coverage.
 - **Some paths cannot be cited.** A file whose path contains a single quote, a dollar sign or a backtick is skipped, and so is a project whose root has one. The digest names the reason under "Not read or not covered".
 - **A fetched record is untrusted.** It comes from a runner you do not control, and only the helper opens it. The helper re-verifies fingerprints and excerpts against your files, but the title and summary were written by a researcher on that runner and are not checked against evidence. Read every candidate before you promote it.
+- **A scheduled run's agent can reach its credential.** The agent step can read the provider credential and the job's token, and nothing screens the report or the artifacts for secret values. The mitigations narrow the damage and do not prevent a leak. See [What the credential can reach](#what-the-credential-can-reach).
 - **A report's ticks are only as good as the report.** A tick settles a candidate by id. Nothing checks that you promoted it. The ledger of a scheduled run is separate from yours.
 - **Promoted learnings never copy another project's text.** They are written in the target project's own words and cite their sources by project, path and fingerprint.
 - **Only a human promotes.** Nothing in `ce:connect` writes a learning, edits a project, or records a decision without you.
 
 ## Privacy
 
-The helper opens no connection at all. Apart from `fetch:` (below), `ce:connect` makes no network call of its own and sends nothing to anyone but your model provider. Everything a run reads and writes is on your machine. The text the researcher reads, and the digest, reach your model provider like any other tool result.
+The helper opens no connection at all. Apart from `fetch:` (below) and the scheduled workflow, `ce:connect` makes no network call of its own and sends nothing to anyone but your model provider. Everything a run reads and writes is on your machine. The text the researcher reads, and the digest, reach your model provider like any other tool result.
 
 The one command that reaches GitHub is `fetch:<run>`, and only when you type it. The skill runs `gh` with your own credentials to read one run and download one artifact of `marcusrbrown/systematic`. The requests carry the run id and your `gh` token. Nothing from your projects is uploaded. See [Privacy](/systematic/privacy/#connecting-your-projects).
