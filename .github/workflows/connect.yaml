@@ -36,10 +36,12 @@ env:
   # whenever the ledger or the run records change format.
   SYSTEMATIC_VERSION: "3.33.0"
   # A report is an open issue whose whole title matches this rule and whose
-  # author is one of these logins. The rule never matches the Fro Bot daily
-  # report title, and Fro Bot's rule never matches this one.
+  # author is one of these logins. The post job writes with the job token, so
+  # the REST API shows the author as `github-actions[bot]`. The rule never
+  # matches the Fro Bot daily report title, and Fro Bot's rule never matches
+  # this one.
   REPORT_TITLE_RE: '^ce:connect report — [0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01]) \(UTC\)$'
-  REPORT_AUTHORS: '["github-actions[bot]","fro-bot"]'
+  REPORT_AUTHORS: '["github-actions[bot]"]'
   # The renderer keeps a body to 60,000 characters; the rest is room for the
   # one fixed line this workflow may add when the cache could not be saved.
   REPORT_BODY_CAP: "60500"
@@ -80,6 +82,7 @@ jobs:
           PROJECTS_RAW: ${{ vars.FRO_BOT_CONNECT_PROJECTS }}
           MODEL: ${{ vars.FRO_BOT_CONNECT_MODEL }}
           VARIANT: ${{ vars.FRO_BOT_CONNECT_VARIANT }}
+          STEP_TIMEOUT: ${{ vars.FRO_BOT_CONNECT_STEP_TIMEOUT }}
         run: |
           fail() {
             echo "::error::$1"
@@ -92,6 +95,17 @@ jobs:
           if [ -n "$VARIANT" ]; then
             [[ "$VARIANT" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] ||
               fail "FRO_BOT_CONNECT_VARIANT is not a variant name."
+          fi
+          # The agent step's timeout, in whole minutes. It must stay below the run
+          # job's own timeout (`job_limit`), or a hung agent would end the job and
+          # skip the steps that read the record and hand the state on. The run
+          # job reads the same variable for the step, with 40 when it is unset.
+          job_limit=50
+          if [ -n "$STEP_TIMEOUT" ]; then
+            [[ "$STEP_TIMEOUT" =~ ^[1-9][0-9]{0,2}$ ]] ||
+              fail "FRO_BOT_CONNECT_STEP_TIMEOUT is not a whole number of minutes."
+            [ "$STEP_TIMEOUT" -lt "$job_limit" ] ||
+              fail "FRO_BOT_CONNECT_STEP_TIMEOUT must be below the ${job_limit}-minute job timeout."
           fi
 
           set -f
@@ -352,8 +366,11 @@ jobs:
     name: Run ce:connect
     needs: prepare
     runs-on: ubuntu-latest
-    # The agent step itself is unbounded (`timeout: 0`), as in the Fro Bot
-    # workflow, so this is the only cap on a hung run.
+    # The action's own runtime is unbounded (`timeout: 0`), as in the Fro Bot
+    # workflow. The agent step carries a shorter timeout of its own, so a hung
+    # run is cut off with time left for the steps after it. This job's timeout
+    # is the backstop. Cancelling the job skips every step that follows the
+    # agent, so nothing would be posted.
     timeout-minutes: 50
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     permissions:
@@ -436,8 +453,13 @@ jobs:
       # judged from the helper's invocation record in the next step, not here.
       - name: Run ce:connect
         id: agent
-        # The run record, not this step's exit, decides the outcome.
+        # The run record, not this step's exit, decides the outcome. A step that
+        # hits its timeout ends as a failed step and the job goes on, so the next
+        # step reads the record and a begun run is still handed on and posted.
         continue-on-error: true
+        # Minutes. Prepare checked that the variable is a whole number below the
+        # job timeout.
+        timeout-minutes: ${{ fromJSON(vars.FRO_BOT_CONNECT_STEP_TIMEOUT || '40') }}
         uses: fro-bot/agent@1ffb6495501f12801f770fa0c0563d16450416e7 # v0.140.2
         # Set up like the Fro Bot workflow's agent step. Each difference below
         # has a reason; tests/unit/connect-workflow.test.ts pins the rest.

@@ -317,20 +317,21 @@ The run is headless, so it asks nothing and decides nothing. It proposes candida
 
 ### Set it up
 
-The workflow reads four repository variables and two repository secrets.
+The workflow reads five repository variables and two repository secrets.
 
 | Name | Kind | What it holds |
 |---|---|---|
 | `FRO_BOT_CONNECT_PROJECTS` | Variable | The projects to read, as `owner/repo` entries separated by whitespace or commas. Case is folded, duplicates are dropped, and a list must hold between 1 and 16 entries. An entry's checkout name, `owner__repo`, may be at most 100 characters, because the workflow reads the repository back from that name. A longer entry stops the run. |
 | `FRO_BOT_CONNECT_MODEL` | Variable | Required. The researcher's model, as `provider/model`. |
 | `FRO_BOT_CONNECT_VARIANT` | Variable | Optional. A model variant for the researcher. |
+| `FRO_BOT_CONNECT_STEP_TIMEOUT` | Variable | Optional. The minutes the agent step may run, as a whole number below the run job's 50-minute timeout. The default is 40. It bounds the agent step so a hung run still posts its report. |
 | `FRO_BOT_MODEL` | Variable | The model of the parent agent that runs the skill, as `provider/model`. It is the same variable the Fro Bot workflow uses. The workflow does not check it: if it is unset, the action falls back to its own default model. |
 | `OPENCODE_AUTH_JSON` | Secret | The model provider's credential. |
 | `OPENCODE_CONFIG` | Secret | The OpenCode configuration the action needs next to the credential. The credential alone fails provider authentication, so both are required. |
 
 The two secrets reach only the step that runs the agent, as the action's `auth-json` and `opencode-config` inputs. No other job or step references them.
 
-A bad variable stops the run in its first job, before anything is cloned or posted, and the workflow ends red. That covers a missing or malformed model, an entry that is not `owner/repo`, an empty list and a list over 16.
+A bad variable stops the run in its first job, before anything is cloned or posted, and the workflow ends red. That covers a missing or malformed model, an entry that is not `owner/repo`, an empty list, a list over 16 and a step timeout that is not a whole number of minutes below 50.
 
 **Only public repositories are read.** The first job asks the GitHub API for each repository's visibility and treats an error as not public. One repository that is not public stops the whole run. The render job checks again before it saves the cache or uploads anything, and the last job checks again right before it writes, so a repository made private during the run is caught too. Both rechecks cover every repository the cached state names, shown or not: the repositories behind all stored candidates and every retained run record, including ones that have left the list. The first job runs the same check before it uploads the restored cache, and a repository that is no longer public fails the run with nothing uploaded, cached or posted. A repository that cannot be named fails the run too. To recover, delete the connect cache with `gh cache list --key connect-v1- --limit 100 --json id --jq '.[].id' | xargs -n 1 gh cache delete`. The next run then starts with an empty ledger. Each repository is cloned without credentials, at its default branch, with its history cut to the latest commit.
 
@@ -351,7 +352,7 @@ The `fro-bot/agent` action is pinned by commit, and its pin follows Renovate. A 
 
 ### Read the report
 
-Each UTC date has one report, titled `ce:connect report — YYYY-MM-DD (UTC)`. A second run on the same date edits that report in place and opens no second issue. When a new date's report is posted, each older open report gets a comment, `Superseded by #<n>.`, and is closed. The workflow finds a report by its exact title and by its author, `github-actions[bot]` or `fro-bot`. An issue that only looks like a report is ignored.
+Each UTC date has one report, titled `ce:connect report — YYYY-MM-DD (UTC)`. A second run on the same date edits that report in place and opens no second issue. When a new date's report is posted, each older open report gets a comment, `Superseded by #<n>.`, and is closed. The workflow finds a report by its exact title and by its author, `github-actions[bot]`, which is the login the job token posts as. An issue that only looks like a report, such as one with the same title written by another account, is ignored.
 
 The report lists the candidates that are still open, oldest first, as many as fit under the size cap. Each candidate has:
 
@@ -364,6 +365,8 @@ Tick **one** box per candidate. Ticking both is a conflict, and neither is recor
 A box you tick while a run is going is kept. Before the last job edits or closes a report, it reads that report again and ticks the same boxes in the new body, for the candidates the new body still lists. It reads only the generated boxes inside the report's decision section and never inside a code fence. The next run then records those ticks. A tick for a candidate the new body no longer lists is dropped.
 
 The report also says how the run ended: `Connect complete`, `Connect degraded`, `Connect busy`, `Connect failed`, or no final line. A degraded or busy run is posted and the workflow stays green. A failed run, or one that began and never reported an outcome, is posted and the workflow then turns red.
+
+The agent step has its own timeout, `FRO_BOT_CONNECT_STEP_TIMEOUT` (40 minutes by default), shorter than the run job's. A hung run is cut off at that point and the steps after it still run: the run record is read, handed on and posted, and the report says the run ended with no final line. The job's own timeout is only a backstop. When a job is cancelled or times out, every step after the agent is skipped and nothing is posted.
 
 A failure before the report can be rendered turns the workflow red and posts nothing. This covers an agent step that stopped before `ce:connect` began, a run record that does not belong to this run, projects that differ from the allow list the workflow wrote, a store that cannot be read, and a lock that is held. The next run starts from the last good state and reads the same open report again.
 

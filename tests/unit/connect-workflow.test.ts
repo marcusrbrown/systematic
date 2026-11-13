@@ -87,6 +87,8 @@ const GUARD =
 const CONNECT_TITLE = 'ce:connect report — 2026-11-12 (UTC)'
 const FRO_BOT_TITLE = 'Daily Fro Bot Report — 2026-11-12 (UTC)'
 const AGENT_PIN = /fro-bot\/agent@([0-9a-f]{40}) # (v\d+\.\d+\.\d+)/
+const STEP_TIMEOUT_EXPRESSION =
+  "${{ fromJSON(vars.FRO_BOT_CONNECT_STEP_TIMEOUT || '40') }}"
 
 // ── Structure ───────────────────────────────────────────────────────────────
 
@@ -147,6 +149,14 @@ describe('connect workflow structure', () => {
     expect(Number(job('run')['timeout-minutes'])).toBeGreaterThan(30)
   })
 
+  it('bounds the agent step below the job so the steps after it still run', () => {
+    const bound = stepNamed('run', 'Run ce:connect')['timeout-minutes']
+    expect(bound).toBe(STEP_TIMEOUT_EXPRESSION)
+    const fallback = Number(/\|\| '(\d+)'/.exec(String(bound))?.[1])
+    expect(fallback).toBeGreaterThan(0)
+    expect(fallback).toBeLessThan(Number(job('run')['timeout-minutes']))
+  })
+
   it('never checks out a repository', () => {
     for (const { step } of allSteps()) {
       expect(String(step.uses ?? '')).not.toMatch(/actions\/checkout/)
@@ -184,9 +194,13 @@ describe('connect workflow structure', () => {
       'FRO_BOT_CONNECT_PROJECTS',
       'FRO_BOT_CONNECT_MODEL',
       'FRO_BOT_CONNECT_VARIANT',
+      'FRO_BOT_CONNECT_STEP_TIMEOUT',
     ]
+    // The step timeout is also read where it bounds the agent step; prepare
+    // validates it first, and the run job needs prepare.
     for (const name of names) {
-      expect(SOURCE.split(`vars.${name}`).length - 1).toBe(1)
+      const reads = name === 'FRO_BOT_CONNECT_STEP_TIMEOUT' ? 2 : 1
+      expect(SOURCE.split(`vars.${name}`).length - 1).toBe(reads)
     }
     const env = asRecord(
       stepNamed('prepare', 'Validate configuration').env,
@@ -195,6 +209,11 @@ describe('connect workflow structure', () => {
     expect(Object.values(env)).toEqual(
       expect.arrayContaining(names.map((name) => `\${{ vars.${name} }}`)),
     )
+    expect(
+      JSON.stringify(
+        stepsOf('run').filter((step) => step.name !== 'Run ce:connect'),
+      ),
+    ).not.toContain('vars.')
   })
 
   it('keeps the report title apart from the Fro Bot daily report in both directions', () => {
@@ -213,10 +232,9 @@ describe('connect workflow structure', () => {
     expect(connect.test(CONNECT_TITLE.replace('11-12', '13-45'))).toBe(false)
   })
 
-  it('names the report authors as an exact login list', () => {
+  it('names the report author as an exact login list holding only the Actions bot', () => {
     expect(JSON.parse(WORKFLOW_ENV.REPORT_AUTHORS ?? '[]')).toEqual([
       'github-actions[bot]',
-      'fro-bot',
     ])
   })
 })
@@ -280,6 +298,8 @@ const DIFFERING_STEP_KEYS: Readonly<Record<string, string>> = {
   'continue-on-error': 'the run record, not the step exit, decides the outcome',
   with: 'compared input by input',
   env: 'compared key by key',
+  'timeout-minutes':
+    'the step is bounded below the job so the steps after a hung agent still run',
 }
 
 const FRO_BOT_SOURCE = fs.readFileSync(FRO_BOT_PATH, 'utf8')
@@ -370,9 +390,12 @@ describe('connect workflow agent step parity with Fro Bot', () => {
     expect(withOf('run', 'Run ce:connect').model).toBe(model)
   })
 
-  it('leaves the action runtime unbounded and bounds the job instead', () => {
+  it('leaves the action runtime unbounded and bounds the step and the job instead', () => {
     expect(withOf('run', 'Run ce:connect').timeout).toBe(0)
     expect(typeof job('run')['timeout-minutes']).toBe('number')
+    expect(stepNamed('run', 'Run ce:connect')['timeout-minutes']).toBe(
+      STEP_TIMEOUT_EXPRESSION,
+    )
   })
 })
 
@@ -992,8 +1015,55 @@ describe('prepare: date and configuration', () => {
     expect(result.outputs.get('variant')).toBe('')
   })
 
+  it('accepts an unset step timeout and any whole number of minutes below the job timeout', () => {
+    const jobLimit = Number(job('run')['timeout-minutes'])
+    for (const value of ['', '1', '40', String(jobLimit - 1)]) {
+      const box = makeBox()
+      const result = runStep(box, 'prepare', 'Validate configuration', {
+        ...CONFIG_ENV,
+        STEP_TIMEOUT: value,
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.outputs.get('projects')).toBe('acme/target other/repo')
+    }
+  })
+
+  it('checks the step timeout against the same limit the run job has', () => {
+    const script = asString(
+      stepNamed('prepare', 'Validate configuration').run,
+      'config script',
+    )
+    const limit = /job_limit=(\d+)/.exec(script)?.[1]
+    expect(Number(limit)).toBe(Number(job('run')['timeout-minutes']))
+  })
+
   const failures: Array<[string, Record<string, string>, (box: Box) => void]> =
     [
+      [
+        'a step timeout equal to the job timeout',
+        { STEP_TIMEOUT: '50' },
+        () => undefined,
+      ],
+      [
+        'a step timeout above the job timeout',
+        { STEP_TIMEOUT: '90' },
+        () => undefined,
+      ],
+      ['a step timeout of zero', { STEP_TIMEOUT: '0' }, () => undefined],
+      ['a negative step timeout', { STEP_TIMEOUT: '-5' }, () => undefined],
+      ['a fractional step timeout', { STEP_TIMEOUT: '4.5' }, () => undefined],
+      [
+        'a step timeout that is not a number',
+        { STEP_TIMEOUT: 'soon' },
+        () => undefined,
+      ],
+      ['a step timeout with spaces', { STEP_TIMEOUT: ' 40 ' }, () => undefined],
+      [
+        'a step timeout with a leading zero',
+        { STEP_TIMEOUT: '040' },
+        () => undefined,
+      ],
+      ['a step timeout with a unit', { STEP_TIMEOUT: '40m' }, () => undefined],
       [
         'a private repository',
         {},
@@ -1072,9 +1142,20 @@ describe('prepare: finding the open report', () => {
       { number: 14, title: titleOn(DATE_TWO), pr: true },
       { number: 15, title: FRO_BOT_TITLE },
       { number: 16, title: titleOn(DATE_TWO), state: 'closed' },
+      { number: 17, title: titleOn(DATE_TWO), login: 'fro-bot' },
       { number: 7, title: titleOn(DATE_ONE) },
     ])
     expect(find(box).outputs.get('report')).toBe('7')
+  })
+
+  it('finds no report when the only one with the title was written by fro-bot', () => {
+    const box = makeBox()
+    writeIssues(box, [
+      { number: 20, title: titleOn(DATE_TWO), login: 'fro-bot' },
+    ])
+    const result = find(box)
+    expect(result.exitCode).toBe(0)
+    expect(result.outputs.get('report')).toBe('')
   })
 
   it('picks the newest title date, then the lowest issue number', () => {
@@ -1087,7 +1168,7 @@ describe('prepare: finding the open report', () => {
     ])
     const result = find(box)
     expect(result.exitCode).toBe(0)
-    expect(result.outputs.get('report')).toBe('20')
+    expect(result.outputs.get('report')).toBe('21')
   })
 
   it('writes the chosen body to a file and fails on a lookup error', () => {
@@ -1965,6 +2046,7 @@ describe('post: writing and rotating the report', () => {
       { number: 31, title: titleOn(DATE_ONE), login: 'someone-else' },
       { number: 32, title: titleOn(DATE_ONE), pr: true },
       { number: 33, title: FRO_BOT_TITLE, login: 'fro-bot' },
+      { number: 34, title: titleOn(DATE_ONE), login: 'fro-bot' },
       { number: 7, title: titleOn(DATE_ONE) },
     ])
     const written = write(box, DATE_TWO)
@@ -1972,7 +2054,7 @@ describe('post: writing and rotating the report', () => {
     const open = issuesOf(box)
       .filter((i) => i.state === 'open')
       .map((i) => i.number)
-    expect(open).toEqual(expect.arrayContaining([30, 31, 32, 33]))
+    expect(open).toEqual(expect.arrayContaining([30, 31, 32, 33, 34]))
     expect(open).not.toContain(7)
   })
 
@@ -1980,7 +2062,7 @@ describe('post: writing and rotating the report', () => {
     const box = makeBox()
     writeIssues(box, [
       { number: 51, title: titleOn(DATE_ONE) },
-      { number: 50, title: titleOn(DATE_ONE), login: 'fro-bot' },
+      { number: 50, title: titleOn(DATE_ONE) },
     ])
     const written = write(box)
     expect(written.outputs.get('number')).toBe('50')
@@ -1990,12 +2072,41 @@ describe('post: writing and rotating the report', () => {
     expect(issues.find((i) => i.number === 51)?.state).toBe('closed')
   })
 
+  it('opens its own report for the date rather than editing a same-date report that fro-bot wrote', () => {
+    const box = makeBox()
+    writeIssues(box, [
+      {
+        number: 50,
+        title: titleOn(DATE_ONE),
+        body: 'theirs',
+        login: 'fro-bot',
+      },
+    ])
+    const written = write(box)
+    expect(written.exitCode).toBe(0)
+    expect(Number(written.outputs.get('number'))).toBeGreaterThan(50)
+    expect(edits(box)).toEqual([])
+    expect(issuesOf(box).find((i) => i.number === 50)?.body).toBe('theirs')
+  })
+
   it('refuses to rotate when the report did not read back as written by an expected author', () => {
     const box = makeBox()
     writeIssues(box, [{ number: 7, title: titleOn(DATE_ONE) }])
     const result = post(box, 'Write report', {
       ...postEnv(box, reportBody(), DATE_TWO),
       GH_ACTOR: 'mallory',
+    })
+    expect(result.exitCode).toBe(1)
+    expect(result.outputs.has('number')).toBe(false)
+    expect(issuesOf(box).find((i) => i.number === 7)?.state).toBe('open')
+  })
+
+  it('refuses to rotate when the report reads back as written by fro-bot', () => {
+    const box = makeBox()
+    writeIssues(box, [{ number: 7, title: titleOn(DATE_ONE) }])
+    const result = post(box, 'Write report', {
+      ...postEnv(box, reportBody(), DATE_TWO),
+      GH_ACTOR: 'fro-bot',
     })
     expect(result.exitCode).toBe(1)
     expect(result.outputs.has('number')).toBe(false)
@@ -2044,6 +2155,84 @@ describe('post: writing and rotating the report', () => {
     expect(
       runStep(box, 'post', 'Settle result', { RENDER_RED: 'true' }).exitCode,
     ).toBe(1)
+  })
+})
+
+// ── An agent step cut off by its timeout ────────────────────────────────────
+
+// A step that hits `timeout-minutes` ends with the outcome `failure`; with
+// `continue-on-error` the job goes on. The steps after it see a failed agent
+// step and whatever record ce:connect left.
+describe('agent step timeout after ce:connect began', () => {
+  const AGENT_OUTCOME = 'failure'
+
+  it('is accepted by the run job, rendered as a run with no final line, posted and then settled red', () => {
+    const runBox = layoutBox()
+    writeJson(path.join(RUN_ROOT(runBox), 'invocation.json'), {
+      version: 1,
+      marker: '555-1',
+      phase: 'begun',
+      runId: CONNECT_RUN,
+      projects: [{ key: PROJECT_KEY, name: 'target', repo: 'acme/target' }],
+    })
+    const accepted = runStep(runBox, 'run', 'Read run record', {
+      PROJECTS: 'acme/target',
+      AGENT_OUTCOME,
+    })
+    expect(accepted.exitCode).toBe(0)
+    expect(accepted.outputs.get('accepted')).toBe('true')
+    expect(accepted.stdout).toContain('no-final-line')
+    expect(accepted.stdout).toContain(`agent step: ${AGENT_OUTCOME}`)
+
+    // What the run job uploads is what the render job reads.
+    const record = JSON.parse(
+      fs.readFileSync(path.join(RUN_ROOT(runBox), 'invocation.json'), 'utf8'),
+    ) as Json
+    const box = makeBox()
+    seedHandoff(box, {
+      invocation: { ...record, outcome: undefined, finalLine: undefined },
+    })
+    const { render, body } = renderDay(box, DATE_ONE)
+    expect(render.exitCode).toBe(0)
+    expect(body).toMatch(/ended with no final line/)
+    const done = finalize(box, render)
+    expect(done.outputs.get('has-body')).toBe('true')
+    expect(done.outputs.get('red')).toBe('true')
+
+    writeIssues(box, [])
+    const env = {
+      DATE: DATE_ONE,
+      RENDER_DIGEST: done.outputs.get('digest') ?? '',
+      RENDER_CHARS: done.outputs.get('chars') ?? '',
+    }
+    expect(post(box, 'Verify report', env).exitCode).toBe(0)
+    const written = post(box, 'Write report', env)
+    expect(written.exitCode).toBe(0)
+    expect(
+      post(box, 'Close superseded reports', {
+        NUMBER: written.outputs.get('number') ?? '',
+      }).exitCode,
+    ).toBe(0)
+    const issues = issuesOf(box)
+    expect(issues).toHaveLength(1)
+    expect(issues[0]?.title).toBe(titleOn(DATE_ONE))
+    expect(issues[0]?.body).toMatch(/ended with no final line/)
+
+    const settled = post(box, 'Settle result', {
+      RENDER_RED: done.outputs.get('red') ?? '',
+    })
+    expect(settled.exitCode).toBe(1)
+  })
+
+  it('fails the run job red with nothing accepted when the agent was cut off before ce:connect began', () => {
+    const box = layoutBox()
+    const result = runStep(box, 'run', 'Read run record', {
+      PROJECTS: 'acme/target',
+      AGENT_OUTCOME,
+    })
+    expect(result.exitCode).toBe(1)
+    expect(result.outputs.has('accepted')).toBe(false)
+    expect(result.stdout).toContain(`agent step: ${AGENT_OUTCOME}`)
   })
 })
 
