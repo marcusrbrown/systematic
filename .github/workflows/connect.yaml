@@ -381,8 +381,9 @@ jobs:
     steps:
       # The action has no working-directory input and ignores step-level
       # overrides of GITHUB_* variables, so the layout lives in the real
-      # workspace. Step-level `env:` does not reach the agent's shell; a
-      # variable appended to $GITHUB_ENV does.
+      # workspace. The agent shell receives allowlisted variables only.
+      # XDG_STATE_HOME passes through $GITHUB_ENV; the run marker travels as a
+      # file (see "Write run marker").
       - name: Create connect layout
         run: |
           layout="$GITHUB_WORKSPACE/connect"
