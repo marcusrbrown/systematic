@@ -249,12 +249,130 @@ describe('connect workflow credentials', () => {
     }
   })
 
-  it('does not continue a saved agent session and delivers nothing', () => {
+  it('leaves the action session cache alone and delivers nothing', () => {
     const action = withOf('run', 'Run ce:connect')
-    expect(action['skip-cache']).toBe('true')
+    expect(action).not.toHaveProperty('skip-cache')
     expect(action['response-mode']).toBe('none')
     expect(action['output-mode']).toBe('working-dir')
     expect(stepNamed('run', 'Run ce:connect')['continue-on-error']).toBe(true)
+  })
+})
+
+// The agent step is set up like the Fro Bot workflow's agent step: every
+// input and environment key matches unless it is named here with the reason.
+const DIFFERING_INPUTS: Readonly<Record<string, string>> = {
+  'github-token': 'the read-only job token, not the Fro Bot personal token',
+  'trusted-head-sha': 'there is no pull request head to trust',
+  'brokered-push-extra-paths': 'the run pushes nothing',
+  'response-mode': 'nothing is delivered to GitHub',
+  'output-mode': 'the output stays in the working directory',
+  'dedup-window': 'a repeat run is never suppressed',
+  'systematic-version': 'the skill and the helper must be one release',
+  prompt: 'a fixed connect prompt',
+}
+const DIFFERING_ENV: Readonly<Record<string, string>> = {
+  PROMPT: 'the connect prompt is a literal input, not routed from env',
+}
+// `with` and `env` are compared on their own; `uses` must match exactly.
+const DIFFERING_STEP_KEYS: Readonly<Record<string, string>> = {
+  name: 'the step has its own name',
+  id: 'the next step reads this step outcome',
+  'continue-on-error': 'the run record, not the step exit, decides the outcome',
+  with: 'compared input by input',
+  env: 'compared key by key',
+}
+
+const FRO_BOT_SOURCE = fs.readFileSync(FRO_BOT_PATH, 'utf8')
+const FRO_BOT = asRecord(
+  yaml.load(FRO_BOT_SOURCE, { schema: yaml.JSON_SCHEMA }),
+  'fro-bot workflow',
+)
+const FRO_BOT_AGENT_STEP = asArray(
+  asRecord(asRecord(FRO_BOT.jobs, 'fro-bot jobs')['fro-bot'], 'fro-bot job')
+    .steps,
+  'fro-bot steps',
+)
+  .map((step, index) => asRecord(step, `fro-bot step ${index}`))
+  .find((step) => step.name === 'Run Fro Bot')
+
+function froBotAgentStep(): RecordValue {
+  if (FRO_BOT_AGENT_STEP === undefined) {
+    throw new Error('step not found: fro-bot/Run Fro Bot')
+  }
+  return FRO_BOT_AGENT_STEP
+}
+
+function mismatches(
+  connect: RecordValue,
+  froBot: RecordValue,
+  allowed: Readonly<Record<string, string>>,
+): string[] {
+  const keys = new Set([...Object.keys(connect), ...Object.keys(froBot)])
+  return [...keys]
+    .filter((key) => !(key in allowed))
+    .filter(
+      (key) => JSON.stringify(connect[key]) !== JSON.stringify(froBot[key]),
+    )
+    .sort()
+}
+
+describe('connect workflow agent step parity with Fro Bot', () => {
+  const connectStep = () => stepNamed('run', 'Run ce:connect')
+
+  it('sets every input like the Fro Bot step except the named differences', () => {
+    expect(
+      mismatches(
+        asRecord(connectStep().with, 'connect with'),
+        asRecord(froBotAgentStep().with, 'fro-bot with'),
+        DIFFERING_INPUTS,
+      ),
+    ).toEqual([])
+  })
+
+  it('sets every environment key like the Fro Bot step except the named differences', () => {
+    expect(
+      mismatches(
+        asRecord(connectStep().env ?? {}, 'connect env'),
+        asRecord(froBotAgentStep().env ?? {}, 'fro-bot env'),
+        DIFFERING_ENV,
+      ),
+    ).toEqual([])
+  })
+
+  it('runs the same action ref and adds only the named step keys', () => {
+    expect(
+      mismatches(connectStep(), froBotAgentStep(), DIFFERING_STEP_KEYS),
+    ).toEqual([])
+    for (const key of Object.keys(DIFFERING_STEP_KEYS)) {
+      expect(key in connectStep() || key in froBotAgentStep()).toBe(true)
+    }
+  })
+
+  it('names only differences that exist', () => {
+    const connectWith = asRecord(connectStep().with, 'connect with')
+    const froBotWith = asRecord(froBotAgentStep().with, 'fro-bot with')
+    for (const key of Object.keys(DIFFERING_INPUTS)) {
+      expect(key in connectWith || key in froBotWith).toBe(true)
+    }
+    const connectEnv = asRecord(connectStep().env ?? {}, 'connect env')
+    const froBotEnv = asRecord(froBotAgentStep().env ?? {}, 'fro-bot env')
+    for (const key of Object.keys(DIFFERING_ENV)) {
+      expect(key in connectEnv || key in froBotEnv).toBe(true)
+    }
+  })
+
+  it('runs the parent agent on the model the Fro Bot step uses', () => {
+    const model = asString(
+      asRecord(froBotAgentStep().with, 'fro-bot with').model,
+      'fro-bot model',
+    )
+    expect(model).toMatch(/^\$\{\{ vars\.[A-Z][A-Z0-9_]* \}\}$/)
+    expect(withOf('run', 'Run ce:connect').model).toBe(model)
+  })
+
+  it('leaves the action runtime unbounded and bounds the job instead', () => {
+    expect(withOf('run', 'Run ce:connect').timeout).toBe(0)
+    expect(typeof job('run')['timeout-minutes']).toBe('number')
   })
 })
 

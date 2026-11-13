@@ -317,13 +317,14 @@ The run is headless, so it asks nothing and decides nothing. It proposes candida
 
 ### Set it up
 
-The workflow reads three repository variables and two repository secrets.
+The workflow reads four repository variables and two repository secrets.
 
 | Name | Kind | What it holds |
 |---|---|---|
 | `FRO_BOT_CONNECT_PROJECTS` | Variable | The projects to read, as `owner/repo` entries separated by whitespace or commas. Case is folded, duplicates are dropped, and a list must hold between 1 and 16 entries. An entry's checkout name, `owner__repo`, may be at most 100 characters, because the workflow reads the repository back from that name. A longer entry stops the run. |
 | `FRO_BOT_CONNECT_MODEL` | Variable | Required. The researcher's model, as `provider/model`. |
 | `FRO_BOT_CONNECT_VARIANT` | Variable | Optional. A model variant for the researcher. |
+| `FRO_BOT_MODEL` | Variable | The model of the parent agent that runs the skill, as `provider/model`. It is the same variable the Fro Bot workflow uses. The workflow does not check it: if it is unset, the action falls back to its own default model. |
 | `OPENCODE_AUTH_JSON` | Secret | The model provider's credential. |
 | `OPENCODE_CONFIG` | Secret | The OpenCode configuration the action needs next to the credential. The credential alone fails provider authentication, so both are required. |
 
