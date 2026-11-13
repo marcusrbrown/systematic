@@ -1,0 +1,69 @@
+name: Fro Bot agent
+description: Runs the fro-bot/agent action with the settings the Fro Bot and Connect workflows share.
+
+# The one place this repository pins fro-bot/agent. A composite action cannot read
+# `secrets` or `vars`, so each caller passes the model and the credentials in.
+
+inputs:
+  model:
+    description: Parent agent model, as provider/model.
+    required: true
+  auth-json:
+    description: Provider credentials, a JSON object keyed by provider ID.
+    required: true
+  opencode-config:
+    description: JSON merged into the OpenCode config.
+    required: true
+  github-token:
+    description: Token the agent uses for GitHub.
+    required: true
+  prompt:
+    description: Prompt for the agent.
+    required: true
+  output-mode:
+    description: Delivery mode for schedule and dispatch runs. Empty leaves the action's default.
+    required: false
+    default: ""
+  response-mode:
+    description: Whether the agent posts to GitHub, github or none.
+    required: false
+    default: github
+  dedup-window:
+    description: Deduplication window in milliseconds. 0 disables it.
+    required: false
+    default: "600000"
+  systematic-version:
+    description: Systematic plugin version to register. Empty leaves the action's default.
+    required: false
+    default: ""
+  trusted-head-sha:
+    description: Trusted same-repository pull request head SHA. Empty when there is none.
+    required: false
+    default: ""
+  brokered-push-extra-paths:
+    description: Comma-separated path prefixes the brokered push may touch beyond the defaults.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Run the agent
+      uses: fro-bot/agent@1ffb6495501f12801f770fa0c0563d16450416e7 # v0.140.2
+      env:
+        OPENCODE_PROMPT_ARTIFACT: "true"
+      with:
+        model: ${{ inputs.model }}
+        auth-json: ${{ inputs.auth-json }}
+        opencode-config: ${{ inputs.opencode-config }}
+        github-token: ${{ inputs.github-token }}
+        prompt: ${{ inputs.prompt }}
+        output-mode: ${{ inputs.output-mode }}
+        response-mode: ${{ inputs.response-mode }}
+        dedup-window: ${{ inputs.dedup-window }}
+        systematic-version: ${{ inputs.systematic-version }}
+        trusted-head-sha: ${{ inputs.trusted-head-sha }}
+        brokered-push-extra-paths: ${{ inputs.brokered-push-extra-paths }}
+        # The action's own runtime is unbounded; each caller bounds the step or
+        # the job instead.
+        timeout: 0

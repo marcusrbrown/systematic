@@ -6,7 +6,10 @@ import path from 'node:path'
 import yaml from 'js-yaml'
 import { decisionLine, manifestMarker } from '../../src/lib/connect-ci.js'
 import { projectName } from '../../src/lib/connect-helper-core.js'
-import { readCiRunMarker } from '../../src/lib/connect-state.js'
+import {
+  prepareStateRoot,
+  readCiRunMarker,
+} from '../../src/lib/connect-state.js'
 
 // Script tests run real shell steps and the bundled helper, which can take
 // several seconds each when the suite runs alongside other files.
@@ -86,7 +89,10 @@ const GUARD =
   "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
 const CONNECT_TITLE = 'ce:connect report — 2026-11-12 (UTC)'
 const FRO_BOT_TITLE = 'Daily Fro Bot Report — 2026-11-12 (UTC)'
-const AGENT_PIN = /fro-bot\/agent@([0-9a-f]{40}) # (v\d+\.\d+\.\d+)/
+const AGENT_STEP = 'Run ce:connect'
+const CHECKOUT_STEP = 'Check out the shared agent action'
+const SHARED_ACTION_FILE = '.github/actions/fro-bot-agent/action.yml'
+const SHARED_ACTION_USES = './.github/actions/fro-bot-agent'
 const STEP_TIMEOUT_EXPRESSION =
   "${{ fromJSON(vars.FRO_BOT_CONNECT_STEP_TIMEOUT || '40') }}"
 
@@ -157,22 +163,28 @@ describe('connect workflow structure', () => {
     expect(fallback).toBeLessThan(Number(job('run')['timeout-minutes']))
   })
 
-  it('never checks out a repository', () => {
-    for (const { step } of allSteps()) {
-      expect(String(step.uses ?? '')).not.toMatch(/actions\/checkout/)
-    }
+  it('checks out this repository in the run job only, for the shared agent action', () => {
+    const checkouts = allSteps().filter(({ step }) =>
+      String(step.uses ?? '').startsWith('actions/checkout@'),
+    )
+    expect(checkouts.map(({ id, step }) => [id, step.name])).toEqual([
+      ['run', CHECKOUT_STEP],
+    ])
     expect(SOURCE).not.toMatch(/\bbun (run|install|test)\b/)
   })
 
-  it('pins every action by full commit SHA and the agent to the Fro Bot workflow ref', () => {
+  it('pins every published action by full commit SHA and uses no other local action', () => {
     for (const { step } of allSteps()) {
       if (step.uses === undefined) continue
-      expect(String(step.uses)).toMatch(/^[\w./-]+@[0-9a-f]{40}$/)
+      const uses = String(step.uses)
+      if (uses.startsWith('./')) {
+        expect(uses).toBe(
+          `./${asString(withOf('run', CHECKOUT_STEP).path, 'checkout path')}/${SHARED_ACTION_USES.slice(2)}`,
+        )
+        continue
+      }
+      expect(uses).toMatch(/^[\w./-]+@[0-9a-f]{40}$/)
     }
-    expect(SOURCE).toMatch(AGENT_PIN)
-    const froBot = fs.readFileSync(FRO_BOT_PATH, 'utf8')
-    expect(froBot).toMatch(AGENT_PIN)
-    expect(AGENT_PIN.exec(SOURCE)?.[0]).toBe(AGENT_PIN.exec(froBot)?.[0])
   })
 
   it('uses one Systematic version for the action and both helper installs', () => {
@@ -276,30 +288,62 @@ describe('connect workflow credentials', () => {
   })
 })
 
-// The agent step is set up like the Fro Bot workflow's agent step: every
-// input and environment key matches unless it is named here with the reason.
-const DIFFERING_INPUTS: Readonly<Record<string, string>> = {
-  'github-token': 'the read-only job token, not the Fro Bot personal token',
-  'trusted-head-sha': 'there is no pull request head to trust',
-  'brokered-push-extra-paths': 'the run pushes nothing',
-  'response-mode': 'nothing is delivered to GitHub',
-  'output-mode': 'the output stays in the working directory',
-  'dedup-window': 'a repeat run is never suppressed',
-  'systematic-version': 'the skill and the helper must be one release',
-  prompt: 'a fixed connect prompt',
+// ── The shared agent step ───────────────────────────────────────────────────
+
+// Both this workflow and the Fro Bot workflow run the fro-bot/agent action
+// through one local composite action. What they share lives there; what each
+// sets differently stays on its own step, with the reason beside it.
+function readSharedAction(): { source: string; action: RecordValue } {
+  const source = fs.readFileSync(path.join(ROOT, SHARED_ACTION_FILE), 'utf8')
+  return {
+    source,
+    action: asRecord(
+      yaml.load(source, { schema: yaml.JSON_SCHEMA }),
+      'shared action',
+    ),
+  }
 }
-const DIFFERING_ENV: Readonly<Record<string, string>> = {
-  PROMPT: 'the connect prompt is a literal input, not routed from env',
+
+function sharedActionStep(): RecordValue {
+  const { action } = readSharedAction()
+  const steps = asArray(
+    asRecord(action.runs, 'shared action runs').steps,
+    'shared action steps',
+  )
+  expect(steps).toHaveLength(1)
+  return asRecord(steps[0], 'shared action step')
 }
-// `with` and `env` are compared on their own; `uses` must match exactly.
-const DIFFERING_STEP_KEYS: Readonly<Record<string, string>> = {
-  name: 'the step has its own name',
-  id: 'the next step reads this step outcome',
-  'continue-on-error': 'the run record, not the step exit, decides the outcome',
-  with: 'compared input by input',
-  env: 'compared key by key',
-  'timeout-minutes':
-    'the step is bounded below the job so the steps after a hung agent still run',
+
+/** The `uses` of a job or a composite's `runs`, and of each step in it. */
+function usesOf(holder: unknown): string[] {
+  if (!isRecord(holder)) return []
+  const steps = Array.isArray(holder.steps) ? holder.steps : []
+  return [holder, ...steps].flatMap((entry) =>
+    isRecord(entry) && typeof entry.uses === 'string' ? [entry.uses] : [],
+  )
+}
+
+/** Every `uses` in the repository's workflows and local actions, with the file it is in. */
+function usesInRepository(): Array<{ file: string; uses: string }> {
+  const files = [
+    ...new Bun.Glob('.github/workflows/*.{yml,yaml}').scanSync({ cwd: ROOT }),
+    ...new Bun.Glob('.github/actions/**/*.{yml,yaml}').scanSync({ cwd: ROOT }),
+  ].sort()
+  return files.flatMap((file) => {
+    const parsed = asRecord(
+      yaml.load(fs.readFileSync(path.join(ROOT, file), 'utf8'), {
+        schema: yaml.JSON_SCHEMA,
+      }),
+      file,
+    )
+    // A job can call a reusable workflow itself, and a job or a composite
+    // action holds the steps that call actions.
+    const holders = [
+      ...(isRecord(parsed.jobs) ? Object.values(parsed.jobs) : []),
+      parsed.runs,
+    ]
+    return holders.flatMap(usesOf).map((uses) => ({ file, uses }))
+  })
 }
 
 const FRO_BOT_SOURCE = fs.readFileSync(FRO_BOT_PATH, 'utf8')
@@ -322,80 +366,152 @@ function froBotAgentStep(): RecordValue {
   return FRO_BOT_AGENT_STEP
 }
 
-function mismatches(
-  connect: RecordValue,
-  froBot: RecordValue,
-  allowed: Readonly<Record<string, string>>,
-): string[] {
-  const keys = new Set([...Object.keys(connect), ...Object.keys(froBot)])
-  return [...keys]
-    .filter((key) => !(key in allowed))
-    .filter(
-      (key) => JSON.stringify(connect[key]) !== JSON.stringify(froBot[key]),
-    )
-    .sort()
+const SHARED_REQUIRED_INPUTS = [
+  'auth-json',
+  'github-token',
+  'model',
+  'opencode-config',
+  'prompt',
+]
+// An empty optional input must act as an omitted one. The action reads every
+// input below through `getInput(...).trim()` and treats an empty value as unset
+// (fro-bot/agent src/harness/config/inputs.ts at the pinned SHA). The two inputs
+// that have a non-empty default in the action's own action.yaml are given the
+// same default here, so the runner never hands the action an empty string where
+// its default would have applied.
+const SHARED_OPTIONAL_DEFAULTS: Readonly<Record<string, string>> = {
+  'brokered-push-extra-paths': '',
+  'dedup-window': '600000',
+  'output-mode': '',
+  'response-mode': 'github',
+  'systematic-version': '',
+  'trusted-head-sha': '',
 }
 
-describe('connect workflow agent step parity with Fro Bot', () => {
-  const connectStep = () => stepNamed('run', 'Run ce:connect')
+describe('the shared fro-bot agent action', () => {
+  const connectStep = () => stepNamed('run', AGENT_STEP)
 
-  it('sets every input like the Fro Bot step except the named differences', () => {
+  it('holds the only fro-bot/agent reference in the workflows and local actions', () => {
     expect(
-      mismatches(
-        asRecord(connectStep().with, 'connect with'),
-        asRecord(froBotAgentStep().with, 'fro-bot with'),
-        DIFFERING_INPUTS,
+      usesInRepository().filter(({ uses }) =>
+        uses.startsWith('fro-bot/agent@'),
       ),
-    ).toEqual([])
+    ).toEqual([
+      {
+        file: SHARED_ACTION_FILE,
+        uses: expect.stringMatching(/^fro-bot\/agent@[0-9a-f]{40}$/),
+      },
+    ])
   })
 
-  it('sets every environment key like the Fro Bot step except the named differences', () => {
-    expect(
-      mismatches(
-        asRecord(connectStep().env ?? {}, 'connect env'),
-        asRecord(froBotAgentStep().env ?? {}, 'fro-bot env'),
-        DIFFERING_ENV,
-      ),
-    ).toEqual([])
-  })
-
-  it('runs the same action ref and adds only the named step keys', () => {
-    expect(
-      mismatches(connectStep(), froBotAgentStep(), DIFFERING_STEP_KEYS),
-    ).toEqual([])
-    for (const key of Object.keys(DIFFERING_STEP_KEYS)) {
-      expect(key in connectStep() || key in froBotAgentStep()).toBe(true)
-    }
-  })
-
-  it('names only differences that exist', () => {
-    const connectWith = asRecord(connectStep().with, 'connect with')
-    const froBotWith = asRecord(froBotAgentStep().with, 'fro-bot with')
-    for (const key of Object.keys(DIFFERING_INPUTS)) {
-      expect(key in connectWith || key in froBotWith).toBe(true)
-    }
-    const connectEnv = asRecord(connectStep().env ?? {}, 'connect env')
-    const froBotEnv = asRecord(froBotAgentStep().env ?? {}, 'fro-bot env')
-    for (const key of Object.keys(DIFFERING_ENV)) {
-      expect(key in connectEnv || key in froBotEnv).toBe(true)
-    }
-  })
-
-  it('runs the parent agent on the model the Fro Bot step uses', () => {
-    const model = asString(
-      asRecord(froBotAgentStep().with, 'fro-bot with').model,
-      'fro-bot model',
+  it('pins the action by full SHA with the version comment Renovate reads', () => {
+    expect(readSharedAction().source).toMatch(
+      /^\s+uses: fro-bot\/agent@[0-9a-f]{40} # v\d+\.\d+\.\d+$/m,
     )
-    expect(model).toMatch(/^\$\{\{ vars\.[A-Z][A-Z0-9_]* \}\}$/)
-    expect(withOf('run', 'Run ce:connect').model).toBe(model)
   })
 
-  it('leaves the action runtime unbounded and bounds the step and the job instead', () => {
-    expect(withOf('run', 'Run ce:connect').timeout).toBe(0)
+  it('is a composite action with the one agent step', () => {
+    const { action } = readSharedAction()
+    expect(asRecord(action.runs, 'runs').using).toBe('composite')
+    sharedActionStep()
+  })
+
+  it('owns the runtime settings both callers share', () => {
+    const step = sharedActionStep()
+    expect(asRecord(step.with, 'with').timeout).toBe(0)
+    expect(asRecord(step.env, 'env')).toEqual({
+      OPENCODE_PROMPT_ARTIFACT: 'true',
+    })
+  })
+
+  it('requires the shared inputs and gives each optional input a default', () => {
+    const inputs = asRecord(readSharedAction().action.inputs, 'inputs')
+    expect(Object.keys(inputs).sort()).toEqual(
+      [
+        ...SHARED_REQUIRED_INPUTS,
+        ...Object.keys(SHARED_OPTIONAL_DEFAULTS),
+      ].sort(),
+    )
+    for (const name of SHARED_REQUIRED_INPUTS) {
+      const input = asRecord(inputs[name], name)
+      expect(input.required).toBe(true)
+      expect(input).not.toHaveProperty('default')
+    }
+    for (const [name, fallback] of Object.entries(SHARED_OPTIONAL_DEFAULTS)) {
+      const input = asRecord(inputs[name], name)
+      expect(input.required).toBe(false)
+      expect(input.default).toBe(fallback)
+    }
+    for (const name of Object.keys(inputs)) {
+      expect(typeof asRecord(inputs[name], name).description).toBe('string')
+    }
+  })
+
+  it('hands every input to the action under its own name, and nothing else', () => {
+    const inputs = Object.keys(
+      asRecord(readSharedAction().action.inputs, 'inputs'),
+    )
+    const given = asRecord(sharedActionStep().with, 'with')
+    expect(Object.keys(given).sort()).toEqual([...inputs, 'timeout'].sort())
+    for (const name of inputs) {
+      expect(given[name]).toBe(`\${{ inputs.${name} }}`)
+    }
+  })
+
+  it('runs under both workflows and under no other path', () => {
+    const checkoutPath = asString(
+      withOf('run', CHECKOUT_STEP).path,
+      'checkout path',
+    )
+    expect(connectStep().uses).toBe(
+      `./${checkoutPath}/${SHARED_ACTION_USES.slice(2)}`,
+    )
+    expect(froBotAgentStep().uses).toBe(SHARED_ACTION_USES)
+  })
+
+  it('keeps the shared settings off both callers', () => {
+    for (const step of [connectStep(), froBotAgentStep()]) {
+      expect(asRecord(step.with, 'with')).not.toHaveProperty('timeout')
+      expect(asRecord(step.env ?? {}, 'env')).not.toHaveProperty(
+        'OPENCODE_PROMPT_ARTIFACT',
+      )
+    }
+  })
+
+  it('runs the parent agent on the model both callers read from FRO_BOT_MODEL', () => {
+    for (const step of [connectStep(), froBotAgentStep()]) {
+      expect(asRecord(step.with, 'with').model).toBe(
+        '${{ vars.FRO_BOT_MODEL }}',
+      )
+    }
+  })
+
+  it('passes exactly the connect-only inputs, with their values and reasons', () => {
+    const { prompt, ...given } = asRecord(connectStep().with, 'connect with')
+    expect(typeof prompt).toBe('string')
+    expect(given).toEqual({
+      'auth-json': '${{ secrets.OPENCODE_AUTH_JSON }}',
+      'opencode-config': '${{ secrets.OPENCODE_CONFIG }}',
+      model: '${{ vars.FRO_BOT_MODEL }}',
+      // The read-only job token, not the Fro Bot personal token.
+      'github-token': '${{ github.token }}',
+      // The skill and the helper must be one release.
+      'systematic-version': '${{ env.SYSTEMATIC_VERSION }}',
+      // Nothing is delivered to GitHub.
+      'response-mode': 'none',
+      // The run changes nothing, so no branch or pull request.
+      'output-mode': 'working-dir',
+      // A repeat run is never suppressed.
+      'dedup-window': '0',
+    })
+    expect(connectStep()).not.toHaveProperty('env')
+  })
+
+  it('keeps the connect step bounded and the Fro Bot step unbounded by step', () => {
+    expect(connectStep()['continue-on-error']).toBe(true)
+    expect(connectStep()['timeout-minutes']).toBe(STEP_TIMEOUT_EXPRESSION)
     expect(typeof job('run')['timeout-minutes']).toBe('number')
-    expect(stepNamed('run', 'Run ce:connect')['timeout-minutes']).toBe(
-      STEP_TIMEOUT_EXPRESSION,
-    )
+    expect(froBotAgentStep()).not.toHaveProperty('timeout-minutes')
   })
 })
 
@@ -1747,6 +1863,163 @@ describe('run job: layout, config and marker', () => {
     }
     expect(config.agents['connections-researcher']).toEqual({
       model: 'anthropic/claude-sonnet-5-5',
+    })
+  })
+})
+
+// ── The checkout of the shared agent action ─────────────────────────────────
+
+/** Real git, with no user or system configuration. */
+function git(cwd: string, ...args: string[]): void {
+  const result = Bun.spawnSync(['git', ...args], {
+    cwd,
+    env: {
+      PATH: process.env.PATH ?? '',
+      HOME: cwd,
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+      GIT_AUTHOR_NAME: 'test',
+      GIT_AUTHOR_EMAIL: 'test@example.com',
+      GIT_COMMITTER_NAME: 'test',
+      GIT_COMMITTER_EMAIL: 'test@example.com',
+    },
+  })
+  if (result.exitCode !== 0) {
+    throw new Error(`git ${args.join(' ')}: ${result.stderr.toString()}`)
+  }
+}
+
+/** Every file under `dir` except the `.git` directory, relative and sorted. */
+function filesUnder(dir: string): string[] {
+  return [...new Bun.Glob('**/*').scanSync({ cwd: dir, dot: true })]
+    .filter((file) => file !== '.git' && !file.startsWith('.git/'))
+    .sort()
+}
+
+describe('run job: the checkout of the shared agent action', () => {
+  const checkout = () => stepNamed('run', CHECKOUT_STEP)
+
+  it('is sparse, takes no credentials and leaves what is already in the workspace alone', () => {
+    expect(String(checkout().uses)).toMatch(/^actions\/checkout@[0-9a-f]{40}$/)
+    // The job token is the default, and so is the ref: this repository, at the
+    // commit the run started from.
+    expect(asRecord(checkout().with, 'checkout with')).toEqual({
+      path: '.fro-bot-actions',
+      'sparse-checkout': '/.github/actions/\n',
+      'sparse-checkout-cone-mode': false,
+      'persist-credentials': false,
+      clean: false,
+    })
+  })
+
+  it('runs before the layout is created', () => {
+    expect(stepIndex('run', CHECKOUT_STEP)).toBeGreaterThan(-1)
+    expect(stepIndex('run', CHECKOUT_STEP)).toBeLessThan(
+      stepIndex('run', 'Create connect layout'),
+    )
+  })
+
+  describe('the sparse patterns', () => {
+    /** A repository with files at the root, in `.github` and elsewhere. */
+    function sourceRepository(): string {
+      const dir = fs.realpathSync(
+        fs.mkdtempSync(path.join(os.tmpdir(), 'connect-sparse-')),
+      )
+      dirs.push(dir)
+      const repo = path.join(dir, 'origin')
+      const files = [
+        'README.md',
+        'package.json',
+        'src/index.ts',
+        'skills/ce-connect/SKILL.md',
+        '.github/CODEOWNERS',
+        '.github/workflows/connect.yaml',
+        '.github/actions/fro-bot-agent/action.yml',
+        '.github/actions/other/nested/deep.yml',
+      ]
+      fs.mkdirSync(repo)
+      git(repo, 'init', '--quiet')
+      for (const file of files) {
+        fs.mkdirSync(path.dirname(path.join(repo, file)), { recursive: true })
+        fs.writeFileSync(path.join(repo, file), `${file}\n`)
+      }
+      git(repo, 'add', '.')
+      git(repo, 'commit', '--quiet', '-m', 'seed')
+      return repo
+    }
+
+    /** What `actions/checkout` does for a non-cone sparse checkout, step for step. */
+    function checkOut(origin: string, patterns: string, cone: boolean): string {
+      const work = path.join(path.dirname(origin), 'work')
+      git(
+        path.dirname(origin),
+        'clone',
+        '--quiet',
+        '--no-checkout',
+        origin,
+        work,
+      )
+      if (cone) {
+        git(work, 'sparse-checkout', 'set', ...patterns.trim().split('\n'))
+      } else {
+        git(work, 'config', 'core.sparseCheckout', 'true')
+        fs.appendFileSync(
+          path.join(work, '.git', 'info', 'sparse-checkout'),
+          `\n${patterns}\n`,
+        )
+      }
+      git(work, 'checkout', '--quiet', '--force', 'HEAD')
+      return work
+    }
+
+    const patterns = () =>
+      asString(withOf('run', CHECKOUT_STEP)['sparse-checkout'], 'patterns')
+
+    it('lay down nothing but the files under .github/actions', () => {
+      const work = checkOut(sourceRepository(), patterns(), false)
+      expect(filesUnder(work)).toEqual([
+        '.github/actions/fro-bot-agent/action.yml',
+        '.github/actions/other/nested/deep.yml',
+      ])
+    })
+
+    it('would lay down the files at the root in cone mode, which is why the step turns it off', () => {
+      const work = checkOut(sourceRepository(), '.github/actions\n', true)
+      expect(filesUnder(work)).toContain('package.json')
+      expect(withOf('run', CHECKOUT_STEP)['sparse-checkout-cone-mode']).toBe(
+        false,
+      )
+    })
+  })
+
+  describe('beside the state root', () => {
+    const checkoutPath = () =>
+      asString(withOf('run', CHECKOUT_STEP).path, 'checkout path')
+    const allowedRoots = (box: Box) => [
+      path.join(box.ws, 'connect', 'checkouts', 'acme__target'),
+    ]
+
+    it('leaves the state root acceptable to the helper', () => {
+      const box = makeBox()
+      git(box.dir, 'init', '--quiet', path.join(box.ws, checkoutPath()))
+      expect(runStep(box, 'run', 'Create connect layout').exitCode).toBe(0)
+      expect(
+        fs.existsSync(path.join(box.ws, checkoutPath(), '.git', 'HEAD')),
+      ).toBe(true)
+      expect(
+        prepareStateRoot(RUN_ROOT(box), { allowedRoots: allowedRoots(box) }),
+      ).toEqual({ status: 'ok', root: RUN_ROOT(box), tightened: false })
+    })
+
+    it('would be refused by the helper if the checkout were the workspace itself', () => {
+      const box = makeBox()
+      git(box.dir, 'init', '--quiet', box.ws)
+      expect(runStep(box, 'run', 'Create connect layout').exitCode).toBe(0)
+      expect(
+        prepareStateRoot(RUN_ROOT(box), { allowedRoots: allowedRoots(box) }),
+      ).toEqual({ status: 'refused', reason: 'checkout' })
+      expect(checkoutPath()).not.toBe('')
+      expect(checkoutPath()).not.toBe('.')
     })
   })
 })
