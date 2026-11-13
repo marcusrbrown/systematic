@@ -496,9 +496,11 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     async function listAgents(
       client: Awaited<ReturnType<typeof startAgentHost>>['client'],
     ) {
-      const listed = await client.agent.list({
-        location: { directory: fixture.projectDir },
-      })
+      const location = { directory: fixture.projectDir }
+      // `agent.list` returns only the agents loaded so far while plugins are
+      // still loading; `provider.list` waits for them, so call it first.
+      await client.provider.list({ location })
+      const listed = await client.agent.list({ location })
       return listed.data
     }
 
