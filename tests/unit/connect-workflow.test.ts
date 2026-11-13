@@ -1,11 +1,15 @@
 // biome-ignore-all lint/suspicious/noTemplateCurlyInString: the workflow's expressions and shell parameters are literal text in these tests
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it, setDefaultTimeout } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import yaml from 'js-yaml'
 import { decisionLine, manifestMarker } from '../../src/lib/connect-ci.js'
 import { readCiRunMarker } from '../../src/lib/connect-state.js'
+
+// Script tests run real shell steps and the bundled helper, which can take
+// several seconds each when the suite runs alongside other files.
+setDefaultTimeout(30_000)
 
 const ROOT = process.cwd()
 const WORKFLOW_PATH = path.join(ROOT, '.github/workflows/connect.yaml')
@@ -129,6 +133,9 @@ describe('connect workflow structure', () => {
     )
     expect(asString(job('post').if, 'post if')).toContain(
       "needs.render.outputs.has-body == 'true'",
+    )
+    expect(asString(job('post').if, 'post if')).toContain(
+      "needs.render.result == 'success'",
     )
   })
 
@@ -315,8 +322,10 @@ describe('connect workflow injection and artifacts', () => {
       const input = withOf(id, name)
       expect(input['retention-days']).toBe(1)
       expect(String(step.uses)).toContain('actions/upload-artifact@')
-      expect(asString(input.name, 'name')).toMatch(
-        /-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}$/,
+      // The name comes from the job's own naming step, so the job can hand
+      // the exact name it used to the job that downloads it.
+      expect(asString(input.name, 'name')).toBe(
+        '${{ steps.artifact.outputs.name }}',
       )
       if (id === 'render') continue
       for (const line of asString(input.path, 'path').split('\n')) {
@@ -601,6 +610,8 @@ const DATE_TWO = '2026-11-13'
 const CONNECT_RUN = '20261112T010000Z-abcd1234'
 const PROJECT_ROOT = '/runner/work/connect/checkouts/acme__target'
 const PROJECT_KEY = '0123456789ab'
+/** The checkout directory the workflow names for `other/repo`; the helper uses it as the project name. */
+const SOURCE_PROJECT = 'other__repo'
 
 function sha(text: string): string {
   return Bun.CryptoHasher.hash('sha256', text, 'hex')
@@ -658,7 +669,7 @@ function blockCandidate(index: number, over: Json = {}): Json {
     sources: [
       {
         project: PROJECT_KEY,
-        projectName: 'source',
+        projectName: SOURCE_PROJECT,
         path: `docs/solutions/lesson-${index}.md`,
         fingerprint: sha(`fingerprint-${index}`),
         excerpt: `Excerpt of lesson ${index} from the source learning.`,
@@ -778,12 +789,14 @@ function finalize(
   box: Box,
   render: StepResult,
   cacheSave = 'success',
+  cacheHit = 'true',
 ): StepResult {
   return runStep(box, 'render', 'Finalize report', {
     RENDER_RED: render.outputs.get('red') ?? '',
     RENDER_MANIFEST: render.outputs.get('manifest') ?? '',
     RENDER_OUTCOME: render.outputs.get('outcome') ?? '',
     CACHE_SAVE_OUTCOME: cacheSave,
+    CACHE_HIT: cacheHit,
   })
 }
 
@@ -1670,8 +1683,20 @@ function postEnv(
   }
 }
 
-const post = (box: Box, name: string, env: Record<string, string> = {}) =>
-  runStep(box, 'post', name, { REPO: 'marcusrbrown/systematic', ...env })
+/** The job installs the tick carrier before the steps that use it; do the same, once per box. */
+function ensureCarrier(box: Box): void {
+  if (fs.existsSync(path.join(box.tmp, 'carry-ticks.mjs'))) return
+  const installed = runStep(box, 'post', 'Install tick carrier')
+  expect(installed.stderr).toBe('')
+  expect(installed.exitCode).toBe(0)
+}
+
+const post = (box: Box, name: string, env: Record<string, string> = {}) => {
+  if (name === 'Write report' || name === 'Close superseded reports') {
+    ensureCarrier(box)
+  }
+  return runStep(box, 'post', name, { REPO: 'marcusrbrown/systematic', ...env })
+}
 
 describe('post: verifying the report', () => {
   it('accepts a body at the renderer cap and refuses one above the posting cap', () => {
@@ -1901,4 +1926,758 @@ describe('post: writing and rotating the report', () => {
       runStep(box, 'post', 'Settle result', { RENDER_RED: 'true' }).exitCode,
     ).toBe(1)
   })
+})
+
+// ── Job conditions, artifact names and the cache check ─────────────────────
+
+interface NeedsFixture {
+  result: string
+  outputs?: Record<string, string>
+}
+
+/** Evaluate a job's `if` against the results of the jobs it needs. Only the terms the workflow uses are understood. */
+function jobRuns(
+  id: JobId,
+  needs: Record<string, NeedsFixture>,
+  ref = 'refs/heads/main',
+): boolean {
+  const terms = asString(job(id).if, `${id} if`)
+    .split('&&')
+    .map((term) => term.trim())
+  return terms.every((term) => {
+    if (term === 'always()') return true
+    if (term === GUARD) return ref === 'refs/heads/main'
+    const match =
+      /^needs\.([a-z]+)\.(result|outputs\.[a-z-]+) == '([^']*)'$/.exec(term)
+    if (match === null) throw new Error(`unsupported condition: ${term}`)
+    const [, name = '', field = '', expected] = match
+    const entry = needs[name]
+    const actual =
+      field === 'result'
+        ? entry?.result
+        : entry?.outputs?.[field.slice('outputs.'.length)]
+    return actual === expected
+  })
+}
+
+/** Fill in `${{ needs.<job>.outputs.<name> }}` the way the runner does. */
+function resolveNeeds(
+  text: string,
+  needs: Record<string, NeedsFixture>,
+): string {
+  return text.replace(
+    /\$\{\{ needs\.([a-z]+)\.outputs\.([a-z-]+) \}\}/g,
+    (_whole, name: string, output: string) =>
+      needs[name]?.outputs?.[output] ?? '',
+  )
+}
+
+describe('artifact hand-offs when only the failed jobs are rerun', () => {
+  const producers: Array<[JobId, string, string, string]> = [
+    ['prepare', 'handoff', 'Name hand-off', 'connect-state-in'],
+    ['run', 'handoff', 'Name hand-off', 'connect-state-out'],
+    ['render', 'report-artifact', 'Name report artifact', 'connect-report'],
+  ]
+  const consumers: Array<[JobId, string, JobId, string]> = [
+    ['run', 'Download hand-off', 'prepare', 'handoff'],
+    ['render', 'Download hand-off', 'run', 'handoff'],
+    ['post', 'Download report', 'render', 'report-artifact'],
+  ]
+
+  it('has each producing job output the name it uploaded under', () => {
+    for (const [id, output, name, prefix] of producers) {
+      const outputs = asRecord(job(id).outputs, `${id} outputs`)
+      expect(outputs[output]).toBe('${{ steps.artifact.outputs.name }}')
+      expect(stepNamed(id, name).id).toBe('artifact')
+      const box = makeBox()
+      const named = runStep(box, id, name, { GITHUB_RUN_ATTEMPT: '2' })
+      expect(named.exitCode).toBe(0)
+      expect(named.outputs.get('name')).toBe(`${prefix}-555-2`)
+    }
+  })
+
+  it('has each consumer download by the producer output and never rebuild a name from the attempt', () => {
+    for (const [id, name, from, output] of consumers) {
+      expect(withOf(id, name).name).toBe(
+        `\${{ needs.${from}.outputs.${output} }}`,
+      )
+    }
+    for (const { step } of allSteps()) {
+      if (!String(step.uses ?? '').includes('actions/download-artifact@')) {
+        continue
+      }
+      expect(JSON.stringify(step)).not.toContain('run_attempt')
+    }
+  })
+
+  it('finds the artifact an earlier attempt uploaded', () => {
+    for (const [consumer, step, from, output] of consumers) {
+      const producer = producers.find(
+        ([id, out]) => id === from && out === output,
+      )
+      expect(producer).toBeDefined()
+      const earlier = runStep(makeBox(), from, producer?.[2] ?? '', {
+        GITHUB_RUN_ATTEMPT: '1',
+      })
+      const uploaded = earlier.outputs.get('name') ?? ''
+      const needs = {
+        [from]: { result: 'success', outputs: { [output]: uploaded } },
+      }
+      // The consumer runs in attempt 2; the name still points at attempt 1.
+      expect(uploaded).toMatch(/-555-1$/)
+      expect(resolveNeeds(String(withOf(consumer, step).name), needs)).toBe(
+        uploaded,
+      )
+    }
+  })
+
+  it('keeps the public run record per attempt', () => {
+    expect(withOf('render', 'Upload run record').name).toBe(
+      'connect-run-${{ github.run_id }}-${{ github.run_attempt }}',
+    )
+  })
+})
+
+describe('post: runs only when render succeeded', () => {
+  const rendered = (result: string, hasBody: string) => ({
+    prepare: { result: 'success' },
+    render: { result, outputs: { 'has-body': hasBody } },
+  })
+
+  it('posts after a successful render that made a body', () => {
+    expect(jobRuns('post', rendered('success', 'true'))).toBe(true)
+  })
+
+  it('posts nothing when a render step after the body failed, as an upload does', () => {
+    expect(jobRuns('post', rendered('failure', 'true'))).toBe(false)
+    expect(jobRuns('post', rendered('cancelled', 'true'))).toBe(false)
+  })
+
+  it('posts nothing when render made no body, or prepare did not succeed', () => {
+    expect(jobRuns('post', rendered('success', ''))).toBe(false)
+    expect(
+      jobRuns('post', {
+        prepare: { result: 'failure' },
+        render: { result: 'success', outputs: { 'has-body': 'true' } },
+      }),
+    ).toBe(false)
+  })
+
+  it('stays off the default branch only', () => {
+    expect(
+      jobRuns('post', rendered('success', 'true'), 'refs/heads/topic'),
+    ).toBe(false)
+  })
+})
+
+describe('render: confirming the saved cache', () => {
+  it('looks the cache up on the saved key and paths with the same pinned action', () => {
+    const save = withOf('render', 'Save ledger cache')
+    const confirm = withOf('render', 'Confirm ledger cache')
+    expect(stepIndex('render', 'Confirm ledger cache')).toBe(
+      stepIndex('render', 'Save ledger cache') + 1,
+    )
+    const step = stepNamed('render', 'Confirm ledger cache')
+    expect(step.id).toBe('cache-check')
+    expect(step['continue-on-error']).toBe(true)
+    expect(step.uses).toBe(stepNamed('prepare', 'Restore ledger cache').uses)
+    expect(String(step.uses)).toContain('actions/cache/restore@')
+    expect(confirm['lookup-only']).toBe(true)
+    expect(confirm.key).toBe(save.key)
+    expect(confirm.path).toBe(save.path)
+    expect(confirm['restore-keys']).toBeUndefined()
+    const env = asRecord(stepNamed('render', 'Finalize report').env, 'env')
+    expect(env.CACHE_SAVE_OUTCOME).toBe('${{ steps.cache-save.outcome }}')
+    expect(env.CACHE_HIT).toBe('${{ steps.cache-check.outputs.cache-hit }}')
+  })
+
+  it('counts a save with no cache behind it as a failed save', () => {
+    for (const hit of ['', 'false']) {
+      const box = makeBox()
+      seedHandoff(box)
+      const { render } = renderDay(box, DATE_ONE)
+      const bodyFile = path.join(box.tmp, 'report', 'body.md')
+      const plain = fs.readFileSync(bodyFile, 'utf8')
+      const done = finalize(box, render, 'success', hit)
+      const body = fs.readFileSync(bodyFile, 'utf8')
+      expect(body.startsWith(plain)).toBe(true)
+      expect(body).toContain('The ledger cache could not be saved for this run')
+      expect(done.outputs.get('red')).toBe('true')
+      expect(done.outputs.get('digest')).toBe(sha(body))
+      const envelope = JSON.parse(
+        fs.readFileSync(path.join(box.tmp, 'report', 'envelope.json'), 'utf8'),
+      ) as Json
+      expect(envelope).toMatchObject({ red: true, cacheSaved: false })
+    }
+  })
+
+  it('adds the line once when the save failed and the lookup found nothing', () => {
+    const box = makeBox()
+    seedHandoff(box)
+    const { render } = renderDay(box, DATE_ONE)
+    finalize(box, render, 'failure', '')
+    const body = fs.readFileSync(
+      path.join(box.tmp, 'report', 'body.md'),
+      'utf8',
+    )
+    expect(body.split('could not be saved for this run').length - 1).toBe(1)
+  })
+})
+
+// ── Visibility rechecks ─────────────────────────────────────────────────────
+
+function sourcesFrom(projectName: string, index: number): Json[] {
+  return [
+    {
+      project: PROJECT_KEY,
+      projectName,
+      path: `docs/solutions/lesson-${index}.md`,
+      fingerprint: sha(`fingerprint-${index}`),
+      excerpt: `Excerpt of lesson ${index} from the source learning.`,
+      cite: 'x',
+    },
+  ]
+}
+
+/** Render a first day, then a second day that proposes nothing, so every shown candidate is carried. */
+function carriedDay(box: Box, projectName: string): { body: string } {
+  seedHandoff(box, {
+    candidates: [
+      blockCandidate(1, { sources: sourcesFrom(projectName, 1) }),
+      blockCandidate(2),
+    ],
+  })
+  expect(renderDay(box, DATE_ONE).render.exitCode).toBe(0)
+  handoffFromState(box, {
+    marker: '556-1',
+    outcome: 'failed',
+    finalLine: 'Connect failed',
+    runId: undefined,
+    projects: undefined,
+  })
+  const carried = renderDay(box, DATE_TWO, { run: '556' })
+  expect(carried.render.exitCode).toBe(0)
+  expect(carried.body).toContain(idOf(1))
+  return carried
+}
+
+const recheckRender = (
+  box: Box,
+  projects: string,
+  env: Record<string, string> = {},
+) =>
+  runStep(box, 'render', 'Recheck visibility', { PROJECTS: projects, ...env })
+
+describe('render: visibility recheck before anything is saved or uploaded', () => {
+  it('sits after the report is rendered and before the cache save and every upload', () => {
+    const at = (name: string) => stepIndex('render', name)
+    expect(at('Recheck visibility')).toBeGreaterThan(at('Render report'))
+    for (const later of [
+      'Save ledger cache',
+      'Confirm ledger cache',
+      'Finalize report',
+      'Upload report',
+      'Stage run record',
+      'Upload run record',
+    ]) {
+      expect(at('Recheck visibility')).toBeLessThan(at(later))
+    }
+  })
+
+  it('reads visibility with the job token and leaves render without permissions', () => {
+    const env = asRecord(stepNamed('render', 'Recheck visibility').env, 'env')
+    expect(env.GH_TOKEN).toBe('${{ github.token }}')
+    expect(env.PROJECTS).toBe('${{ needs.prepare.outputs.projects }}')
+    expect(job('render').permissions).toEqual({})
+  })
+
+  it('passes when every repository is public and lists the repositories behind the shown candidates', () => {
+    const box = makeBox()
+    seedHandoff(box)
+    renderDay(box, DATE_ONE)
+    const result = recheckRender(box, 'acme/target')
+    expect(result.exitCode).toBe(0)
+    expect((result.outputs.get('repos') ?? '').split(' ').sort()).toEqual([
+      'acme/target',
+      'other/repo',
+    ])
+  })
+
+  it('fails red with no repository list when a current project is private or unreadable', () => {
+    for (const verdict of ['private', 'ERROR']) {
+      const box = makeBox()
+      seedHandoff(box)
+      renderDay(box, DATE_ONE)
+      fs.writeFileSync(
+        path.join(box.fixtures, 'visibility-acme__target'),
+        verdict,
+      )
+      const result = recheckRender(box, RUN_PROJECTS)
+      expect(result.exitCode).toBe(1)
+      expect(result.outputs.has('repos')).toBe(false)
+      expect(ghWrites(box)).toEqual([])
+    }
+  })
+
+  it('fails red when the repository a shown source came from is private, even if it left the project list', () => {
+    for (const verdict of ['private', 'ERROR']) {
+      const box = makeBox()
+      carriedDay(box, 'gone__project')
+      fs.writeFileSync(
+        path.join(box.fixtures, 'visibility-gone__project'),
+        verdict,
+      )
+      const result = recheckRender(box, 'acme/target other/repo')
+      expect(result.exitCode).toBe(1)
+      expect(result.stdout).toContain('gone/project')
+      expect(result.outputs.has('repos')).toBe(false)
+    }
+  })
+
+  it('fails red when the repository a carried candidate targets is private', () => {
+    const box = makeBox()
+    carriedDay(box, 'other__repo')
+    fs.writeFileSync(
+      path.join(box.fixtures, 'visibility-acme__target'),
+      'private',
+    )
+    const result = recheckRender(box, 'other/repo')
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toContain('acme/target')
+  })
+
+  it('lists a carried source repository once every repository is public', () => {
+    const box = makeBox()
+    carriedDay(box, 'gone__project')
+    const result = recheckRender(box, 'acme/target other/repo')
+    expect(result.exitCode).toBe(0)
+    expect((result.outputs.get('repos') ?? '').split(' ').sort()).toEqual([
+      'acme/target',
+      'gone/project',
+      'other/repo',
+    ])
+  })
+
+  it('fails closed on a shown candidate whose repository cannot be named', () => {
+    const unnamed = makeBox()
+    carriedDay(unnamed, 'not-a-checkout')
+    expect(recheckRender(unnamed, RUN_PROJECTS).exitCode).toBe(1)
+
+    const noTarget = makeBox()
+    const dir = seedHandoff(noTarget)
+    const runFile = path.join(dir, 'runs', CONNECT_RUN, 'run.json')
+    const record = JSON.parse(fs.readFileSync(runFile, 'utf8')) as {
+      projects: Array<Record<string, unknown>>
+    }
+    for (const project of record.projects) delete project.repo
+    fs.writeFileSync(runFile, JSON.stringify(record))
+    renderDay(noTarget, DATE_ONE)
+    const result = recheckRender(noTarget, RUN_PROJECTS)
+    expect(result.exitCode).toBe(1)
+    expect(result.outputs.has('repos')).toBe(false)
+  })
+
+  it('refuses a malformed project entry', () => {
+    const box = makeBox()
+    seedHandoff(box)
+    renderDay(box, DATE_ONE)
+    expect(recheckRender(box, 'acme/target not-a-repo').exitCode).toBe(1)
+  })
+
+  it('checks nothing and lists nothing when the report shows no candidate', () => {
+    const box = makeBox()
+    seedHandoff(box, { count: 0 })
+    renderDay(box, DATE_ONE)
+    const result = recheckRender(box, 'acme/target')
+    expect(result.exitCode).toBe(0)
+    expect(result.outputs.get('repos')).toBe('acme/target')
+  })
+})
+
+describe('post: visibility recheck of carried repositories', () => {
+  it('stops before any write when a repository behind a shown candidate turned private or cannot be read', () => {
+    for (const verdict of ['private', 'ERROR']) {
+      const box = makeBox()
+      fs.writeFileSync(
+        path.join(box.fixtures, 'visibility-gone__project'),
+        verdict,
+      )
+      const result = post(box, 'Recheck visibility', {
+        PROJECTS: 'acme/target',
+        REPOS: 'acme/target gone/project',
+      })
+      expect(result.exitCode).toBe(1)
+      expect(result.stdout).toContain('gone/project')
+      expect(ghWrites(box)).toEqual([])
+    }
+  })
+
+  it('checks the current projects and the carried repositories', () => {
+    const box = makeBox()
+    const result = post(box, 'Recheck visibility', {
+      PROJECTS: 'acme/target',
+      REPOS: 'gone/project',
+    })
+    expect(result.exitCode).toBe(0)
+    const looked = calls(box).filter((line) => line.startsWith('gh api repos/'))
+    expect(looked.some((line) => line.includes('repos/acme/target'))).toBe(true)
+    expect(looked.some((line) => line.includes('repos/gone/project'))).toBe(
+      true,
+    )
+  })
+
+  it('refuses a malformed carried entry', () => {
+    const box = makeBox()
+    const result = post(box, 'Recheck visibility', {
+      PROJECTS: 'acme/target',
+      REPOS: 'not-a-repo',
+    })
+    expect(result.exitCode).toBe(1)
+  })
+
+  it('receives the carried list from render', () => {
+    const env = asRecord(stepNamed('post', 'Recheck visibility').env, 'env')
+    expect(env.REPOS).toBe('${{ needs.render.outputs.repos }}')
+    expect(asRecord(job('render').outputs, 'outputs').repos).toBe(
+      '${{ steps.visibility.outputs.repos }}',
+    )
+    expect(stepNamed('render', 'Recheck visibility').id).toBe('visibility')
+  })
+})
+
+// ── Posting a rendered day ──────────────────────────────────────────────────
+
+interface Published {
+  done: StepResult
+  verify: StepResult
+  recheck: StepResult
+  write: StepResult
+  close: StepResult
+  settle: StepResult
+  number: number
+}
+
+/** Run the render tail and every post step, in the job's order, for a day that is already rendered. */
+function publish(
+  box: Box,
+  render: StepResult,
+  date: string,
+  options: { projects?: string; between?: () => void } = {},
+): Published {
+  const projects = options.projects ?? RUN_PROJECTS
+  const visible = runStep(box, 'render', 'Recheck visibility', {
+    PROJECTS: projects,
+  })
+  expect(visible.exitCode).toBe(0)
+  const done = finalize(box, render)
+  const env = {
+    DATE: date,
+    PROJECTS: projects,
+    REPOS: visible.outputs.get('repos') ?? '',
+    RENDER_DIGEST: done.outputs.get('digest') ?? '',
+    RENDER_CHARS: done.outputs.get('chars') ?? '',
+    RENDER_RED: done.outputs.get('red') ?? '',
+  }
+  const verify = post(box, 'Verify report', env)
+  const recheck = post(box, 'Recheck visibility', env)
+  const write = post(box, 'Write report', env)
+  options.between?.()
+  const close = post(box, 'Close superseded reports', {
+    ...env,
+    NUMBER: write.outputs.get('number') ?? '',
+  })
+  const settle = post(box, 'Settle result', env)
+  return {
+    done,
+    verify,
+    recheck,
+    write,
+    close,
+    settle,
+    number: Number(write.outputs.get('number') ?? '0'),
+  }
+}
+
+function liveBody(box: Box, number: number): string {
+  return issuesOf(box).find((issue) => issue.number === number)?.body ?? ''
+}
+
+function setIssueBody(box: Box, number: number, body: string): void {
+  const issues = issuesOf(box).map((issue) =>
+    issue.number === number ? { ...issue, body } : issue,
+  )
+  fs.writeFileSync(
+    path.join(box.fixtures, 'issues.json'),
+    JSON.stringify(issues),
+  )
+}
+
+/** A first day: render it and post it as a new report. */
+function firstDay(box: Box, date = DATE_ONE): { number: number; body: string } {
+  seedHandoff(box)
+  const day = renderDay(box, date)
+  expect(day.render.exitCode).toBe(0)
+  const out = publish(box, day.render, date)
+  expect(out.settle.exitCode).toBe(0)
+  expect(out.number).toBeGreaterThan(0)
+  return { number: out.number, body: day.body }
+}
+
+/** A later run: the state the cache holds, rendered again for a date. */
+function nextDay(box: Box, date: string): { render: StepResult; body: string } {
+  handoffFromState(box, { marker: '556-1' })
+  const day = renderDay(box, date, { run: '556' })
+  expect(day.render.exitCode).toBe(0)
+  return day
+}
+
+const unticked = (body: string): string => body.replaceAll('- [x]', '- [ ]')
+
+/** The stub gh reads a body file through `$(cat ...)`, which drops trailing newlines. */
+const trimmed = (text: string): string => text.replace(/\n+$/, '')
+
+const FOUND = { REPO: 'marcusrbrown/systematic' }
+
+describe('post: ticks made while a run was executing', () => {
+  it('keeps a tick made after prepare when the same-date report is edited', () => {
+    const box = makeBox()
+    const { number, body } = firstDay(box)
+    setIssueBody(box, number, tick(body, 1, 'rejected'))
+
+    const second = nextDay(box, DATE_ONE)
+    expect(second.body).toContain(decisionLine(idOf(1), 'rejected', false))
+    const out = publish(box, second.render, DATE_ONE)
+    expect(out.settle.exitCode).toBe(0)
+    expect(out.number).toBe(number)
+
+    const posted = liveBody(box, number)
+    expect(posted).toContain(decisionLine(idOf(1), 'rejected', true))
+    expect(posted).toContain(decisionLine(idOf(1), 'promoted', false))
+    expect(posted).toContain(decisionLine(idOf(2), 'rejected', false))
+    // Only checkbox characters differ from the body that was verified.
+    expect(unticked(posted)).toBe(trimmed(second.body))
+    expect(issuesOf(box)).toHaveLength(1)
+  })
+
+  it('has the next run record that tick against the new body, whose manifest holds the id', () => {
+    const box = makeBox()
+    const { number, body } = firstDay(box)
+    setIssueBody(box, number, tick(body, 1, 'rejected'))
+    const second = nextDay(box, DATE_ONE)
+    publish(box, second.render, DATE_ONE)
+
+    const posted = liveBody(box, number)
+    const found = runStep(box, 'prepare', 'Find the open report', FOUND)
+    expect(found.outputs.get('report')).toBe(String(number))
+    const applied = recordTicks(box, number)
+    expect(applied.stdout).toContain('accepted 1')
+    expect(statusOf(box, 1)).toBe('rejected')
+    const marker = /<!-- connect-manifest:([0-9a-f]{16}) -->/.exec(posted)?.[1]
+    const store = JSON.parse(
+      fs.readFileSync(path.join(stateRootOf(box), 'ci-manifests.json'), 'utf8'),
+    ) as { manifests: Array<{ hash: string; ids: string[] }> }
+    expect(
+      store.manifests.find((manifest) => manifest.hash === marker)?.ids,
+    ).toContain(idOf(1))
+  })
+
+  it('keeps a tick made after prepare when a new date rotates the report', () => {
+    const box = makeBox()
+    const { number, body } = firstDay(box)
+    setIssueBody(box, number, tick(body, 2, 'promoted'))
+
+    const second = nextDay(box, DATE_TWO)
+    const out = publish(box, second.render, DATE_TWO)
+    expect(out.settle.exitCode).toBe(0)
+    expect(out.number).not.toBe(number)
+
+    const posted = liveBody(box, out.number)
+    expect(posted).toContain(decisionLine(idOf(2), 'promoted', true))
+    expect(unticked(posted)).toBe(trimmed(second.body))
+    expect(issuesOf(box).find((i) => i.number === number)?.state).toBe('closed')
+
+    runStep(box, 'prepare', 'Find the open report', FOUND)
+    expect(recordTicks(box, out.number).stdout).toContain('accepted 1')
+    expect(statusOf(box, 2)).toBe('promoted')
+  })
+
+  it('keeps a tick made between the write and the close', () => {
+    const box = makeBox()
+    const { number, body } = firstDay(box)
+    const second = nextDay(box, DATE_TWO)
+    const out = publish(box, second.render, DATE_TWO, {
+      between: () => setIssueBody(box, number, tick(body, 1, 'rejected')),
+    })
+    expect(out.close.exitCode).toBe(0)
+    const posted = liveBody(box, out.number)
+    expect(posted).toContain(decisionLine(idOf(1), 'rejected', true))
+    expect(unticked(posted)).toBe(trimmed(second.body))
+    expect(issuesOf(box).find((i) => i.number === number)?.state).toBe('closed')
+  })
+
+  it('carries an upper-case X the way the tick reader counts it', () => {
+    const box = makeBox()
+    const { number, body } = firstDay(box)
+    setIssueBody(
+      box,
+      number,
+      tick(body, 1, 'rejected').replace('- [x] Rejected', '- [X] Rejected'),
+    )
+    const second = nextDay(box, DATE_ONE)
+    publish(box, second.render, DATE_ONE)
+    expect(liveBody(box, number)).toContain(
+      decisionLine(idOf(1), 'rejected', true),
+    )
+  })
+
+  const forged = decisionLine(idOf(1), 'rejected', true)
+  const begin = '<!-- connect-decisions:begin -->'
+  const notCarried: Array<[string, (body: string) => string]> = [
+    [
+      'a backtick fence in the section',
+      (body) => body.replace(begin, `${begin}\n\`\`\`\n${forged}\n\`\`\``),
+    ],
+    [
+      'a tilde fence in the section',
+      (body) => body.replace(begin, `${begin}\n~~~\n${forged}\n~~~`),
+    ],
+    ['a line before the section', (body) => `${forged}\n${body}`],
+    ['a line after the section', (body) => `${body}\n${forged}\n`],
+    [
+      'an id the new body does not list',
+      (body) =>
+        body.replace(
+          begin,
+          `${begin}\n${decisionLine(idOf(9), 'rejected', true)}`,
+        ),
+    ],
+  ]
+  for (const [label, forge] of notCarried) {
+    it(`carries no tick from ${label}`, () => {
+      const box = makeBox()
+      const { number, body } = firstDay(box)
+      setIssueBody(box, number, forge(body))
+      const second = nextDay(box, DATE_ONE)
+      const out = publish(box, second.render, DATE_ONE)
+      expect(out.settle.exitCode).toBe(0)
+      expect(liveBody(box, number)).toBe(trimmed(second.body))
+    })
+  }
+
+  it('drops the tick for a candidate the new body no longer lists and keeps the others', () => {
+    const box = makeBox()
+    const { number, body } = firstDay(box)
+    const settled = tick(body, 1, 'rejected')
+    setIssueBody(box, number, settled)
+    runStep(box, 'prepare', 'Find the open report', FOUND)
+    expect(recordTicks(box, number).stdout).toContain('accepted 1')
+    setIssueBody(box, number, tick(settled, 2, 'promoted'))
+
+    const second = nextDay(box, DATE_ONE)
+    expect(second.body).not.toContain(idOf(1))
+    publish(box, second.render, DATE_ONE)
+    const posted = liveBody(box, number)
+    expect(posted).not.toContain(idOf(1))
+    expect(posted).toContain(decisionLine(idOf(2), 'promoted', true))
+    expect(unticked(posted)).toBe(trimmed(second.body))
+  })
+
+  it('writes nothing when a live body cannot be read', () => {
+    const box = makeBox()
+    const { number, body } = firstDay(box)
+    setIssueBody(box, number, tick(body, 1, 'rejected'))
+    const second = nextDay(box, DATE_ONE)
+    const done = finalize(box, second.render)
+    const writes = ghWrites(box).length
+    const result = post(box, 'Write report', {
+      DATE: DATE_ONE,
+      RENDER_DIGEST: done.outputs.get('digest') ?? '',
+      RENDER_CHARS: done.outputs.get('chars') ?? '',
+      GH_FAIL_AT: `issues/${number}`,
+    })
+    expect(result.exitCode).toBe(1)
+    expect(result.outputs.has('number')).toBe(false)
+    expect(ghWrites(box)).toHaveLength(writes)
+    expect(liveBody(box, number)).toBe(tick(body, 1, 'rejected'))
+  })
+})
+
+describe('post: a report is edited in place across the day', () => {
+  it('records a tick, then edits the same issue with the settled candidate gone and opens no second issue', () => {
+    const box = makeBox()
+    const { number, body } = firstDay(box)
+    expect(issuesOf(box)).toHaveLength(1)
+    setIssueBody(box, number, tick(body, 1, 'rejected'))
+
+    // The next run on the same date: look the report up, record its ticks, render, post.
+    const found = runStep(box, 'prepare', 'Find the open report', FOUND)
+    expect(found.outputs.get('report')).toBe(String(number))
+    const applied = recordTicks(box, number)
+    expect(applied.stdout).toContain('accepted 1')
+    expect(statusOf(box, 1)).toBe('rejected')
+    expect(statusOf(box, 2)).toBe('candidate')
+
+    const second = nextDay(box, DATE_ONE)
+    const out = publish(box, second.render, DATE_ONE)
+    expect(out.settle.exitCode).toBe(0)
+    expect(out.number).toBe(number)
+
+    const issues = issuesOf(box)
+    expect(issues).toHaveLength(1)
+    expect(issues[0]?.state).toBe('open')
+    const posted = liveBody(box, number)
+    expect(posted).not.toContain(idOf(1))
+    expect(posted).toContain(decisionLine(idOf(2), 'rejected', false))
+    expect(posted).toBe(trimmed(second.body))
+    const creates = calls(box).filter((entry) =>
+      /-X POST repos\/[^ ]+\/issues /.test(entry),
+    )
+    expect(creates).toHaveLength(1)
+  })
+})
+
+describe('post: failed and unfinished runs are posted, then the workflow turns red', () => {
+  const cases: Array<[string, Json, RegExp]> = [
+    [
+      'failed',
+      {
+        outcome: 'failed',
+        finalLine: 'Connect failed',
+        reason: 'unsupported-host',
+      },
+      /Connect failed/,
+    ],
+    [
+      'begun with no terminal record',
+      { phase: 'begun', outcome: undefined, finalLine: undefined },
+      /ended with no final line/,
+    ],
+  ]
+  for (const [label, invocation, sentence] of cases) {
+    it(`posts the ${label} run and then settles red`, () => {
+      const box = makeBox()
+      seedHandoff(box, { invocation })
+      const day = renderDay(box, DATE_ONE)
+      expect(day.render.exitCode).toBe(0)
+      const out = publish(box, day.render, DATE_ONE)
+      // Render succeeded, so the post job runs; its redness comes from the outputs.
+      expect(
+        jobRuns('post', {
+          prepare: { result: 'success' },
+          render: {
+            result: 'success',
+            outputs: { 'has-body': out.done.outputs.get('has-body') ?? '' },
+          },
+        }),
+      ).toBe(true)
+      expect(out.verify.exitCode).toBe(0)
+      expect(out.recheck.exitCode).toBe(0)
+      expect(out.write.exitCode).toBe(0)
+      expect(out.close.exitCode).toBe(0)
+      expect(liveBody(box, out.number)).toBe(trimmed(day.body))
+      expect(liveBody(box, out.number)).toMatch(sentence)
+      expect(out.settle.exitCode).toBe(1)
+      expect(out.settle.stdout + out.settle.stderr).toContain('ce:connect')
+    })
+  }
 })

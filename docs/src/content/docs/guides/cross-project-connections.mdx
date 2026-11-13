@@ -331,13 +331,13 @@ The two secrets reach only the step that runs the agent, as the action's `auth-j
 
 A bad variable stops the run in its first job, before anything is cloned or posted, and the workflow ends red. That covers a missing or malformed model, an entry that is not `owner/repo`, an empty list and a list over 16.
 
-**Only public repositories are read.** The first job asks the GitHub API for each repository's visibility and treats an error as not public. One repository that is not public stops the whole run. The last job checks again right before it writes, so a repository made private during the run is caught too. Each repository is cloned without credentials, at its default branch, with its history cut to the latest commit.
+**Only public repositories are read.** The first job asks the GitHub API for each repository's visibility and treats an error as not public. One repository that is not public stops the whole run. The render job checks again before it saves the cache or uploads anything, and the last job checks again right before it writes, so a repository made private during the run is caught too. Both rechecks cover the repositories behind every candidate the report shows, including a candidate carried over from an earlier day whose repository has left the list. A shown candidate whose repository cannot be named fails the run. Each repository is cloned without credentials, at its default branch, with its history cut to the latest commit.
 
 The four jobs split the work by what each may touch:
 
 1. **Prepare** has read-only access. It checks the variables and the repositories, restores the ledger cache, and records the ticks left on the newest open report.
 2. **Run** has a read-only token. It is the only job that runs the agent.
-3. **Render** has no permissions and no secrets. It renders the report from what the run left and saves the ledger cache.
+3. **Render** has no permissions and no secrets. It renders the report from what the run left, rechecks visibility, saves the ledger cache and checks that the save left a cache behind.
 4. **Post** is the only job that can write, and it can write only issues. It writes the report and closes the reports it replaces.
 
 No job checks out Systematic's repository or runs a script from it. The jobs pass files to each other as artifacts, and an artifact carries only the connect files on an allow list: the ledger, the stores behind the report, the invocation record, and each run's `run.json` and `digest.md`. These artifacts are kept for one day.
@@ -360,6 +360,8 @@ The report lists the candidates that are still open, oldest first, as many as fi
 
 Tick **one** box per candidate. Ticking both is a conflict, and neither is recorded. The next run reads the ticks from the newest open report. Ticks on a closed report are ignored, so settle a candidate before the next report supersedes the report that lists it. A box ticked on any line the report did not generate records nothing.
 
+A box you tick while a run is going is kept. Before the last job edits or closes a report, it reads that report again and ticks the same boxes in the new body, for the candidates the new body still lists. It reads only the generated boxes inside the report's decision section and never inside a code fence. The next run then records those ticks. A tick for a candidate the new body no longer lists is dropped.
+
 The report also says how the run ended: `Connect complete`, `Connect degraded`, `Connect busy`, `Connect failed`, or no final line. A degraded or busy run is posted and the workflow stays green. A failed run, or one that began and never reported an outcome, is posted and the workflow then turns red.
 
 A failure before the report can be rendered turns the workflow red and posts nothing. This covers an agent step that stopped before `ce:connect` began, a run record that does not belong to this run, projects that differ from the allow list the workflow wrote, a store that cannot be read, and a lock that is held. The next run starts from the last good state and reads the same open report again.
@@ -373,13 +375,13 @@ The ledger lives in a GitHub Actions cache, because no other job or run keeps fi
 - the manifests of the last 14 reports, which say which ticks still count, and
 - `run.json` and `digest.md` for each run.
 
-It never holds the lock, OpenCode's own state, the configuration directory or a credential. Every run saves under a new key and restores the newest one. If the cache cannot be saved, the report says so and the workflow ends red, because the next run may list settled candidates again.
+It never holds the lock, OpenCode's own state, the configuration directory or a credential. Every run saves under a new key and restores the newest one. The save is checked: the render job looks the cache up by its key afterwards, because the save step reports success even when it saved nothing. If the cache cannot be saved, or the lookup finds nothing, the report says so and the workflow ends red, because the next run may list settled candidates again.
 
 GitHub evicts caches that go unused for seven days or push a repository over its cache limit. After an eviction, the first run starts with an empty ledger. It restarts the sweep from the beginning, forgets earlier decisions, and may list a settled candidate again. Its report opens with a notice that no cache was restored, and a tick for a candidate the ledger no longer knows is reported as unresolved.
 
 ### Fetch a candidate
 
-The run saves its run record as an artifact named `connect-run-<run>-<attempt>`, kept for 30 days. It holds the run record and nothing else. `fetch:<run>` reads it ([Bring a scheduled run's candidates here](#bring-a-scheduled-runs-candidates-here)). Once the artifact has expired, `fetch` reports `artifact-expired`. Tick **Rejected** on the report, or wait for a later run to propose the candidate again.
+The run saves its run record as an artifact named `connect-run-<run>-<attempt>`, kept for 30 days. It holds the run record and nothing else. `fetch:<run>` reads it ([Bring a scheduled run's candidates here](#bring-a-scheduled-runs-candidates-here)). Once the artifact has expired, `fetch` reports `artifact-expired`. Tick **Rejected** on the report, or wait for a later run to propose the candidate again. After a workflow rerun, `fetch:<run>` reads that run's newest attempt.
 
 `fetch:` reads runs of `marcusrbrown/systematic` only. A copy of the workflow in another repository posts its own reports and ticks, but its runs cannot be fetched.
 

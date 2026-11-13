@@ -6,8 +6,10 @@ name: Connect
 #   prepare - read-only: validates the variables, restores the ledger cache,
 #             records the operator's ticks from the newest open report
 #   run     - read-only token: the only job that runs the agent
-#   render  - no permissions: renders the report and saves the ledger cache
-#   post    - issues write, no repository code: writes and rotates the report
+#   render  - no permissions: renders the report, rechecks that every repository
+#             behind it is public, saves the ledger cache and confirms the save
+#   post    - issues write, no repository code: writes and rotates the report,
+#             carrying over ticks made on a report while the agent ran
 # No job checks out this repository. Values from variables, issue titles and
 # issue bodies reach scripts through `env:` or files, never through `run:` text.
 
@@ -58,6 +60,7 @@ jobs:
       variant: ${{ steps.config.outputs.variant }}
       cache-restored: ${{ steps.state.outputs.cache-restored }}
       report: ${{ steps.report.outputs.report }}
+      handoff: ${{ steps.artifact.outputs.name }}
     steps:
       - name: Compute UTC date
         id: date
@@ -246,10 +249,18 @@ jobs:
         run: |
           printf '{"version":1}\n' > "$RUNNER_TEMP/connect-state/systematic/connect/handoff.json"
 
+      # A rerun of only the failed jobs runs the later jobs in a new attempt, so a
+      # job that downloads an artifact takes its name from the producing job's
+      # output and never rebuilds it from the attempt number.
+      - name: Name hand-off
+        id: artifact
+        run: |
+          echo "name=connect-state-in-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
       - name: Upload hand-off
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: connect-state-in-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.artifact.outputs.name }}
           path: |
             ${{ runner.temp }}/connect-state/systematic/connect/handoff.json
             ${{ runner.temp }}/connect-state/systematic/connect/ledger.json
@@ -271,6 +282,7 @@ jobs:
       contents: read
     outputs:
       accepted: ${{ steps.envelope.outputs.accepted }}
+      handoff: ${{ steps.artifact.outputs.name }}
     steps:
       # The action has no working-directory input and ignores step-level
       # overrides of GITHUB_* variables, so the layout lives in the real
@@ -288,7 +300,7 @@ jobs:
       - name: Download hand-off
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: connect-state-in-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.prepare.outputs.handoff }}
           path: ${{ github.workspace }}/connect/state/systematic/connect
 
       # Plain clones of public repositories, made without credentials. Each is
@@ -420,10 +432,15 @@ jobs:
         run: |
           find "$GITHUB_WORKSPACE/connect/state/systematic/connect" -type l -delete
 
+      - name: Name hand-off
+        id: artifact
+        run: |
+          echo "name=connect-state-out-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
       - name: Upload hand-off
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: connect-state-out-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.artifact.outputs.name }}
           path: |
             ${{ github.workspace }}/connect/state/systematic/connect/invocation.json
             ${{ github.workspace }}/connect/state/systematic/connect/ledger.json
@@ -453,11 +470,13 @@ jobs:
       digest: ${{ steps.finalize.outputs.digest }}
       chars: ${{ steps.finalize.outputs.chars }}
       red: ${{ steps.finalize.outputs.red }}
+      report-artifact: ${{ steps.artifact.outputs.name }}
+      repos: ${{ steps.visibility.outputs.repos }}
     steps:
       - name: Download hand-off
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: connect-state-out-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.run.outputs.handoff }}
           path: ${{ runner.temp }}/handoff
 
       # Only regular files on the allowlist get through. Anything else, a
@@ -559,6 +578,68 @@ jobs:
             echo "outcome=${outcome}"
           } >> "$GITHUB_OUTPUT"
 
+      # Visibility is checked again before the ledger cache is saved or anything
+      # is uploaded, so a repository made private since prepare reaches neither.
+      # The check covers the current project list and every repository behind a
+      # candidate the report shows, which can include repositories that have left
+      # the list. A shown candidate's repositories come from the payload store:
+      # the target's `repo` and, for each source, its checkout directory name
+      # (`owner__repo`, as Clone projects names it). A shown candidate whose
+      # repository cannot be named fails the job. Any error counts as not public.
+      # The repositories are public, so the job token needs no permission to
+      # read their visibility.
+      - name: Recheck visibility
+        id: visibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROJECTS: ${{ needs.prepare.outputs.projects }}
+        run: |
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          set -f
+          body="$RUNNER_TEMP/report/body.md"
+          store="$RUNNER_TEMP/connect-state/systematic/connect/ci-payloads.json"
+          shape='^[a-z0-9][a-z0-9-]{0,38}/[a-z0-9._-]{1,100}$'
+
+          if [ -L "$body" ] || [ ! -f "$body" ]; then
+            fail "The report body is missing."
+          fi
+          ids=$({ grep -o 'connect-decision:[a-z]*:[0-9a-f]\{64\}' "$body" || true; } |
+            cut -d: -f3 | sort -u | jq -R . | jq -sc .) || fail "Could not read the candidate ids from the report."
+
+          carried=""
+          if [ -f "$store" ]; then
+            carried=$(jq -r --argjson ids "$ids" '
+              def checkout:
+                if test("^[a-z0-9][a-z0-9-]{0,38}__[a-z0-9._-]{1,100}$") then sub("__"; "/") else "unresolved" end;
+              .payloads[]?
+              | select(.id as $id | $ids | index($id) != null)
+              | (.repo // "unresolved"), (.sources[]? | (.projectName // "") | checkout)
+            ' "$store") || fail "Could not read the candidate store."
+          fi
+
+          list=""
+          # The lists are validated, space-separated and globbing is off (set -f).
+          # shellcheck disable=SC2086
+          for repo in $PROJECTS $carried; do
+            [[ "$repo" =~ $shape ]] ||
+              fail "The project list or the report names a repository that cannot be checked."
+            case " ${list} " in
+              *" ${repo} "*) continue ;;
+            esac
+            list="${list:+${list} }${repo}"
+          done
+
+          for repo in $list; do
+            if ! visibility=$(gh api "repos/${repo}" --jq .visibility) || [ "$visibility" != public ]; then
+              fail "${repo} is not confirmed public; nothing is saved or posted."
+            fi
+          done
+          echo "repos=${list}" >> "$GITHUB_OUTPUT"
+
       # A save failure does not stop the report. The finalize step says so in it.
       - name: Save ledger cache
         id: cache-save
@@ -573,6 +654,22 @@ jobs:
             ${{ runner.temp }}/connect-state/systematic/connect/runs/*/digest.md
           key: connect-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
+      # `actions/cache/save` exits 0 when it saved nothing, so its outcome proves
+      # nothing. A lookup on the exact key is the proof; a miss counts as a failed save.
+      - name: Confirm ledger cache
+        id: cache-check
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/connect-state/systematic/connect/ledger.json
+            ${{ runner.temp }}/connect-state/systematic/connect/ci-payloads.json
+            ${{ runner.temp }}/connect-state/systematic/connect/ci-manifests.json
+            ${{ runner.temp }}/connect-state/systematic/connect/runs/*/run.json
+            ${{ runner.temp }}/connect-state/systematic/connect/runs/*/digest.md
+          key: connect-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          lookup-only: true
+
       - name: Finalize report
         id: finalize
         env:
@@ -580,11 +677,12 @@ jobs:
           RENDER_MANIFEST: ${{ steps.render.outputs.manifest }}
           RENDER_OUTCOME: ${{ steps.render.outputs.outcome }}
           CACHE_SAVE_OUTCOME: ${{ steps.cache-save.outcome }}
+          CACHE_HIT: ${{ steps.cache-check.outputs.cache-hit }}
         run: |
           body="$RUNNER_TEMP/report/body.md"
           red="$RENDER_RED"
           cache_saved=true
-          if [ "$CACHE_SAVE_OUTCOME" = failure ]; then
+          if [ "$CACHE_SAVE_OUTCOME" = failure ] || [ "$CACHE_HIT" != true ]; then
             cache_saved=false
             red=true
             printf '\n\n> The ledger cache could not be saved for this run. The next run may start from an older ledger and list settled candidates again.\n' >> "$body"
@@ -606,10 +704,15 @@ jobs:
             echo "red=${red}"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Name report artifact
+        id: artifact
+        run: |
+          echo "name=connect-report-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+
       - name: Upload report
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: connect-report-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.artifact.outputs.name }}
           path: |
             ${{ runner.temp }}/report/body.md
             ${{ runner.temp }}/report/envelope.json
@@ -658,6 +761,7 @@ jobs:
       always() &&
       github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
       needs.prepare.result == 'success' &&
+      needs.render.result == 'success' &&
       needs.render.outputs.has-body == 'true'
     permissions:
       issues: write
@@ -665,7 +769,7 @@ jobs:
       - name: Download report
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: connect-report-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ needs.render.outputs.report-artifact }}
           path: ${{ runner.temp }}/report
 
       - name: Verify report
@@ -694,14 +798,19 @@ jobs:
           [ "${out#* }" = "$RENDER_CHARS" ] || fail "The report body does not match its size."
           [ "${out#* }" -le "$REPORT_BODY_CAP" ] || fail "The report body is over the size cap."
 
-      # Visibility is checked again right before the write. Any error counts as not public.
+      # Visibility is checked again right before the write, for the project list
+      # and for the repositories behind the candidates the report shows (render
+      # lists them). Any error counts as not public.
       - name: Recheck visibility
         env:
           GH_TOKEN: ${{ github.token }}
           PROJECTS: ${{ needs.prepare.outputs.projects }}
+          REPOS: ${{ needs.render.outputs.repos }}
         run: |
           set -f
-          for repo in $PROJECTS; do
+          # The lists are validated, space-separated and globbing is off (set -f).
+          # shellcheck disable=SC2086
+          for repo in $PROJECTS $REPOS; do
             if ! [[ "$repo" =~ ^[a-z0-9][a-z0-9-]{0,38}/[a-z0-9._-]{1,100}$ ]]; then
               echo "::error::The validated project list holds a malformed entry."
               exit 1
@@ -711,6 +820,90 @@ jobs:
               exit 1
             fi
           done
+
+      # The operator can tick a box on a report while the agent runs, after
+      # prepare read it. Before a report is edited or closed, its live body is
+      # read again and each generated line that is ticked there is ticked in the
+      # new body too, when the new body has the same unticked line. The reading
+      # follows the helper's: only the one delimited section, never inside a
+      # code fence. Only checkbox characters change, so the verified body stays
+      # the same text.
+      - name: Install tick carrier
+        run: |
+          cat > "$RUNNER_TEMP/carry-ticks.mjs" <<'JS'
+          import fs from 'node:fs'
+
+          const BEGIN = '<!-- connect-decisions:begin -->'
+          const END = '<!-- connect-decisions:end -->'
+          const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/
+          const BOX = /^- \[([ xX])\] (Promoted|Rejected) <!-- connect-decision:(promoted|rejected):([0-9a-f]{64}) -->[ \t]*$/
+          const LABEL = { promoted: 'Promoted', rejected: 'Rejected' }
+
+          // The generated checkbox lines inside the one delimited section and
+          // outside every fence. A body whose delimiters are missing, repeated or
+          // out of order has none.
+          function boxes(lines) {
+            const found = []
+            let fence = null
+            let inside = false
+            let begins = 0
+            let ends = 0
+            let ordered = true
+            lines.forEach((raw, index) => {
+              const line = raw.replace(/\r$/, '')
+              const match = FENCE.exec(line)
+              const run = match === null ? undefined : match[1]
+              const info = match === null ? '' : match[2]
+              const char = run !== undefined && run.startsWith('~') ? '~' : '`'
+              if (fence !== null) {
+                if (run !== undefined && char === fence.char && run.length >= fence.length && info.trim() === '') {
+                  fence = null
+                }
+                return
+              }
+              if (run !== undefined && !(char === '`' && info.includes('`'))) {
+                fence = { char, length: run.length }
+                return
+              }
+              const text = line.trimEnd()
+              if (text === BEGIN) {
+                begins += 1
+                if (ends > 0) ordered = false
+                inside = true
+                return
+              }
+              if (text === END) {
+                ends += 1
+                if (begins === 0) ordered = false
+                inside = false
+                return
+              }
+              if (!inside) return
+              const box = BOX.exec(line)
+              if (box !== null && LABEL[box[3]] === box[2]) {
+                found.push({ index, ticked: box[1] !== ' ', key: box[3] + ':' + box[4] })
+              }
+            })
+            return begins === 1 && ends === 1 && ordered ? found : []
+          }
+
+          const [base, out, ...lives] = process.argv.slice(2)
+          const ticked = new Set()
+          for (const file of lives) {
+            for (const box of boxes(fs.readFileSync(file, 'utf8').split('\n'))) {
+              if (box.ticked) ticked.add(box.key)
+            }
+          }
+          const lines = fs.readFileSync(base, 'utf8').split('\n')
+          let carried = 0
+          for (const box of boxes(lines)) {
+            if (box.ticked || !ticked.has(box.key)) continue
+            lines[box.index] = lines[box.index].replace('- [ ]', '- [x]')
+            carried += 1
+          }
+          fs.writeFileSync(out, lines.join('\n'), { mode: 0o600 })
+          console.log('Carried ' + carried + ' tick(s) into the report.')
+          JS
 
       # Create the report for the date, or edit it in place by number. The write
       # is confirmed by reading the issue back before anything is rotated.
@@ -748,11 +941,28 @@ jobs:
               END { print best }')
           fi
 
+          # Every open report is either edited or closed by this job, so each one's
+          # live body is read now and its ticks carried into the body to post.
+          umask 077
+          live="$RUNNER_TEMP/live"
+          posted="$RUNNER_TEMP/report/posted.md"
+          rm -rf "$live"
+          mkdir -p "$live"
+          lives=()
+          for open in $(printf '%s\n' "$reports" | awk -F '\t' 'NF == 2 { print $1 }'); do
+            [[ "$open" =~ ^[0-9]{1,10}$ ]] || fail "A report number has an unexpected shape."
+            gh api "repos/${REPO}/issues/${open}" --jq '.body // ""' > "$live/${open}.md" ||
+              fail "Could not read report #${open}."
+            lives+=("$live/${open}.md")
+          done
+          node "$RUNNER_TEMP/carry-ticks.mjs" "$body" "$posted" ${lives[@]+"${lives[@]}"} ||
+            fail "Could not carry the ticks into the report."
+
           if [ -n "$number" ]; then
-            gh api -X PATCH "repos/${REPO}/issues/${number}" -f "title=${title}" -F "body=@${body}" > /dev/null ||
+            gh api -X PATCH "repos/${REPO}/issues/${number}" -f "title=${title}" -F "body=@${posted}" > /dev/null ||
               fail "Could not edit report #${number}."
           else
-            number=$(gh api -X POST "repos/${REPO}/issues" -f "title=${title}" -F "body=@${body}" --jq .number) ||
+            number=$(gh api -X POST "repos/${REPO}/issues" -f "title=${title}" -F "body=@${posted}" --jq .number) ||
               fail "Could not create the report."
           fi
           [[ "$number" =~ ^[0-9]{1,10}$ ]] || fail "The report number has an unexpected shape."
@@ -791,9 +1001,25 @@ jobs:
                 and any($authors[]; . == ($i.user.login // "")))
             | $i.number') || fail "Could not read the issue list."
 
+          # A report is closed only after its live body was read once more and any
+          # tick on it is on the new report, so a tick made since the write is kept.
+          umask 077
+          body="$RUNNER_TEMP/report/body.md"
+          live="$RUNNER_TEMP/live"
+          mkdir -p "$live"
+          carry() {
+            gh api "repos/${REPO}/issues/${NUMBER}" --jq '.body // ""' > "$live/new.md" &&
+              gh api "repos/${REPO}/issues/$1" --jq '.body // ""' > "$live/old.md" &&
+              node "$RUNNER_TEMP/carry-ticks.mjs" "$body" "$live/next.md" "$live/new.md" "$live/old.md" > /dev/null || return 1
+            if [ "$(cat "$live/next.md")" != "$(cat "$live/new.md")" ]; then
+              gh api -X PATCH "repos/${REPO}/issues/${NUMBER}" -F "body=@${live}/next.md" > /dev/null || return 1
+            fi
+          }
+
           failed=""
           for old in $others; do
-            if gh api -X POST "repos/${REPO}/issues/${old}/comments" -f "body=Superseded by #${NUMBER}." > /dev/null &&
+            if carry "$old" &&
+              gh api -X POST "repos/${REPO}/issues/${old}/comments" -f "body=Superseded by #${NUMBER}." > /dev/null &&
               gh api -X PATCH "repos/${REPO}/issues/${old}" -f state=closed -f state_reason=completed > /dev/null; then
               echo "Closed report #${old}."
             else
