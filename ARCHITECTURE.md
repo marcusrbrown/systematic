@@ -410,7 +410,7 @@ Three more helper operations serve runs that did not start on this machine. None
 | Job | Token | Does |
 |---|---|---|
 | `prepare` | read-only | Validates the variables, checks each project is public, restores the ledger cache, finds the newest open report and records its ticks with `apply-ticks`. |
-| `run` | `contents: read` | The only job that runs the agent. It clones the projects without credentials under the workspace, writes the allow list and model overlay, writes the run marker, runs `fro-bot/agent`, and accepts the run only when `invocation.json` carries this run's marker and its resolved projects equal the allow list. |
+| `run` | `contents: read` | The only job that runs the agent. It clones the projects without credentials under the workspace, writes the allow list and model overlay, writes the run marker, runs `fro-bot/agent` under a step timeout shorter than the job's (`FRO_BOT_CONNECT_STEP_TIMEOUT`, 40 minutes by default, so a hung run still reaches the steps that read and hand on the record), and accepts the run only when `invocation.json` carries this run's marker and its resolved projects equal the allow list. |
 | `render` | none | Validates the hand-off against an allowlist of regular files, runs `render-report`, rechecks that every repository behind the report is public, saves the cache, confirms the save with a lookup and uploads the report and the run record. |
 | `post` | `issues: write` | Runs only after `render` succeeded. Verifies the report digest, rechecks visibility, carries ticks made on the open reports since `prepare` read them into the new body, then creates or edits the one report for the UTC date, reads it back, and closes the superseded ones. |
 
