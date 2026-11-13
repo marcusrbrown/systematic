@@ -687,7 +687,7 @@ export const HOST_SUPPORT_TABLE: readonly HostSupportRow[] = [
   {
     host: 'opencode-v2',
     // renovate: datasource=npm depName=@opencode/cli
-    version: '2.2.6',
+    version: '2.2.7',
     observedBy:
       'tests/integration/opencode-v2.test.ts > a session-level allow does not lift the guarded researcher when a parent with that rule dispatches it',
   },
