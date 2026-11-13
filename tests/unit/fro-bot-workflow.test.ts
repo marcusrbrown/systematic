@@ -69,9 +69,10 @@ function promptRouting(source: string): string {
 
 /**
  * Autoheal prompt branches append the workflow-computed run context (today's
- * UTC date and the Sunday flag). The agent's shell does not inherit step env
- * (run 41269659786: `printenv IS_SUNDAY_UTC` was empty while the step env said
- * `true`), so the values travel inside the prompt text itself.
+ * UTC date and the Sunday flag). The action hands the agent's shell only
+ * allowlisted environment names (run 41269659786: `printenv IS_SUNDAY_UTC` was
+ * empty while the step env said `true`), so the values travel inside the
+ * prompt text itself.
  */
 const AUTOHEAL_WITH_CONTEXT =
   "format('{0}{1}', env.AUTOHEAL_PROMPT, env.RUN_CONTEXT)"
@@ -243,11 +244,13 @@ describe('Fro Bot workflow contracts', () => {
     const usesLines = source
       .split('\n')
       .filter((line) => /^\s*uses:\s+/.test(line))
+    const localAction = /^\s*uses:\s+\.\/\.github\/actions\/fro-bot-agent\s*$/
     const pinnedAction =
       /^\s*uses:\s+[^@\s]+@[0-9a-fA-F]{40}\s+# v\d+\.\d+\.\d+(?:\b|$)/
 
     expect(usesLines.length).toBeGreaterThanOrEqual(3)
     for (const line of usesLines) {
+      if (localAction.test(line)) continue
       expect(line).toMatch(pinnedAction)
     }
     expect(source).toMatch(
@@ -256,8 +259,25 @@ describe('Fro Bot workflow contracts', () => {
     expect(source).toMatch(
       /uses:\s+oven-sh\/setup-bun@[0-9a-fA-F]{40}\s+# v\d+\.\d+\.\d+/,
     )
-    expect(source).toMatch(
-      /uses:\s+fro-bot\/agent@[0-9a-fA-F]{40}\s+# v\d+\.\d+\.\d+/,
+  })
+
+  test('runs the agent through the shared local action, which holds the pin', () => {
+    const { source, workflow } = readWorkflow()
+    const froBot = asRecord(asRecord(workflow.jobs, 'jobs')['fro-bot'], 'job')
+    const step = findStep(asArray(froBot.steps, 'steps'), 'Run Fro Bot')
+
+    expect(step.uses).toBe('./.github/actions/fro-bot-agent')
+    expect(source).not.toMatch(/uses:\s+fro-bot\/agent@/)
+    expect(asRecord(step.with, 'with')).toMatchObject({
+      model: `${EXPRESSION_PREFIX}{{ vars.FRO_BOT_MODEL }}`,
+      'auth-json': `${EXPRESSION_PREFIX}{{ secrets.OPENCODE_AUTH_JSON }}`,
+      'opencode-config': `${EXPRESSION_PREFIX}{{ secrets.OPENCODE_CONFIG }}`,
+      'github-token': `${EXPRESSION_PREFIX}{{ secrets.FRO_BOT_PAT }}`,
+      prompt: `${EXPRESSION_PREFIX}{{ env.PROMPT }}`,
+    })
+    expect(asRecord(step.with, 'with')).not.toHaveProperty('timeout')
+    expect(asRecord(step.env, 'env')).not.toHaveProperty(
+      'OPENCODE_PROMPT_ARTIFACT',
     )
   })
 

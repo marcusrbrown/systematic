@@ -342,13 +342,13 @@ The four jobs split the work by what each may touch:
 3. **Render** has no permissions and no secrets. It renders the report from what the run left, rechecks visibility, saves the ledger cache and checks that the save left a cache behind.
 4. **Post** is the only job that can write, and it can write only issues. It writes the report and closes the reports it replaces.
 
-No job checks out Systematic's repository or runs a script from it. The jobs pass files to each other as artifacts, and an artifact carries only the connect files on an allow list: the ledger, the stores behind the report, the invocation record, and each run's `run.json` and `digest.md`. These artifacts are kept for one day.
+Only the run job checks out Systematic's repository, and it takes `.github/actions` alone: the shared agent action that the Fro Bot workflow runs too. The checkout lands in `.fro-bot-actions`, keeps no credential and leaves the connect layout alone. No job runs a script from the repository. The jobs pass files to each other as artifacts, and an artifact carries only the connect files on an allow list: the ledger, the stores behind the report, the invocation record, and each run's `run.json` and `digest.md`. These artifacts are kept for one day.
 
 ### Pin the Systematic version
 
 The workflow installs one exact release of `@fro.bot/systematic`. The same version feeds the action's `systematic-version` input and the helper that renders the report and reads the ticks, so the skill that wrote the state and the helper that reads it are the same release. Bump it by editing `SYSTEMATIC_VERSION` at the top of the workflow. Do it with each Systematic release that changes the format of the ledger or the run records.
 
-The `fro-bot/agent` action is pinned by commit, and its pin follows Renovate. A headless run refuses a host and version that `HOST_SUPPORT_TABLE` does not list ([Supported hosts](#supported-hosts)): the run ends `Connect failed` with the reason `unsupported-host`, and the workflow turns red.
+The `fro-bot/agent` action is pinned by commit in one place, `.github/actions/fro-bot-agent/action.yml`, which this workflow and the Fro Bot workflow both run, and its pin follows Renovate. A headless run refuses a host and version that `HOST_SUPPORT_TABLE` does not list ([Supported hosts](#supported-hosts)): the run ends `Connect failed` with the reason `unsupported-host`, and the workflow turns red.
 
 ### Read the report
 

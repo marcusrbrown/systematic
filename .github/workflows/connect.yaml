@@ -10,8 +10,10 @@ name: Connect
 #             behind it is public, saves the ledger cache and confirms the save
 #   post    - issues write, no repository code: writes and rotates the report,
 #             carrying over ticks made on a report while the agent ran
-# No job checks out this repository. Values from variables, issue titles and
-# issue bodies reach scripts through `env:` or files, never through `run:` text.
+# Only the run job checks out this repository, and only .github/actions, for the
+# agent action it shares with the Fro Bot workflow. Values from variables, issue
+# titles and issue bodies reach scripts through `env:` or files, never through
+# `run:` text.
 
 on:
   schedule:
@@ -366,8 +368,8 @@ jobs:
     name: Run ce:connect
     needs: prepare
     runs-on: ubuntu-latest
-    # The action's own runtime is unbounded (`timeout: 0`), as in the Fro Bot
-    # workflow. The agent step carries a shorter timeout of its own, so a hung
+    # The shared action's own runtime is unbounded (`timeout: 0`), as in the Fro
+    # Bot workflow. The agent step carries a shorter timeout of its own, so a hung
     # run is cut off with time left for the steps after it. This job's timeout
     # is the backstop. Cancelling the job skips every step that follows the
     # agent, so nothing would be posted.
@@ -379,6 +381,20 @@ jobs:
       accepted: ${{ steps.envelope.outputs.accepted }}
       handoff: ${{ steps.artifact.outputs.name }}
     steps:
+      # Only the shared agent action, beside the layout and not at the workspace
+      # root: a checkout there would make the workspace a repository, and the
+      # helper refuses any state root inside one. Nothing else comes down, no
+      # credential stays in it, and `clean: false` leaves the layout alone.
+      - name: Check out the shared agent action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .fro-bot-actions
+          sparse-checkout: |
+            /.github/actions/
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+          clean: false
+
       # The action has no working-directory input and ignores step-level
       # overrides of GITHUB_* variables, so the layout lives in the real
       # workspace. The agent shell receives allowlisted variables only.
@@ -461,11 +477,9 @@ jobs:
         # Minutes. Prepare checked that the variable is a whole number below the
         # job timeout.
         timeout-minutes: ${{ fromJSON(vars.FRO_BOT_CONNECT_STEP_TIMEOUT || '40') }}
-        uses: fro-bot/agent@1ffb6495501f12801f770fa0c0563d16450416e7 # v0.140.2
-        # Set up like the Fro Bot workflow's agent step. Each difference below
-        # has a reason; tests/unit/connect-workflow.test.ts pins the rest.
-        env:
-          OPENCODE_PROMPT_ARTIFACT: "true"
+        uses: ./.fro-bot-actions/.github/actions/fro-bot-agent
+        # The shared action sets the rest. Each input below that the Fro Bot
+        # workflow does not set the same way has a reason.
         with:
           auth-json: ${{ secrets.OPENCODE_AUTH_JSON }}
           # The read-only job token, not the Fro Bot personal token.
@@ -482,7 +496,6 @@ jobs:
           output-mode: working-dir
           # A repeat run is never suppressed.
           dedup-window: "0"
-          timeout: 0
           # A fixed prompt: there is no change, issue or comment to route.
           prompt: |
             This is an unattended scheduled run with no change, issue or

@@ -35,7 +35,7 @@ A workflow gave a model a shell in one step and then ran a trusted step, holding
 
 ## Solution
 
-Move the trusted step into its own job. In `.github/workflows/fro-bot.yaml:893-938` the `approval-backstop` job is named `Fro Bot approval backstop`. It declares `needs: fro-bot`, runs on a fresh runner with `permissions: {}`, has no checkout, and has no `uses:` step. Its only step is the original script, unchanged, including the fail-closed `exit 1` when reviews cannot be listed.
+Move the trusted step into its own job. In `.github/workflows/fro-bot.yaml:895-940` the `approval-backstop` job is named `Fro Bot approval backstop`. It declares `needs: fro-bot`, runs on a fresh runner with `permissions: {}`, has no checkout, and has no `uses:` step. Its only step is the original script, unchanged, including the fail-closed `exit 1` when reviews cannot be listed.
 
 The agent job passes what the backstop needs as a declared job output: `outputs.allowed` at `.github/workflows/fro-bot.yaml:672-674` carries the approval-rule result. The backstop runs on `always()`, skips when the agent job was skipped, and acts only when the output is not `true` on a pull request event or a comment on a pull request.
 
@@ -49,15 +49,15 @@ The job reports `skipped` on bot and allowed pull requests. The release gate acc
 
 ## Why This Works
 
-A job is a fresh machine. Nothing the agent step wrote to the first runner's home directory, environment files, `PATH` or workspace exists in the second one. The channel between them is the set of declared job outputs, which are plain strings. The backstop's credential lives in a job whose steps are one script and no third-party actions. Making the check required means its failure blocks the merge instead of being advisory. That covers both failure branches: the reviews cannot be listed, or a disallowed approval could not be dismissed. A first version of the job only warned on a failed dismissal, so the required check passed while the approval stayed. The script now still tries every approval, collects the ids it could not dismiss, and then fails with an error naming them (`.github/workflows/fro-bot.yaml:931-943`).
+A job is a fresh machine. Nothing the agent step wrote to the first runner's home directory, environment files, `PATH` or workspace exists in the second one. The channel between them is the set of declared job outputs, which are plain strings. The backstop's credential lives in a job whose steps are one script and no third-party actions. Making the check required means its failure blocks the merge instead of being advisory. That covers both failure branches: the reviews cannot be listed, or a disallowed approval could not be dismissed. A first version of the job only warned on a failed dismissal, so the required check passed while the approval stayed. The script now still tries every approval, collects the ids it could not dismiss, and then fails with an error naming them (`.github/workflows/fro-bot.yaml:933-945`).
 
 ## Prevention
 
 - **Treat any step after a model-driven step in the same job as untrusted-adjacent.** If it holds a credential, or makes a decision someone relies on, give it its own job. Pass data through job outputs and artifacts you validate.
 - **Keep the isolated job minimal:** `permissions: {}`, no checkout, no `uses:` steps unless you must, and pin an explicit credential only in the step that needs it.
 - **Register the job as a required check everywhere the repository lists them** (ruleset, branch protection contexts, any merge or release gate that carries its own list), then run the repository's settings and workflow tests. Allow `skipped` where the job legitimately does not run.
-- **Make every failure path of a security backstop fail the job.** A warning that lets the job pass leaves the protected condition unenforced. The backstop tests run the real step script with stubs and expect a failed dismissal to fail the job while the remaining approvals are still tried (`tests/unit/fro-bot-workflow.test.ts:846-887`).
-- **Pin the topology in a test.** The `approval backstop job` suite at `tests/unit/fro-bot-workflow.test.ts:747-803` asserts that the backstop is its own job that `needs` the agent job, has no `uses:` step, holds empty `permissions`, and reads the agent job's `allowed` output. Add the same kind of assertion for the three required-check lists.
+- **Make every failure path of a security backstop fail the job.** A warning that lets the job pass leaves the protected condition unenforced. The backstop tests run the real step script with stubs and expect a failed dismissal to fail the job while the remaining approvals are still tried (`tests/unit/fro-bot-workflow.test.ts:866-907`).
+- **Pin the topology in a test.** The `approval backstop job` suite at `tests/unit/fro-bot-workflow.test.ts:767-823` asserts that the backstop is its own job that `needs` the agent job, has no `uses:` step, holds empty `permissions`, and reads the agent job's `allowed` output. Add the same kind of assertion for the three required-check lists.
 
 ## Residual: scheduled and dispatched agent runs
 

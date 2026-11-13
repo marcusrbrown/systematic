@@ -752,10 +752,12 @@ jobs:
           fi
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
-      # The agent's shell does not inherit step env (run 41269659786: this step
-      # exported IS_SUNDAY_UTC=true, yet `printenv IS_SUNDAY_UTC` in the agent's
-      # Bash tool was empty and category 10 was skipped). So the computed values
-      # travel inside the prompt: the autoheal PROMPT branches append RUN_CONTEXT.
+      # The action hands the agent's shell only allowlisted environment names (a
+      # fixed list plus the OPENCODE_, RUNNER_, XDG_ and LC_ prefixes), so a name
+      # set here never reaches it (run 41269659786: this step exported
+      # IS_SUNDAY_UTC=true, yet `printenv IS_SUNDAY_UTC` in the agent's Bash tool
+      # was empty and category 10 was skipped). So the computed values travel
+      # inside the prompt: the autoheal PROMPT branches append RUN_CONTEXT.
       - name: Compute UTC run context
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: |
@@ -835,10 +837,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # The composite is read from the checkout above, which is the PR head for
+      # PR runs: the job already runs `bun install` on that head.
       - name: Run Fro Bot
-        uses: fro-bot/agent@1ffb6495501f12801f770fa0c0563d16450416e7 # v0.140.2
+        uses: ./.github/actions/fro-bot-agent
         env:
-          OPENCODE_PROMPT_ARTIFACT: "true"
           # PROMPT routing precedence — ORDER MATTERS.
           #
           # Both workflow_call AND workflow_dispatch can carry a non-empty
@@ -888,7 +891,6 @@ jobs:
           # solely on schedule/workflow_dispatch runs.
           output-mode: ${{ ((github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || (github.event_name == 'workflow_dispatch' && inputs.prompt == '' && inputs.mode == 'autoheal')) && 'branch-pr' || '' }}
           prompt: ${{ env.PROMPT }}
-          timeout: 0
 
   # Deterministic backstop for R23: whatever the agent did, a fro-bot APPROVED
   # review on a PR where approval is not allowed gets dismissed. Comment-triggered
