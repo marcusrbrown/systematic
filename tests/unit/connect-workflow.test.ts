@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import yaml from 'js-yaml'
 import { decisionLine, manifestMarker } from '../../src/lib/connect-ci.js'
+import { projectName } from '../../src/lib/connect-helper-core.js'
 import { readCiRunMarker } from '../../src/lib/connect-state.js'
 
 // Script tests run real shell steps and the bundled helper, which can take
@@ -263,12 +264,12 @@ describe('connect workflow layout, marker and prompt', () => {
       const text = JSON.stringify(step)
       expect(text).not.toMatch(/RUNNER_TEMP|runner\.temp/)
     }
-    const layout = asString(
+    const layoutScript = asString(
       stepNamed('run', 'Create connect layout').run,
-      'layout',
+      'layout script',
     )
-    expect(layout).toContain('$GITHUB_WORKSPACE/connect')
-    expect(layout).toContain(
+    expect(layoutScript).toContain('$GITHUB_WORKSPACE/connect')
+    expect(layoutScript).toContain(
       'echo "XDG_STATE_HOME=${layout}/state" >> "$GITHUB_ENV"',
     )
     expect(
@@ -2680,4 +2681,336 @@ describe('post: failed and unfinished runs are posted, then the workflow turns r
       expect(out.settle.stdout + out.settle.stderr).toContain('ce:connect')
     })
   }
+})
+
+// ── Checkout names, and the state that leaves a job ────────────────────────
+
+describe('prepare: checkout names the helper keeps whole', () => {
+  const entryOf100 = `${'a'.repeat(39)}/${'b'.repeat(59)}`
+  const entryOf101 = `${'a'.repeat(39)}/${'b'.repeat(60)}`
+  const checkoutOf = (entry: string): string => entry.replace('/', '__')
+
+  it('accepts an entry whose owner__repo name is exactly 100 characters', () => {
+    expect(checkoutOf(entryOf100)).toHaveLength(100)
+    const box = makeBox()
+    const result = runStep(box, 'prepare', 'Validate configuration', {
+      ...CONFIG_ENV,
+      PROJECTS_RAW: `acme/target ${entryOf100}`,
+    })
+    expect(result.exitCode).toBe(0)
+    expect(result.outputs.get('projects')).toBe(`acme/target ${entryOf100}`)
+  })
+
+  it('refuses an entry whose owner__repo name is 101 characters, naming it, before any lookup', () => {
+    expect(checkoutOf(entryOf101)).toHaveLength(101)
+    const box = makeBox()
+    const result = runStep(box, 'prepare', 'Validate configuration', {
+      ...CONFIG_ENV,
+      PROJECTS_RAW: `acme/target ${entryOf101}`,
+    })
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toContain(entryOf101)
+    expect(result.stdout).toContain('over 100 characters')
+    expect(result.outputs.has('projects')).toBe(false)
+    expect(
+      calls(box).filter((line) => line.startsWith('gh api repos/')),
+    ).toEqual([])
+  })
+
+  it('keeps the helper project name equal to the checkout name up to the limit and not beyond it', () => {
+    const at = (entry: string): string =>
+      projectName(`/runner/work/connect/checkouts/${checkoutOf(entry)}`)
+    expect(at(entryOf100)).toBe(checkoutOf(entryOf100))
+    expect(at(entryOf101)).not.toBe(checkoutOf(entryOf101))
+    // Every character a validated entry can hold survives the helper's reduction.
+    for (const entry of ['a-b/c.d_e-f', 'x/_y', 'x/y__z', '9/0.-_']) {
+      expect(at(entry)).toBe(checkoutOf(entry))
+    }
+  })
+})
+
+// ── Retained state is checked before it leaves a job ───────────────────────
+
+interface Walked {
+  failedAt: string | undefined
+  /** Steps that would upload an artifact or save a cache and were reached. */
+  effects: string[]
+  results: Map<string, StepResult>
+}
+
+/**
+ * Run a job's shell steps in order, as the runner does: stop at the first step
+ * that fails, and note each upload or cache save it reaches. Steps with an `if`
+ * and other actions are skipped.
+ */
+function walkJob(box: Box, id: JobId, env: Record<string, string>): Walked {
+  const effects: string[] = []
+  const results = new Map<string, StepResult>()
+  for (const step of stepsOf(id)) {
+    const name = asString(step.name, 'step name')
+    if (step.if !== undefined) continue
+    const uses = String(step.uses ?? '')
+    if (uses.includes('upload-artifact@') || uses.includes('cache/save@')) {
+      effects.push(name)
+      continue
+    }
+    if (step.run === undefined) continue
+    const result = runStep(box, id, name, env)
+    results.set(name, result)
+    if (result.exitCode !== 0 && step['continue-on-error'] !== true) {
+      return { failedAt: name, effects, results }
+    }
+  }
+  return { failedAt: undefined, effects, results }
+}
+
+const PREPARE_ENV = {
+  ...CONFIG_ENV,
+  FAKE_DATE: DATE_ONE,
+  REPO: 'marcusrbrown/systematic',
+  CACHE_MATCHED_KEY: 'connect-v1-1-1',
+  PROJECTS: 'acme/target other/repo',
+}
+
+const RENDER_ENV = {
+  DATE: DATE_ONE,
+  CACHE_RESTORED: 'true',
+  PROJECTS: 'acme/target other/repo',
+  RENDER_RED: 'false',
+  RENDER_MANIFEST: '',
+  RENDER_OUTCOME: 'complete',
+  CACHE_SAVE_OUTCOME: 'success',
+  CACHE_HIT: 'true',
+}
+
+const PRIVATE_NOW = (box: Box, slug: string, verdict = 'private'): void =>
+  fs.writeFileSync(path.join(box.fixtures, `visibility-${slug}`), verdict)
+
+/** A render of many large candidates, so the report cap hides the last one. */
+function crowdedDay(box: Box, hiddenProject: string): { body: string } {
+  const candidates = Array.from({ length: 30 }, (_, i) => {
+    const n = i + 1
+    const project = n === 30 ? hiddenProject : SOURCE_PROJECT
+    return blockCandidate(n, {
+      summary: 'S'.repeat(790),
+      sources: Array.from({ length: 8 }, (_, s) => ({
+        ...sourcesFrom(project, n)[0],
+        path: `docs/solutions/lesson-${n}-${s}.md`,
+        excerpt: 'E'.repeat(230),
+      })),
+    })
+  })
+  seedHandoff(box, { count: 30, candidates })
+  const day = renderDay(box, DATE_ONE)
+  expect(day.render.exitCode).toBe(0)
+  expect(day.body).not.toContain(idOf(30))
+  expect(day.body).toContain('not shown')
+  return day
+}
+
+/** A retained run record, as an earlier run left it in the cache. */
+function retainRunRecord(box: Box, repo: string): void {
+  writeJson(
+    path.join(
+      stateRootOf(box),
+      'runs',
+      '20260101T000000Z-aaaaaaaa',
+      'run.json',
+    ),
+    { schemaVersion: 1, projects: [{ name: 'old', repo }] },
+  )
+}
+
+const RECOVERY = [
+  'no longer public',
+  'gh cache list --key connect-v1-',
+  'gh cache delete',
+]
+
+const recheckPrepare = (box: Box, projects = 'acme/target other/repo') =>
+  runStep(box, 'prepare', 'Recheck cached state', {
+    PROJECTS: projects,
+  })
+
+describe('prepare: cached state is checked before the hand-off is uploaded', () => {
+  it('runs after the cache is restored and before the first upload', () => {
+    const at = (name: string) => stepIndex('prepare', name)
+    expect(at('Recheck cached state')).toBeGreaterThan(
+      at('Restore ledger cache'),
+    )
+    expect(at('Recheck cached state')).toBeLessThan(at('Upload hand-off'))
+    const env = asRecord(
+      stepNamed('prepare', 'Recheck cached state').env,
+      'env',
+    )
+    expect(env.GH_TOKEN).toBe('${{ github.token }}')
+    expect(env.PROJECTS).toBe('${{ steps.config.outputs.projects }}')
+  })
+
+  it('is the same script render runs, so the two cannot drift', () => {
+    expect(stepNamed('prepare', 'Recheck cached state').run).toBe(
+      stepNamed('render', 'Recheck visibility').run,
+    )
+  })
+
+  const holders: Array<[string, (box: Box) => void]> = [
+    [
+      'a payload source',
+      (box) => {
+        seedHandoff(box, {
+          candidates: [
+            blockCandidate(1, { sources: sourcesFrom('gone__project', 1) }),
+            blockCandidate(2),
+          ],
+        })
+        renderDay(box, DATE_ONE)
+      },
+    ],
+    [
+      'a candidate the report cap hides',
+      (box) => void crowdedDay(box, 'gone__project'),
+    ],
+    [
+      'a retained run record',
+      (box) => {
+        runStep(box, 'prepare', 'Create state root')
+        retainRunRecord(box, 'gone/project')
+      },
+    ],
+  ]
+  for (const [label, arrange] of holders) {
+    for (const verdict of ['private', 'ERROR']) {
+      it(`fails red with nothing uploaded when a removed repository named only by ${label} is ${verdict === 'ERROR' ? 'unreadable' : 'private'}`, () => {
+        const box = makeBox()
+        arrange(box)
+        PRIVATE_NOW(box, 'gone__project', verdict)
+        const ledger = fs.existsSync(path.join(stateRootOf(box), 'ledger.json'))
+          ? ledgerBytes(box)
+          : ''
+        const walked = walkJob(box, 'prepare', PREPARE_ENV)
+        expect(walked.failedAt).toBe('Recheck cached state')
+        expect(walked.effects).toEqual([])
+        const out = walked.results.get('Recheck cached state')
+        expect(out?.stdout).toContain('gone/project')
+        for (const phrase of RECOVERY) expect(out?.stdout).toContain(phrase)
+        expect(ghWrites(box)).toEqual([])
+        if (ledger !== '') expect(ledgerBytes(box)).toBe(ledger)
+      })
+    }
+  }
+
+  it('uploads once every repository the state names is public, and lists them', () => {
+    const box = makeBox()
+    holders[0]?.[1](box)
+    const walked = walkJob(box, 'prepare', PREPARE_ENV)
+    expect(walked.failedAt).toBeUndefined()
+    expect(walked.effects).toEqual(['Upload hand-off'])
+    const listed = walked.results
+      .get('Recheck cached state')
+      ?.outputs.get('repos')
+    expect((listed ?? '').split(' ').sort()).toEqual([
+      'acme/target',
+      'gone/project',
+      'other/repo',
+    ])
+  })
+
+  it('checks nothing and passes when there is no cached state', () => {
+    const box = makeBox()
+    runStep(box, 'prepare', 'Create state root')
+    const result = recheckPrepare(box)
+    expect(result.exitCode).toBe(0)
+    expect(result.outputs.get('repos')).toBe('acme/target other/repo')
+  })
+})
+
+describe('render: all retained state is checked before the cache or any artifact leaves', () => {
+  const holders: Array<[string, (box: Box) => void]> = [
+    [
+      'a payload source',
+      (box) => {
+        seedHandoff(box, {
+          candidates: [
+            blockCandidate(1, { sources: sourcesFrom('gone__project', 1) }),
+            blockCandidate(2),
+          ],
+        })
+      },
+    ],
+    [
+      'a candidate the report cap hides',
+      (box) => {
+        const candidates = Array.from({ length: 30 }, (_, i) => {
+          const n = i + 1
+          const project = n === 30 ? 'gone__project' : SOURCE_PROJECT
+          return blockCandidate(n, {
+            summary: 'S'.repeat(790),
+            sources: Array.from({ length: 8 }, (_, s) => ({
+              ...sourcesFrom(project, n)[0],
+              path: `docs/solutions/lesson-${n}-${s}.md`,
+              excerpt: 'E'.repeat(230),
+            })),
+          })
+        })
+        seedHandoff(box, { count: 30, candidates })
+      },
+    ],
+    [
+      'a retained run record',
+      (box) => {
+        const dir = seedHandoff(box)
+        writeJson(
+          path.join(dir, 'runs', '20260101T000000Z-aaaaaaaa', 'run.json'),
+          {
+            schemaVersion: 1,
+            projects: [{ name: 'old', repo: 'gone/project' }],
+          },
+        )
+      },
+    ],
+  ]
+  for (const [label, arrange] of holders) {
+    for (const verdict of ['private', 'ERROR']) {
+      it(`fails red with nothing cached or uploaded when a removed repository named only by ${label} is ${verdict === 'ERROR' ? 'unreadable' : 'private'}`, () => {
+        const box = makeBox()
+        arrange(box)
+        PRIVATE_NOW(box, 'gone__project', verdict)
+        const walked = walkJob(box, 'render', RENDER_ENV)
+        expect(walked.failedAt).toBe('Recheck visibility')
+        expect(walked.effects).toEqual([])
+        const out = walked.results.get('Recheck visibility')
+        expect(out?.stdout).toContain('gone/project')
+        for (const phrase of RECOVERY) expect(out?.stdout).toContain(phrase)
+        expect(out?.outputs.has('repos')).toBe(false)
+        expect(ghWrites(box)).toEqual([])
+      })
+    }
+  }
+
+  it('saves the cache and uploads once every repository the state names is public', () => {
+    const box = makeBox()
+    holders[2]?.[1](box)
+    const walked = walkJob(box, 'render', RENDER_ENV)
+    expect(walked.failedAt).toBeUndefined()
+    expect(walked.effects).toEqual(['Save ledger cache', 'Upload report'])
+    const listed = walked.results
+      .get('Recheck visibility')
+      ?.outputs.get('repos')
+    expect((listed ?? '').split(' ').sort()).toEqual([
+      'acme/target',
+      'gone/project',
+      'other/repo',
+    ])
+  })
+
+  it('tells the operator the cache holds the repository only when it is not on the current list', () => {
+    const box = makeBox()
+    seedHandoff(box)
+    renderDay(box, DATE_ONE)
+    PRIVATE_NOW(box, 'acme__target')
+    const out = recheckRender(box, 'acme/target other/repo')
+    expect(out.exitCode).toBe(1)
+    expect(out.stdout).toContain('acme/target is not confirmed public')
+    expect(out.stdout).not.toContain('gh cache delete')
+  })
 })

@@ -321,7 +321,7 @@ The workflow reads three repository variables and two repository secrets.
 
 | Name | Kind | What it holds |
 |---|---|---|
-| `FRO_BOT_CONNECT_PROJECTS` | Variable | The projects to read, as `owner/repo` entries separated by whitespace or commas. Case is folded, duplicates are dropped, and a list must hold between 1 and 16 entries. |
+| `FRO_BOT_CONNECT_PROJECTS` | Variable | The projects to read, as `owner/repo` entries separated by whitespace or commas. Case is folded, duplicates are dropped, and a list must hold between 1 and 16 entries. An entry's checkout name, `owner__repo`, may be at most 100 characters, because the workflow reads the repository back from that name. A longer entry stops the run. |
 | `FRO_BOT_CONNECT_MODEL` | Variable | Required. The researcher's model, as `provider/model`. |
 | `FRO_BOT_CONNECT_VARIANT` | Variable | Optional. A model variant for the researcher. |
 | `OPENCODE_AUTH_JSON` | Secret | The model provider's credential. |
@@ -331,7 +331,7 @@ The two secrets reach only the step that runs the agent, as the action's `auth-j
 
 A bad variable stops the run in its first job, before anything is cloned or posted, and the workflow ends red. That covers a missing or malformed model, an entry that is not `owner/repo`, an empty list and a list over 16.
 
-**Only public repositories are read.** The first job asks the GitHub API for each repository's visibility and treats an error as not public. One repository that is not public stops the whole run. The render job checks again before it saves the cache or uploads anything, and the last job checks again right before it writes, so a repository made private during the run is caught too. Both rechecks cover the repositories behind every candidate the report shows, including a candidate carried over from an earlier day whose repository has left the list. A shown candidate whose repository cannot be named fails the run. Each repository is cloned without credentials, at its default branch, with its history cut to the latest commit.
+**Only public repositories are read.** The first job asks the GitHub API for each repository's visibility and treats an error as not public. One repository that is not public stops the whole run. The render job checks again before it saves the cache or uploads anything, and the last job checks again right before it writes, so a repository made private during the run is caught too. Both rechecks cover every repository the cached state names, shown or not: the repositories behind all stored candidates and every retained run record, including ones that have left the list. The first job runs the same check before it uploads the restored cache, and a repository that is no longer public fails the run with nothing uploaded, cached or posted. A repository that cannot be named fails the run too. To recover, delete the connect cache with `gh cache list --key connect-v1- --limit 100 --json id --jq '.[].id' | xargs -n 1 gh cache delete`. The next run then starts with an empty ledger. Each repository is cloned without credentials, at its default branch, with its history cut to the latest commit.
 
 The four jobs split the work by what each may touch:
 

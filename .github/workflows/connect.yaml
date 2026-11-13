@@ -106,6 +106,11 @@ jobs:
             case "$entry" in
               */. | */.. | *.git) fail "Entry ${index} of FRO_BOT_CONNECT_PROJECTS names an unusable repository." ;;
             esac
+            # A checkout is named owner__repo, one character longer than the entry, and
+            # the helper keeps only the first 100 characters of a project's name. The
+            # rechecks read a repository back from that name, so it must stay whole.
+            [ "${#entry}" -lt 100 ] ||
+              fail "Entry ${index} of FRO_BOT_CONNECT_PROJECTS (${entry}) is over 100 characters as a checkout name (owner__repo)."
             seen=false
             for known in ${projects[@]+"${projects[@]}"}; do
               [ "$known" = "$entry" ] && seen=true
@@ -176,6 +181,78 @@ jobs:
           else
             echo "cache-restored=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # The restored cache goes into the hand-off artifact, which anyone who can read
+      # this repository can download. Before the first upload, every repository the
+      # cached state names is checked: the payload store and the retained run records
+      # can name repositories the current list no longer holds, and one of them may
+      # have gone private since. A repository that is not public, cannot be read or
+      # cannot be named fails the job with nothing uploaded. The ledger is left as it
+      # is. This step's script is the same as the one in render.
+      - name: Recheck cached state
+        id: visibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROJECTS: ${{ steps.config.outputs.projects }}
+        run: |
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          set -f
+          root="$RUNNER_TEMP/connect-state/systematic/connect"
+          store="$root/ci-payloads.json"
+          shape='^[a-z0-9][a-z0-9-]{0,38}/[a-z0-9._-]{1,100}$'
+          recovery="Cached state names a repository that is no longer public or cannot be identified. Nothing is uploaded, cached or posted. Delete the connect cache, then run again: gh cache list --key connect-v1- --limit 100 --json id --jq '.[].id' | xargs -n 1 gh cache delete"
+
+          named=""
+          if [ -f "$store" ] && [ ! -L "$store" ]; then
+            named=$(jq -r '
+              def checkout:
+                if test("^[a-z0-9][a-z0-9-]{0,38}__[a-z0-9._-]{1,100}$") then sub("__"; "/") else "unresolved" end;
+              .payloads[]?
+              | (.repo // "unresolved"), (.sources[]? | (.projectName // "") | checkout)
+            ' "$store") || fail "Could not read the candidate store."
+          fi
+          if [ -d "$root/runs" ]; then
+            while IFS= read -r -d '' record; do
+              found=$(jq -r '.projects | arrays | .[] | objects | .repo // empty' "$record") ||
+                fail "Could not read a retained run record."
+              named="${named} ${found}"
+            done < <(find "$root/runs" -mindepth 2 -maxdepth 2 -type f -name run.json -print0)
+          fi
+
+          list=""
+          # The lists are validated, space-separated and globbing is off (set -f).
+          # shellcheck disable=SC2086
+          for repo in $PROJECTS; do
+            [[ "$repo" =~ $shape ]] || fail "The validated project list holds a malformed entry."
+            case " ${list} " in
+              *" ${repo} "*) continue ;;
+            esac
+            list="${list:+${list} }${repo}"
+          done
+          # shellcheck disable=SC2086
+          for repo in $named; do
+            [[ "$repo" =~ $shape ]] || fail "$recovery"
+            case " ${list} " in
+              *" ${repo} "*) continue ;;
+            esac
+            list="${list:+${list} }${repo}"
+          done
+
+          for repo in $list; do
+            if ! visibility=$(gh api "repos/${repo}" --jq .visibility) || [ "$visibility" != public ]; then
+              echo "::error::${repo} is not confirmed public; nothing is uploaded, cached or posted."
+              case " ${PROJECTS} " in
+                *" ${repo} "*) ;;
+                *) echo "::error::${recovery}" ;;
+              esac
+              exit 1
+            fi
+          done
+          echo "repos=${list}" >> "$GITHUB_OUTPUT"
 
       # The newest open report: the newest title date, and among reports that
       # share it the lowest issue number. Zero reports is a normal first run.
@@ -580,14 +657,15 @@ jobs:
 
       # Visibility is checked again before the ledger cache is saved or anything
       # is uploaded, so a repository made private since prepare reaches neither.
-      # The check covers the current project list and every repository behind a
-      # candidate the report shows, which can include repositories that have left
-      # the list. A shown candidate's repositories come from the payload store:
-      # the target's `repo` and, for each source, its checkout directory name
-      # (`owner__repo`, as Clone projects names it). A shown candidate whose
-      # repository cannot be named fails the job. Any error counts as not public.
-      # The repositories are public, so the job token needs no permission to
-      # read their visibility.
+      # The check covers the current project list and every repository the state
+      # leaving this job names, whether or not the report shows it: the payload
+      # store (each target's `repo`, and each source's checkout directory name,
+      # `owner__repo`, which Prepare keeps whole) and the `repo` of every project
+      # in a retained run record. Such a repository can have left the list since.
+      # A repository that cannot be named, is not public or cannot be read fails
+      # the job. The repositories are public, so the job token needs no
+      # permission to read their visibility. This step's script is the same as
+      # the one in prepare.
       - name: Recheck visibility
         id: visibility
         env:
@@ -600,33 +678,41 @@ jobs:
           }
 
           set -f
-          body="$RUNNER_TEMP/report/body.md"
-          store="$RUNNER_TEMP/connect-state/systematic/connect/ci-payloads.json"
+          root="$RUNNER_TEMP/connect-state/systematic/connect"
+          store="$root/ci-payloads.json"
           shape='^[a-z0-9][a-z0-9-]{0,38}/[a-z0-9._-]{1,100}$'
+          recovery="Cached state names a repository that is no longer public or cannot be identified. Nothing is uploaded, cached or posted. Delete the connect cache, then run again: gh cache list --key connect-v1- --limit 100 --json id --jq '.[].id' | xargs -n 1 gh cache delete"
 
-          if [ -L "$body" ] || [ ! -f "$body" ]; then
-            fail "The report body is missing."
-          fi
-          ids=$({ grep -o 'connect-decision:[a-z]*:[0-9a-f]\{64\}' "$body" || true; } |
-            cut -d: -f3 | sort -u | jq -R . | jq -sc .) || fail "Could not read the candidate ids from the report."
-
-          carried=""
-          if [ -f "$store" ]; then
-            carried=$(jq -r --argjson ids "$ids" '
+          named=""
+          if [ -f "$store" ] && [ ! -L "$store" ]; then
+            named=$(jq -r '
               def checkout:
                 if test("^[a-z0-9][a-z0-9-]{0,38}__[a-z0-9._-]{1,100}$") then sub("__"; "/") else "unresolved" end;
               .payloads[]?
-              | select(.id as $id | $ids | index($id) != null)
               | (.repo // "unresolved"), (.sources[]? | (.projectName // "") | checkout)
             ' "$store") || fail "Could not read the candidate store."
+          fi
+          if [ -d "$root/runs" ]; then
+            while IFS= read -r -d '' record; do
+              found=$(jq -r '.projects | arrays | .[] | objects | .repo // empty' "$record") ||
+                fail "Could not read a retained run record."
+              named="${named} ${found}"
+            done < <(find "$root/runs" -mindepth 2 -maxdepth 2 -type f -name run.json -print0)
           fi
 
           list=""
           # The lists are validated, space-separated and globbing is off (set -f).
           # shellcheck disable=SC2086
-          for repo in $PROJECTS $carried; do
-            [[ "$repo" =~ $shape ]] ||
-              fail "The project list or the report names a repository that cannot be checked."
+          for repo in $PROJECTS; do
+            [[ "$repo" =~ $shape ]] || fail "The validated project list holds a malformed entry."
+            case " ${list} " in
+              *" ${repo} "*) continue ;;
+            esac
+            list="${list:+${list} }${repo}"
+          done
+          # shellcheck disable=SC2086
+          for repo in $named; do
+            [[ "$repo" =~ $shape ]] || fail "$recovery"
             case " ${list} " in
               *" ${repo} "*) continue ;;
             esac
@@ -635,7 +721,12 @@ jobs:
 
           for repo in $list; do
             if ! visibility=$(gh api "repos/${repo}" --jq .visibility) || [ "$visibility" != public ]; then
-              fail "${repo} is not confirmed public; nothing is saved or posted."
+              echo "::error::${repo} is not confirmed public; nothing is uploaded, cached or posted."
+              case " ${PROJECTS} " in
+                *" ${repo} "*) ;;
+                *) echo "::error::${recovery}" ;;
+              esac
+              exit 1
             fi
           done
           echo "repos=${list}" >> "$GITHUB_OUTPUT"
