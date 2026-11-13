@@ -419,6 +419,7 @@ describe('the shared fro-bot agent action', () => {
   it('owns the runtime settings both callers share', () => {
     const step = sharedActionStep()
     expect(asRecord(step.with, 'with').timeout).toBe(0)
+    expect(asRecord(step.with, 'with')['repo-skills']).toBe('true')
     expect(asRecord(step.env, 'env')).toEqual({
       OPENCODE_PROMPT_ARTIFACT: 'true',
     })
@@ -452,7 +453,9 @@ describe('the shared fro-bot agent action', () => {
       asRecord(readSharedAction().action.inputs, 'inputs'),
     )
     const given = asRecord(sharedActionStep().with, 'with')
-    expect(Object.keys(given).sort()).toEqual([...inputs, 'timeout'].sort())
+    expect(Object.keys(given).sort()).toEqual(
+      [...inputs, 'timeout', 'repo-skills'].sort(),
+    )
     for (const name of inputs) {
       expect(given[name]).toBe(`\${{ inputs.${name} }}`)
     }
@@ -472,6 +475,7 @@ describe('the shared fro-bot agent action', () => {
   it('keeps the shared settings off both callers', () => {
     for (const step of [connectStep(), froBotAgentStep()]) {
       expect(asRecord(step.with, 'with')).not.toHaveProperty('timeout')
+      expect(asRecord(step.with, 'with')).not.toHaveProperty('repo-skills')
       expect(asRecord(step.env ?? {}, 'env')).not.toHaveProperty(
         'OPENCODE_PROMPT_ARTIFACT',
       )

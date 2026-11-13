@@ -67,3 +67,6 @@ runs:
         # The action's own runtime is unbounded; each caller bounds the step or
         # the job instead.
         timeout: 0
+        # Load the repository's .agents/skills. The action takes them from the
+        # default branch, and only on trusted runs.
+        repo-skills: "true"
