@@ -4,6 +4,22 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.33.2](https://github.com/marcusrbrown/systematic/compare/v3.33.1...v3.33.2) (2026-11-14)
+
+### Bug Fixes
+
+* accept newer host versions in ce:connect instead of refusing every version a release does not list ([#1407](https://github.com/marcusrbrown/systematic/issues/1407)) ([cda4628](https://github.com/marcusrbrown/systematic/commit/cda46284addd4837ed6c97f9bd395980c007f121))
+
+### Continuous Integration
+
+* **codeql:** skip the generated helper bundles, whose sources are scanned ([#1402](https://github.com/marcusrbrown/systematic/issues/1402)) ([b4010b3](https://github.com/marcusrbrown/systematic/commit/b4010b3b9edc0af0831c9a19b2a26e56e4891d88))
+* **deps:** update Systematic to v3.33.1 ([#1404](https://github.com/marcusrbrown/systematic/issues/1404)) ([b7d5d80](https://github.com/marcusrbrown/systematic/commit/b7d5d80ec0eaded62d1d0d751a1dcfc3d45521fe))
+* **fro-bot:** record the accepted dev-only High advisories so they stop escalating ([#1401](https://github.com/marcusrbrown/systematic/issues/1401)) ([85a9099](https://github.com/marcusrbrown/systematic/commit/85a9099eee117dbf4e2da44692b515d697e93656))
+
+### Code Refactoring
+
+* lift the single-ref allOf unwrap out of the schema generator's ref resolver ([#1403](https://github.com/marcusrbrown/systematic/issues/1403)) ([ded64c3](https://github.com/marcusrbrown/systematic/commit/ded64c30d9251ba8e7c41b56ad95311bf69ac163))
+
 ## [3.33.1](https://github.com/marcusrbrown/systematic/compare/v3.33.0...v3.33.1) (2026-11-14)
 
 ### Bug Fixes
