@@ -177,18 +177,23 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
+          # Lists what the host contract depends on; a guard test (host-contract-workflow.test.ts) keeps it in sync.
           filters: |
             host-contract:
               - 'src/**'
-              - 'tests/**'
               - 'scripts/**'
-              - 'evals/**'
               - 'skills/**'
               - 'agents/**'
-              - 'registry/**'
+              - 'evals/**'
+              - 'tests/integration/**'
+              - 'tests/helpers/**'
+              - 'tests/setup.ts'
+              - 'tests/fixtures/mock-gh.sh'
               - 'package.json'
               - 'bun.lock'
-              - '.github/**'
+              - 'tsconfig.json'
+              - 'bunfig.toml'
+              - '.github/workflows/main.yaml'
 
       # Only a pull request runs the suite, and only when the filter above
       # says a relevant path changed. Every other event, push to main
