@@ -106,7 +106,7 @@ harness:
   profile, emits a declarative `SessionStart` hook, and translates internal identifiers
   (`ce:<name>`, `systematic:<category>:<name>`) into Claude Code's plugin-namespaced form. The
   generated bundle is never committed to `main` — CI publishes it to the orphan
-  `claude-code-plugin` branch on every push to `main`. Users install it through Claude Code's
+  `claude-code-plugin` branch when a release is published. Users install it through Claude Code's
   plugin marketplace, pointed at `.claude-plugin/marketplace.json`.
 
 ## Codemap
