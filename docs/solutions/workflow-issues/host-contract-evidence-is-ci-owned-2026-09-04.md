@@ -46,10 +46,11 @@ plugin devDependencies in `package.json` that move with it, and
 `tests/unit/opencode-pin.test.ts` fails when the two sides differ. A Renovate
 regex manager bumps `v2` and `v1` and never a floor
 (`.github/renovate.json5`). The ce:connect host-support rows in
-`src/lib/connect-config.ts` restate the v1, v2 and Pi versions; each carries a
-`// renovate:` annotation that a second regex manager reads, so the rows bump in
-the same group PR as the pins. No test compares a restated version with a pin:
-the host jobs on that PR are the proof at the new version. `readOpencodeSdkPin()` returns the v1
+`src/lib/connect-config.ts` are floors: the lowest version where the
+researcher's limits were observed. They do not follow the pins, no Renovate
+manager reads them and no test compares a row with a pin. The host jobs on a
+pin PR re-prove the limits at the new version, and a release where that proof
+fails goes on the known-bad list in the same file. `readOpencodeSdkPin()` returns the v1
 current pin (`scripts/lib/opencode-pin.ts:204-206`). `EXACT_OPENCODE_VERSION` is resolved
 from the pin file for the host line the run targets
 (`tests/integration/fixtures/opencode-host.ts:31-32`), not hand-edited (#916).

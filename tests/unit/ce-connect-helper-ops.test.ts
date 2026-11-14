@@ -633,6 +633,134 @@ describe('begin', () => {
     expect(failed(begin(world, { host: 'pi' })).reason).toBe('unsupported-host')
   })
 
+  it('proceeds headless on a version newer than the listed one, after a host update', () => {
+    const world = buildWorld()
+    for (const version of ['9999.0.1', '9999.1.0', '9999.0.10+harness.abc']) {
+      const run = start(world, { version })
+      expect(run.body.status).toBe('begun')
+      expect((run.body.host as Json).supported).toBe(true)
+      ok(publish(world, run, { abort: true }))
+    }
+  })
+
+  it('says why a headless run on an older, prerelease or higher-major version is refused', () => {
+    const world = buildWorld()
+    const reasons: Array<[string, string]> = [
+      ['2.2.4', 'below-floor'],
+      ['9999.0.1-rc.1', 'unlisted'],
+      ['10000.0.0', 'unlisted'],
+      ['not-a-version', 'unobserved'],
+    ]
+    for (const [version, hostSupport] of reasons) {
+      const body = failed(begin(world, { version }))
+      expect(body.reason).toBe('unsupported-host')
+      expect(body.hostSupport).toBe(hostSupport)
+    }
+    expect(fs.existsSync(world.stateRoot)).toBe(false)
+  })
+
+  it('asks consent in interactive mode for a version below the listed one', () => {
+    const world = buildWorld()
+    const body = failed(begin(world, { mode: 'interactive', version: '2.2.4' }))
+    expect(body.outcome).toBe('consent-required')
+    expect(body.hostSupport).toBe('below-floor')
+  })
+
+  describe('a known-bad version', () => {
+    const knownBadHosts = [
+      {
+        host: 'opencode-v2',
+        version: '9999.0.5',
+        evidence: 'a recorded refusal that did not hold',
+      },
+    ] as const
+
+    it.each([
+      ['headless', { mode: 'headless' }],
+      ['interactive', { mode: 'interactive' }],
+      ['interactive with consent', { mode: 'interactive', consent: true }],
+    ])('is refused with no lock and no state: %s', (_label, over) => {
+      const world = buildWorld({ deps: { knownBadHosts } })
+      const body = failed(begin(world, { version: '9999.0.5', ...over }))
+      expect(body.outcome).toBe('failed')
+      expect(body.reason).toBe('unsupported-host')
+      expect(body.hostSupport).toBe('known-bad')
+      expect(body.warning).toBeUndefined()
+      expect(fs.existsSync(world.stateRoot)).toBe(false)
+    })
+
+    it('is refused when it carries build metadata, and its neighbours still run', () => {
+      const world = buildWorld({ deps: { knownBadHosts } })
+      expect(
+        failed(
+          begin(world, {
+            mode: 'interactive',
+            consent: true,
+            version: 'v9999.0.5+harness.abc',
+          }),
+        ).hostSupport,
+      ).toBe('known-bad')
+      for (const version of ['9999.0.4', '9999.0.6']) {
+        const run = start(world, { mode: 'interactive', version })
+        expect((run.body.host as Json).supported).toBe(true)
+        ok(publish(world, run, { abort: true }))
+      }
+    })
+
+    it('does not change the other unsupported reasons: below the floor still proceeds with consent', () => {
+      const world = buildWorld({ deps: { knownBadHosts } })
+      const body = failed(
+        begin(world, { mode: 'interactive', version: '2.2.4' }),
+      )
+      expect(body.outcome).toBe('consent-required')
+      expect(body.hostSupport).toBe('below-floor')
+      const run = start(world, {
+        mode: 'interactive',
+        version: '2.2.4',
+        consent: true,
+      })
+      expect((run.body.host as Json).supported).toBe(false)
+      expect((run.body.host as Json).consented).toBe(true)
+    })
+  })
+
+  describe('the host line of the digest', () => {
+    it('says where the denies were observed when the run is on a newer version', () => {
+      const world = buildWorld()
+      const { run, published } = fullRun(world, [], {
+        begin: { version: '9999.0.3+harness.abc' },
+      })
+      expect((run.body.host as Json).observedOn).toBe('9999.0.0')
+      expect(readDigest(published)).toContain(
+        'Host: `opencode-v2 9999.0.3+harness.abc` (tool denies observed on `9999.0.0`, not on this version)',
+      )
+    })
+
+    it('keeps the plain wording when the run is on the listed version, with or without a prefix', () => {
+      for (const version of ['9999.0.0', 'v9999.0.0+harness.abc']) {
+        const world = buildWorld()
+        const { run, published } = fullRun(world, [], { begin: { version } })
+        expect((run.body.host as Json).observedOn).toBeUndefined()
+        const digest = readDigest(published)
+        expect(digest).toContain(
+          `Host: \`opencode-v2 ${version}\` (tool denies observed)`,
+        )
+        expect(digest).not.toContain('not on this version')
+      }
+    })
+
+    it('keeps the unverified wording for a host that was not supported', () => {
+      const world = buildWorld({ deps: { hostTable: [] } })
+      const { run, published } = fullRun(world, [], {
+        begin: { mode: 'interactive', consent: true, version: '9999.0.3' },
+      })
+      expect((run.body.host as Json).observedOn).toBeUndefined()
+      expect(readDigest(published)).toContain(
+        '(tool denies NOT verified on this host; the user agreed to run anyway)',
+      )
+    })
+  })
+
   it('asks consent in interactive mode before taking any lock', () => {
     const world = buildWorld({ deps: { hostTable: [] } })
     const body = failed(begin(world, { mode: 'interactive' }))

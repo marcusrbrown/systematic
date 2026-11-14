@@ -73,7 +73,7 @@ The helper needs node 18 or newer. Check `node --version` once. If node is missi
 
 Shell state does not persist between tool calls. Start every block that calls the helper with the same two anchor lines, with `SKILL_DIR` set to the skill directory stated when this skill loads.
 
-Observe the host and its version. The helper holds the list of host and version pairs where the researcher's tool limits were seen to work, and it checks the pair you report against it.
+Observe the host and its version. For each host, the helper holds the lowest version where the researcher's tool limits were seen to work. It supports that version and any newer release of the same major version, and it checks the pair you report against that.
 
 | Host you are running in | `host` | Run |
 |---|---|---|
@@ -82,7 +82,7 @@ Observe the host and its version. The helper holds the list of host and version 
 | Pi | `pi` | `pi --version` |
 | The `claude` command line tool | `claude-code` | `claude --version` |
 
-Send `version` as the first token the command prints that starts with a digit (after an optional `v`), exactly as printed. Keep any `-` prerelease tag or `+` build suffix: the helper ignores build suffixes and keeps prerelease tags, so you decide neither. Never trim, round or strip any part of it. `claude --version` prints the version and then a name in parentheses, such as `2.1.319 (...)`: send `2.1.319`, not the whole line. If you cannot tell which host this is, or the command fails or prints no version, leave `version` out or use the host id `unknown`. Never guess a host or a version: a pair the helper cannot check counts as unsupported.
+Send `version` as the first token the command prints that starts with a digit (after an optional `v`), exactly as printed. Keep any `-` prerelease tag or `+` build suffix: the helper ignores build suffixes and does not support a prerelease version, so you decide neither. Never trim, round or strip any part of it. `claude --version` prints the version and then a name in parentheses, such as `2.1.319 (...)`: send `2.1.319`, not the whole line. If you cannot tell which host this is, or the command fails or prints no version, leave `version` out or use the host id `unknown`. Never guess a host or a version: a pair the helper cannot check counts as unsupported.
 
 Report what you observed, in one line, so the user can see it.
 
@@ -101,8 +101,8 @@ When Step 1 found selection words, add `"selection": ["<word>", "<word>"]` to th
 The helper answers one line of JSON. Read `outcome` or `status`:
 
 - `begun`: the lock is held. Note `runId`, `lock`, `workDir`, `rulesFile`, `rulesOverview`, `filesIndex`, `selection`, `projects`, `unmatched`, `ruleCount`, `offeredRuleIds`, `offeredCount`, `sweep`, `bounds`, `degradeReasons` and `unread`. Go on.
-- `consent-required` (interactive mode): the host and version have no observed deny. Show the helper's `warning` as it is and ask the user whether to run anyway. Wait for the answer. On a clear yes, run `begin` again with `"consent": true` added. On anything else, print `consent-declined` as the reason, then `Connect failed`. No lock was taken.
-- `unsupported-host` (headless mode, a `failed` outcome): print it with the helper's `hostSupport`, then `Connect failed`. Headless mode never asks for consent.
+- `consent-required` (interactive mode): the host and version are not supported, so no deny was observed for them. The helper's `hostSupport` says why. Show the helper's `warning` as it is and ask the user whether to run anyway. Wait for the answer. On a clear yes, run `begin` again with `"consent": true` added. On anything else, print `consent-declined` as the reason, then `Connect failed`. No lock was taken.
+- `unsupported-host` (headless mode, a `failed` outcome): print it with the helper's `hostSupport`, then `Connect failed`. Headless mode never asks for consent. In interactive mode the same answer with `hostSupport` `known-bad` means the version failed the check: print it, then `Connect failed`. Consent cannot run it, so do not offer to.
 - `busy`: print the helper's `reason` and `hint`, then `Connect busy`. Nothing was written. Never run `ledger unlock` yourself on a `busy` answer. In interactive mode you may tell the user that it exists (see `references/headless-and-outcomes.md`).
 - A selection refusal, a `failed` outcome with one of these reasons: `conflicting-selection` (with `detail`), `unknown-group` (`group`), `unknown-project` (`project`), `ambiguous-project` (`project` and `keys`; the user can name one of the keys instead), `group-member-not-allowed` (`group`, `member`, and `memberReason` when the member did not resolve) or `invalid-request` for a malformed word. Print the `reason` and the fields it names, then `Connect failed`. No lock was taken and nothing was written, so there is nothing to abort or unlock. Never retry with a different selection and never fall back to the whole allow list: the user asked for a narrower run.
 - Any other `failed` outcome, including `no-allowed-projects` and `state-root-refused`: print the `reason`, add each `unmatched` entry with its reason when there are any, then `Connect failed`.

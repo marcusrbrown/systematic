@@ -1374,6 +1374,11 @@ export interface DigestModel {
     readonly host?: string
     readonly version?: string
     readonly consented?: boolean
+    /**
+     * The version the tool denies were observed on, set only when the run's
+     * version is a different, newer release that the host row supports.
+     */
+    readonly observedOn?: string
   }
   readonly degradeReasons: readonly string[]
   /** What the run was narrowed to. */
@@ -1556,7 +1561,11 @@ export function renderCandidate(
 function hostLine(model: DigestModel): string {
   const host = model.hostSupport
   const name = inline(`${host.host ?? 'unknown'} ${host.version ?? ''}`.trim())
-  if (host.supported) return `Host: ${name} (tool denies observed)`
+  if (host.supported) {
+    return host.observedOn === undefined
+      ? `Host: ${name} (tool denies observed)`
+      : `Host: ${name} (tool denies observed on ${inline(host.observedOn)}, not on this version)`
+  }
   const agreed =
     host.consented === true ? '; the user agreed to run anyway' : ''
   return `Host: ${name} (tool denies NOT verified on this host${agreed})`

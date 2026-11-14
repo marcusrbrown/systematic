@@ -15,7 +15,9 @@ import {
   checkHostSupport,
   HOST_SUPPORT_TABLE,
   type HostSupportRow,
+  type KnownBadHostVersion,
   loadConnectAllowList,
+  normalizeVersion,
   resolveAllowEntry,
   resolveAllowList,
 } from './lib/connect-config.js'
@@ -163,6 +165,8 @@ export interface HelperDeps {
   /** The pid recorded as the lock holder. Defaults to the nearest non-shell ancestor. */
   readonly holderPid?: number
   readonly hostTable?: readonly HostSupportRow[]
+  /** Host and version pairs refused as known-bad. Defaults to the shipped list. */
+  readonly knownBadHosts?: readonly KnownBadHostVersion[]
   readonly gitBinary?: string
   readonly bounds?: Partial<ConnectBounds>
   readonly inspector?: ProcessInspector
@@ -499,6 +503,8 @@ interface HostRecord {
   readonly host: string
   readonly version?: string
   readonly consented?: boolean
+  /** Set when the run's version is newer than the row that supports it: the row's version. */
+  readonly observedOn?: string
 }
 
 /** Which projects a run read in full, and the rules it left alone on purpose. */
@@ -1070,6 +1076,22 @@ function hostPhrase(host: string, version: string | undefined): string {
   return version === undefined ? host : `${host} ${version}`
 }
 
+/**
+ * The row version the denies were observed on, when the run is on a different
+ * release that the row supports. Nothing when the run is on the row's version
+ * (a leading `v` and build metadata do not make it another one).
+ */
+function observedOnFor(
+  verdict: ReturnType<typeof checkHostSupport>,
+  version: string | undefined,
+): { readonly observedOn?: string } {
+  if (!verdict.supported) return {}
+  const row = verdict.row.version
+  return normalizeVersion(version) === normalizeVersion(row)
+    ? {}
+    : { observedOn: row }
+}
+
 /** Whether the host may run at all: a refusal or a consent request, else the verdict. */
 function gateHost(
   parsed: BeginRequest,
@@ -1079,9 +1101,11 @@ function gateHost(
     parsed.host,
     parsed.version,
     deps.hostTable ?? HOST_SUPPORT_TABLE,
+    deps.knownBadHosts,
   )
   if (verdict.supported) return verdict
-  if (parsed.mode === 'headless') {
+  // A known-bad version failed the proof, so no consent can make it run.
+  if (parsed.mode === 'headless' || verdict.reason === 'known-bad') {
     return failure('begin', 'unsupported-host', {
       host: parsed.host,
       version: parsed.version ?? null,
@@ -1303,6 +1327,7 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
         host: parsed.host,
         ...(parsed.version === undefined ? {} : { version: parsed.version }),
         ...(verdict.supported ? {} : { consented: true }),
+        ...observedOnFor(verdict, parsed.version),
       },
       lock: { nonce: lock.nonce, pid: lock.pid },
       holder: setup.holder,

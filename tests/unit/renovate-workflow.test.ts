@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import yaml from 'js-yaml'
-import { HOST_SUPPORT_TABLE } from '../../src/lib/connect-config.js'
 
 /**
  * `Renovate / Renovate` is a required status context on main. A push to the
@@ -184,101 +183,31 @@ describe('renovate host pin tracking', () => {
 })
 
 /**
- * The `ce:connect` host-support rows follow their host pins. Each annotated
- * row carries a `renovate:` comment that a regex manager reads, so the row
- * bumps in the same group PR as the pin it was proven on. The Claude Code row
- * has no package Renovate can bump and carries no annotation.
+ * The `ce:connect` host-support rows are floors, not copies of the host pins:
+ * the lowest version where the researcher's tool limits were observed. No
+ * Renovate manager reads `src/lib/connect-config.ts`, so a host pin bump never
+ * rewrites a row. The Pi package still lands in its group, with the other Pi
+ * dependencies.
  */
 const CONNECT_CONFIG_RELATIVE_PATH = 'src/lib/connect-config.ts'
 
-describe('renovate host-support row tracking', () => {
+describe('renovate and the host-support rows', () => {
   const config = readRenovateConfig()
-  const [manager, ...others] = managersFor(config, CONNECT_CONFIG_RELATIVE_PATH)
-  const source = fs.readFileSync(
-    path.resolve(process.cwd(), CONNECT_CONFIG_RELATIVE_PATH),
-    'utf8',
-  )
 
-  /** Every match of the manager's patterns over `text`, as Renovate reads them. */
-  function matches(text: string) {
-    return (manager?.matchStrings ?? []).flatMap((pattern) =>
-      [...text.matchAll(new RegExp(pattern, 'g'))].map((match) => ({
-        datasource: match.groups?.datasource,
-        depName: match.groups?.depName,
-        currentValue: match.groups?.currentValue,
-      })),
+  test('no regex manager targets the connect config file', () => {
+    expect(managersFor(config, CONNECT_CONFIG_RELATIVE_PATH)).toEqual([])
+  })
+
+  test('no annotation in the connect config file names a Renovate dependency', () => {
+    const source = fs.readFileSync(
+      path.resolve(process.cwd(), CONNECT_CONFIG_RELATIVE_PATH),
+      'utf8',
     )
-  }
-
-  const rowFor = (host: string) =>
-    HOST_SUPPORT_TABLE.find((row) => row.host === host)
-
-  test('exactly one regex manager targets the connect config file', () => {
-    expect(manager).toBeDefined()
-    expect(others).toHaveLength(0)
-    expect(manager?.customType).toBe('regex')
+    expect(source).not.toMatch(/renovate:/i)
   })
 
-  test('it matches the v1, v2 and Pi rows on npm and nothing else', () => {
-    expect(
-      matches(source).map(({ datasource, depName }) => ({
-        datasource,
-        depName,
-      })),
-    ).toEqual([
-      { datasource: 'npm', depName: 'opencode-ai' },
-      { datasource: 'npm', depName: '@opencode/cli' },
-      { datasource: 'npm', depName: '@earendil-works/pi-coding-agent' },
-    ])
-  })
-
-  test('each captured currentValue is the version of its row in the table', () => {
-    expect(matches(source).map((entry) => entry.currentValue)).toEqual([
-      rowFor('opencode-v1')?.version,
-      rowFor('opencode-v2')?.version,
-      rowFor('pi')?.version,
-    ])
-  })
-
-  test('the Claude Code row is not matched', () => {
-    const claude = rowFor('claude-code')
-    expect(claude).toBeDefined()
-    expect(matches(source)).toHaveLength(3)
-    expect(
-      matches(source).some((entry) => entry.currentValue === claude?.version),
-    ).toBe(false)
-  })
-
-  test('a version line without an annotation directly above it does not match', () => {
-    const annotation = '// renovate: datasource=npm depName=some-package\n'
-    expect(matches(`${annotation}  other: 'x',\n  version: '1.2.3',`)).toEqual(
-      [],
-    )
-    expect(matches("  version: '1.2.3',")).toEqual([])
-    expect(matches(`    ${annotation}    version: '1.2.3',`)).toEqual([
-      { datasource: 'npm', depName: 'some-package', currentValue: '1.2.3' },
-    ])
-  })
-
-  test('its file pattern selects the connect config file, which no ignorePaths entry covers', () => {
-    expect(
-      manager?.managerFilePatterns.some((pattern) =>
-        matchesFilePattern(pattern, CONNECT_CONFIG_RELATIVE_PATH),
-      ),
-    ).toBe(true)
-    for (const ignored of config.ignorePaths) {
-      expect(new Bun.Glob(ignored).match(CONNECT_CONFIG_RELATIVE_PATH)).toBe(
-        false,
-      )
-    }
-  })
-
-  test.each([
-    ['opencode-ai', 'OpenCode'],
-    ['@opencode/cli', 'OpenCode v2'],
-    ['@earendil-works/pi-coding-agent', 'Pi'],
-  ])('%s lands in the %s group, with its host pin', (depName, group) => {
-    expect(groupFor(config, depName)).toBe(group)
+  test('the Pi package lands in the Pi group', () => {
+    expect(groupFor(config, '@earendil-works/pi-coding-agent')).toBe('Pi')
   })
 })
 
