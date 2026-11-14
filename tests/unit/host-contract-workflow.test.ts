@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import yaml from 'js-yaml'
+import { PROFILE_SUITE_FILES } from '../../scripts/host-contract-guard.ts'
 
 /**
  * Locks the structural invariants the host-contract guard
@@ -177,6 +178,121 @@ function runStepScript(
   }
 }
 
+/**
+ * The paths filter in the gate job lists what the host contract depends on.
+ * These helpers derive that dependency set independently of the filter, so the
+ * filter can be narrow without silently dropping a path a host job needs.
+ *
+ * Glob semantics: dorny/paths-filter matches with picomatch (dot: true).
+ * picomatch is only a transitive dependency here, so the check uses
+ * `Bun.Glob`, which agrees with it on the plain `dir/**`, exact-path and
+ * dotfile-path patterns the filter uses.
+ */
+function hostContractFilterGlobs(): readonly string[] {
+  const filterStep = findStep(
+    jobSteps('host-contract-gate'),
+    'Detect relevant path changes',
+  )
+  const filters = String(asRecord(filterStep.with, 'filter with').filters)
+  const parsed = asRecord(yaml.load(filters), 'filters')
+  expect(Object.keys(parsed)).toEqual(['host-contract'])
+  return asArray(parsed['host-contract'], 'host-contract filter').map((glob) =>
+    String(glob),
+  )
+}
+
+function filterMatches(globs: readonly string[], file: string): boolean {
+  return globs.some((glob) => new Bun.Glob(glob).match(file))
+}
+
+function uncoveredByFilter(
+  files: readonly string[],
+  globs: readonly string[],
+): string[] {
+  return files.filter((file) => !filterMatches(globs, file))
+}
+
+/**
+ * Files the host jobs read or run without importing them, which an import
+ * walk cannot find: the workflow that defines the jobs, the steps' own scripts, the bun test preload,
+ * the pins and timings the steps read, the build's inputs, and one stand-in
+ * for each content directory the packed plugin and the evals read. Each entry
+ * is checked to exist, so a rename cannot leave it checking nothing.
+ */
+const HOST_CONTRACT_RUNTIME_INPUTS: readonly string[] = [
+  '.github/workflows/main.yaml',
+  'scripts/host-contract-guard.ts',
+  'scripts/build-pi-package-agents.ts',
+  'scripts/opencode-host-pins.json',
+  'scripts/dispatch-release-notes.sh',
+  'scripts/validate-release-target.sh',
+  'tests/setup.ts',
+  'tests/fixtures/mock-gh.sh',
+  'tests/integration/host-contract-timings.json',
+  'package.json',
+  'bun.lock',
+  'tsconfig.json',
+  'bunfig.toml',
+  'skills/using-systematic/SKILL.md',
+  'skills/ce-review/scripts/validate-review.mjs',
+  'agents/research/learnings-researcher.md',
+  'evals/cases/opencode/bootstrap-loading.json',
+]
+
+/** Roots of the import walk that no integration test imports. */
+const HOST_CONTRACT_EXTRA_ROOTS: readonly string[] = [
+  'tests/setup.ts',
+  'scripts/build-pi-package-agents.ts',
+  'scripts/host-contract-guard.ts',
+]
+
+function resolveLocalImport(from: string, specifier: string): string {
+  const base = path.posix.join(path.posix.dirname(from), specifier)
+  const candidates = [
+    base,
+    base.replace(/\.js$/, '.ts'),
+    `${base}.ts`,
+    `${base}/index.ts`,
+  ]
+  const found = candidates.find((candidate) => {
+    const absolute = path.join(REPO_ROOT, candidate)
+    return fs.existsSync(absolute) && fs.statSync(absolute).isFile()
+  })
+  if (found === undefined) {
+    throw new Error(`cannot resolve import '${specifier}' from ${from}`)
+  }
+  return found
+}
+
+/**
+ * Every in-repo file the host jobs reach: the integration files of every
+ * profile, the walk's extra roots, their transitive local imports, and the
+ * non-import runtime inputs. Bare specifiers are packages, covered by
+ * package.json and bun.lock.
+ */
+function hostContractDependencyClosure(): readonly string[] {
+  const transpiler = new Bun.Transpiler({ loader: 'ts' })
+  const seen = new Set<string>()
+  const queue = [
+    ...Object.values(PROFILE_SUITE_FILES).flat(),
+    ...HOST_CONTRACT_EXTRA_ROOTS,
+  ]
+  for (let file = queue.pop(); file !== undefined; file = queue.pop()) {
+    if (seen.has(file)) continue
+    seen.add(file)
+    if (!/\.(ts|tsx|js|mjs)$/.test(file)) continue
+    const source = fs
+      .readFileSync(path.join(REPO_ROOT, file), 'utf8')
+      .replace(/^#!.*/, '')
+    for (const { path: specifier } of transpiler.scanImports(source)) {
+      if (specifier.startsWith('.'))
+        queue.push(resolveLocalImport(file, specifier))
+    }
+  }
+  for (const input of HOST_CONTRACT_RUNTIME_INPUTS) seen.add(input)
+  return [...seen].sort()
+}
+
 describe('host-contract workflow structural invariants', () => {
   test('main.yaml has no publish job that could depend on host-contract', () => {
     const workflow = readWorkflow()
@@ -194,15 +310,87 @@ describe('host-contract workflow structural invariants', () => {
       expect(gate).not.toHaveProperty('if')
     })
 
-    test('the paths filter covers everything under .github, not just the main workflow', () => {
-      const filterStep = findStep(
-        jobSteps('host-contract-gate'),
-        'Detect relevant path changes',
-      )
-      const filters = String(asRecord(filterStep.with, 'filter with').filters)
+    describe('the paths filter', () => {
+      const closure = hostContractDependencyClosure()
 
-      expect(filters).toContain("- '.github/**'")
-      expect(filters).not.toContain('.github/workflows/main.yaml')
+      test('is a non-empty list of globs under a single host-contract key', () => {
+        const globs = hostContractFilterGlobs()
+
+        expect(globs.length).toBeGreaterThan(0)
+        expect(globs.every((glob) => glob.length > 0)).toBe(true)
+      })
+
+      test('the closure it is checked against reaches every kind of code the host jobs run', () => {
+        // A parser that silently found nothing would make the coverage check
+        // below pass for the wrong reason.
+        for (const prefix of [
+          'tests/integration/',
+          'tests/helpers/',
+          'scripts/',
+          'src/',
+        ]) {
+          expect(
+            closure.some((file) => file.startsWith(prefix)),
+            prefix,
+          ).toBe(true)
+        }
+        for (const profileFiles of Object.values(PROFILE_SUITE_FILES)) {
+          for (const file of profileFiles) expect(closure).toContain(file)
+        }
+      })
+
+      test('matches every file the host jobs run, import, or read at runtime', () => {
+        expect(uncoveredByFilter(closure, hostContractFilterGlobs())).toEqual(
+          [],
+        )
+      })
+
+      test('every non-import input it is checked against exists', () => {
+        for (const file of HOST_CONTRACT_RUNTIME_INPUTS) {
+          expect(fs.existsSync(path.join(REPO_ROOT, file)), file).toBe(true)
+        }
+      })
+
+      test('matches the workflow file that defines the host jobs', () => {
+        expect(
+          filterMatches(
+            hostContractFilterGlobs(),
+            '.github/workflows/main.yaml',
+          ),
+        ).toBe(true)
+      })
+
+      test.each([
+        'tests/unit/renovate-workflow.test.ts',
+        '.github/renovate.json5',
+        '.github/workflows/connect.yaml',
+        'docs/solutions/example.md',
+        'registry/registry.jsonc',
+      ])('does not match %s, which the host jobs never touch', (file) => {
+        expect(filterMatches(hostContractFilterGlobs(), file)).toBe(false)
+      })
+
+      test('the coverage check notices the removal of each entry the closure needs', () => {
+        const globs = hostContractFilterGlobs()
+        // Every entry must be load-bearing: dropping any one leaves a file
+        // of the closure unmatched, so a stale entry cannot linger.
+        for (const glob of globs) {
+          const without = globs.filter((candidate) => candidate !== glob)
+          expect(
+            uncoveredByFilter(closure, without).length,
+            `removing ${glob}`,
+          ).toBeGreaterThan(0)
+        }
+      })
+
+      test('a broad entry fails the unrelated-path check (the old filter shape)', () => {
+        const globs = [...hostContractFilterGlobs(), '.github/**', 'tests/**']
+
+        expect(filterMatches(globs, '.github/renovate.json5')).toBe(true)
+        expect(
+          filterMatches(globs, 'tests/unit/renovate-workflow.test.ts'),
+        ).toBe(true)
+      })
     })
 
     const GATE_STEP = 'Determine whether to run the host contract suite'

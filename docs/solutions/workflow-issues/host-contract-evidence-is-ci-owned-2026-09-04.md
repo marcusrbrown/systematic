@@ -59,7 +59,7 @@ The v1 host is launched through `bunx opencode-ai@<pin>`, never a bare
 `bunx`: its CLI needs its install scripts, so CI installs `@opencode/cli@<pin>`
 with `npm install` into a runner-temp prefix, checks that `opencode --version`
 reports the pin, and hands the absolute path to the suite as
-`SYSTEMATIC_OPENCODE_V2_BIN` (`.github/workflows/main.yaml:257-284`). A v2 run
+`SYSTEMATIC_OPENCODE_V2_BIN` (`.github/workflows/main.yaml:262-289`). A v2 run
 with no binary configured throws (`opencodeLauncherArgv`).
 `probeOpencodeAvailability()`
 (`scripts/lib/opencode-availability.ts:275-355`) runs the launcher with
@@ -236,7 +236,7 @@ definition that pins the exact environment.
   checks). A file on the v2 list also belongs in the timings file; only the v2
   shards use it. Take its per-file times from CI: sum the test-case times per
   file in the JUnit reports of the final green run, which each shard uploads
-  as the `host-contract-v2-shard-N` artifact (`.github/workflows/main.yaml:298-306`).
+  as the `host-contract-v2-shard-N` artifact (`.github/workflows/main.yaml:303-311`).
   Local times are a fallback for a file that has no CI run yet, and a CI value
   replaces them once one exists. A loaded local run skewed the times and
   reordered the files, which the shard split uses; an idle local run was not
