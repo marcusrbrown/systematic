@@ -634,7 +634,7 @@ describe('renderReport', () => {
     expect(next.shown).toBe(2)
     expect(next.body).toContain('Lesson 1')
     expect(next.body).not.toMatch(/\(new\)/)
-    expect(next.body).toContain('fetch:900')
+    expect(next.body).toContain('fetch:900.1')
   })
 
   it('lists a candidate with no payload by id, with a details-unavailable line', () => {
@@ -650,13 +650,13 @@ describe('renderReport', () => {
     const reset = rendered(root, { cacheRestored: false }).body
     expect(reset).toMatch(/Ledger reset/)
     expect(reset).toContain('Sweep: covered 12 of 40 rules')
-    expect(reset).toContain('/ce:connect fetch:900')
+    expect(reset).toContain('/ce:connect fetch:900.1')
 
     const kept = rendered(seeded(2)).body
     expect(kept).not.toMatch(/Ledger reset/)
   })
 
-  it('writes one fetch line per originating run, and one per candidate', () => {
+  it('writes one fetch line per originating run and attempt, and one per candidate', () => {
     const root = seeded(2)
     rendered(root)
     // Two later runs each propose one more candidate.
@@ -669,15 +669,50 @@ describe('renderReport', () => {
     const third = rendered(root, { date: '2026-11-14', runId: '910' })
 
     const header = [
-      ...third.body.matchAll(/^- `\/ce:connect fetch:(\d+)`/gm),
+      ...third.body.matchAll(/^- `\/ce:connect fetch:(\d+\.\d+)`/gm),
     ].map((match) => match[1])
-    expect(header).toEqual(['900', '905', '910'])
-    expect(third.runs).toEqual(['900', '905', '910'])
+    expect(header).toEqual(['900.1', '905.2', '910.1'])
+    expect(third.fetches).toEqual(['900.1', '905.2', '910.1'])
     const perCandidate = [
-      ...third.body.matchAll(/^- Fetch: `\/ce:connect fetch:(\d+)`/gm),
+      ...third.body.matchAll(/^- Fetch: `\/ce:connect fetch:(\d+\.\d+)`/gm),
     ].map((match) => match[1])
-    expect(perCandidate).toEqual(['900', '900', '905', '910'])
+    expect(perCandidate).toEqual(['900.1', '900.1', '905.2', '910.1'])
     expect(third.body).toContain('(run 905, attempt 2)')
+  })
+
+  describe('a rerun of one run', () => {
+    /** Attempt 1 of run 900 proposes candidate 1; attempt 2 of the same run proposes candidate 2. */
+    function rerun(): ReturnType<typeof rendered> {
+      const root = seeded(1)
+      rendered(root)
+      writeLedger(root, [entryOf(1), entryOf(2)])
+      writeRunRecord(root, [blockCandidate(2)], {}, 'run-rerun')
+      writeInvocation(root, '900-2', {}, 'run-rerun')
+      return rendered(root, { date: DAY_TWO, runId: '900', attempt: '2' })
+    }
+
+    it('names the attempt a carried candidate came from, not the newest one', () => {
+      const { body } = rerun()
+      const blocks = body.split('### Candidate ').slice(1)
+      expect(blocks).toHaveLength(2)
+      expect(blocks[0]).toContain('- Fetch: `/ce:connect fetch:900.1`')
+      expect(blocks[0]).not.toContain('fetch:900.2')
+      expect(blocks[1]).toContain('- Fetch: `/ce:connect fetch:900.2`')
+    })
+
+    it('writes two separate fetch lines, one per attempt', () => {
+      const { body, fetches } = rerun()
+      const header = [
+        ...body.matchAll(
+          /^- `\/ce:connect fetch:(\d+\.\d+)` for candidates (.+)$/gm,
+        ),
+      ].map((match) => [match[1], match[2]])
+      expect(header).toEqual([
+        ['900.1', '1'],
+        ['900.2', '2'],
+      ])
+      expect(fetches).toEqual(['900.1', '900.2'])
+    })
   })
 
   it('keeps the first-shown date and the text when a later run proposes the candidate again', () => {
@@ -735,8 +770,8 @@ describe('renderReport', () => {
       expect(last.body).not.toContain('Details unavailable')
       expect(last.body).toContain('Lesson 561')
       expect(last.body).toContain('Lesson 600')
-      expect(last.runs).toEqual(['902'])
-      expect(last.body).toContain('/ce:connect fetch:902')
+      expect(last.fetches).toEqual(['902.1'])
+      expect(last.body).toContain('/ce:connect fetch:902.1')
     })
 
     it('fails with a fixed reason, and writes nothing, when a payload would not fit the byte bound', () => {
