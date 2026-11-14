@@ -51,7 +51,7 @@ A stop here happens before any command. End as for a failed run: the reason on a
 
 Headless mode asks no question and offers nothing after the digest. It does not wait for input of any kind.
 
-- A host and version pair the helper does not list is refused: `begin` answers `unsupported-host`. Interactive mode asks consent instead.
+- A host and version the helper does not support is refused: `begin` answers `unsupported-host`. Supported means the lowest version where the tool limits were observed, or any newer release of the same host and major version. A version below that, a prerelease, an unknown host, a version the helper cannot read and a release on its known-bad list are all refused. Interactive mode asks consent instead, except for a known-bad release: that is refused in every mode, and consent does not change it.
 - A user decision (`decide`) is never taken. The digest is the only output.
 - Anything unclear is a stop with a reason, not a question.
 
@@ -95,7 +95,7 @@ Print the helper's `reason` as it is, then add the hint when one fits.
 | Reason | Hint |
 |---|---|
 | `helper-unavailable` | The skill could not start the helper (node is missing or the helper file is gone). Nothing was published. Not a data problem. |
-| `unsupported-host` | The host and version have no observed tool limits. Run interactively and accept the warning, or use a supported host. |
+| `unsupported-host` | The host and version are not supported. The helper's `hostSupport` says why: `below-floor` (older than the lowest version with observed tool limits), `unlisted` (an unknown host, a prerelease, or a major version no row covers), `unobserved` (no readable version) or `known-bad` (a release where the limits were seen to fail). Run interactively and accept the warning, or use a supported host. A `known-bad` version cannot be run at all, in any mode, even with consent: use a different version of the host. |
 | `no-allowed-projects` | The allow list is empty or no entry matched a project. List the entries that did not match, with the reason the helper gives for each. |
 | `conflicting-selection` | The words name more than one selection. The helper's `detail` says which combination. Use one `group:` word, or one `projects:` word. A `fetch:` word stands alone. |
 | `unknown-group` | No group of that name is in the user's config (`group`). |
