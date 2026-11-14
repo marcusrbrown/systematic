@@ -37,7 +37,7 @@ env:
   # reads its state are the same release. Renovate bumps it on each release
   # through the annotation on the next line; keep that line directly above the key.
   # renovate: datasource=npm depName=@fro.bot/systematic
-  SYSTEMATIC_VERSION: "3.33.0"
+  SYSTEMATIC_VERSION: "3.33.1"
   # A report is an open issue whose whole title matches this rule and whose
   # author is one of these logins. The post job writes with the job token, so
   # the REST API shows the author as `github-actions[bot]`. The rule never
