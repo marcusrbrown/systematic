@@ -47,6 +47,19 @@
         '//\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*version:\\s*\'(?<currentValue>\\d+\\.\\d+\\.\\d+)\'',
       ],
     },
+    {
+      // .github/workflows/connect.yaml pins the Systematic release the scheduled
+      // run installs, in `env.SYSTEMATIC_VERSION`. Renovate reads the annotation
+      // on the line above it. The bfra-me preset's generic `*_VERSION` manager
+      // expects a trailing same-line comment and would capture the quotes, so it
+      // does not read this line.
+      description: ['Track the Systematic release pinned in the ce:connect workflow'],
+      customType: 'regex',
+      managerFilePatterns: ['/^\\.github/workflows/connect\\.yaml$/'],
+      matchStrings: [
+        '#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)[ \\t]*\\n[ \\t]*SYSTEMATIC_VERSION:\\s*["\']?(?<currentValue>\\d+\\.\\d+\\.\\d+)["\']?',
+      ],
+    },
   ],
   packageRules: [
     {
@@ -68,6 +81,15 @@
       matchManagers: ['github-actions'],
       matchPackageNames: ['node'],
       allowedVersions: '/^([0-9]*[02468])$/',
+    },
+    {
+      // The connect.yaml pin is a CI input, not a change to the shipped package, so
+      // its bump is a non-releasing `ci` commit. No minimumReleaseAge applies: the
+      // marcusrbrown preset clears it for `@fro.bot/**`. Renovate does not skip a
+      // regex manager's dependency because this repository publishes it.
+      matchManagers: ['custom.regex'],
+      matchPackageNames: ['@fro.bot/systematic'],
+      semanticCommitType: 'ci',
     },
     {
       matchPackageNames: [

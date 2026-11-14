@@ -34,8 +34,9 @@ defaults:
 env:
   # One Systematic version feeds the action's `systematic-version` input and
   # both helper installs, so the skill the agent loads and the helper that
-  # reads its state are the same release. Bump it with the Systematic release
-  # whenever the ledger or the run records change format.
+  # reads its state are the same release. Renovate bumps it on each release
+  # through the annotation on the next line; keep that line directly above the key.
+  # renovate: datasource=npm depName=@fro.bot/systematic
   SYSTEMATIC_VERSION: "3.33.0"
   # A report is an open issue whose whole title matches this rule and whose
   # author is one of these logins. The post job writes with the job token, so
