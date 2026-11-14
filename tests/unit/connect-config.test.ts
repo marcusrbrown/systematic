@@ -8,6 +8,7 @@ import {
   containerRefusal,
   HOST_SUPPORT_TABLE,
   type HostSupportRow,
+  type KnownBadHostVersion,
   loadConnectAllowList,
   MAX_ALLOW_PROJECT_LENGTH,
   MAX_ALLOW_PROJECTS,
@@ -1160,21 +1161,31 @@ describe('the zod schema and the reader agree on what a connect block is', () =>
 })
 
 describe('checkHostSupport', () => {
+  // Versions in the injected tables sit far from any shipped row, so these
+  // tests describe the rule and not a host release.
   const row = (overrides: Partial<HostSupportRow> = {}): HostSupportRow => ({
     host: 'opencode-v1',
     version: '9999.19.5',
     observedBy: 'tests/integration/opencode-v1-isolation.test.ts',
     ...overrides,
   })
+  const knownBad = (
+    overrides: Partial<KnownBadHostVersion> = {},
+  ): KnownBadHostVersion => ({
+    host: 'opencode-v1',
+    version: '9999.19.7',
+    evidence: 'a recorded refusal that did not hold',
+    ...overrides,
+  })
 
-  it('lists a pair when no row names it, and the empty table lists nothing', () => {
+  it('lists nothing from an empty table', () => {
     expect(checkHostSupport('opencode-v1', '9999.19.5', [])).toEqual({
       supported: false,
       reason: 'unlisted',
     })
   })
 
-  it('accepts a listed pair and returns the row that observed it', () => {
+  it('supports the floor itself and returns the row that observed it', () => {
     const v1 = row()
     const table = [v1, row({ host: 'opencode-v2', version: '9999.22.5' })]
     expect(checkHostSupport('opencode-v1', '9999.19.5', table)).toEqual({
@@ -1196,24 +1207,111 @@ describe('checkHostSupport', () => {
     ).toBe(true)
   })
 
-  it('rejects an unlisted host', () => {
-    expect(checkHostSupport('pi', '1.4.0', [row()])).toEqual({
-      supported: false,
-      reason: 'unlisted',
+  describe('versions above the floor in the same major', () => {
+    const floor = row()
+
+    it.each([
+      ['a newer patch', '9999.19.6'],
+      ['a newer minor', '9999.20.0'],
+      ['a much newer minor', '9999.40.2'],
+      ['a prefixed newer patch', 'v9999.19.6'],
+    ])('supports %s: %s', (_label, version) => {
+      expect(checkHostSupport('opencode-v1', version, [floor])).toEqual({
+        supported: true,
+        row: floor,
+      })
+    })
+
+    it('compares each part as a number, not as text', () => {
+      const ninth = row({ version: '9999.19.9' })
+      expect(checkHostSupport('opencode-v1', '9999.19.10', [ninth])).toEqual({
+        supported: true,
+        row: ninth,
+      })
+      const lowMinor = row({ version: '9999.9.0' })
+      expect(checkHostSupport('opencode-v1', '9999.10.0', [lowMinor])).toEqual({
+        supported: true,
+        row: lowMinor,
+      })
+      expect(checkHostSupport('opencode-v1', '9999.100.0', [lowMinor])).toEqual(
+        { supported: true, row: lowMinor },
+      )
+    })
+
+    it('does not let a leading zero or a long number change the order', () => {
+      expect(
+        checkHostSupport('opencode-v1', '9999.019.05', [row()]).supported,
+      ).toBe(true)
+      expect(
+        checkHostSupport('opencode-v1', '9999.19.99999999999999999999999', [
+          row(),
+        ]).supported,
+      ).toBe(true)
+      expect(
+        checkHostSupport('opencode-v1', '9999.19.4', [
+          row({ version: '9999.19.00000000000000000000005' }),
+        ]),
+      ).toEqual({ supported: false, reason: 'below-floor' })
+    })
+
+    it('fills a missing trailing part with zero', () => {
+      expect(
+        checkHostSupport('opencode-v1', '9999.20', [row()]).supported,
+      ).toBe(true)
+      expect(
+        checkHostSupport('opencode-v1', '9999.19', [row()]).supported,
+      ).toBe(false)
+    })
+
+    it('picks the highest floor at or below the version when a host has several rows', () => {
+      const low = row({ version: '9999.1.0' })
+      const high = row({ version: '9999.5.0' })
+      expect(checkHostSupport('opencode-v1', '9999.7.3', [low, high])).toEqual({
+        supported: true,
+        row: high,
+      })
+      expect(checkHostSupport('opencode-v1', '9999.3.0', [high, low])).toEqual({
+        supported: true,
+        row: low,
+      })
     })
   })
 
-  it.each([
-    '9999.18.29',
-    '9999.19.4',
-    '9999.19.6',
-    '9999.19.5-beta',
-    '2.0.0',
-    '9999.19',
-  ])('rejects v1 version %s when only 9999.19.5 is listed', (version) => {
-    expect(checkHostSupport('opencode-v1', version, [row()])).toEqual({
-      supported: false,
-      reason: 'unlisted',
+  describe('versions below the floor', () => {
+    it.each([
+      '9999.19.4',
+      '9999.18.29',
+      '9999.9.99',
+      '9999.19',
+      '9998.99.99',
+      '1.0.0',
+    ])('refuses %s with the reason below-floor', (version) => {
+      expect(checkHostSupport('opencode-v1', version, [row()])).toEqual({
+        supported: false,
+        reason: 'below-floor',
+      })
+    })
+  })
+
+  describe('another major', () => {
+    it.each(['10000.0.0', '10000.19.5', '10001.0.0'])(
+      'does not carry a floor into the higher major %s',
+      (version) => {
+        expect(checkHostSupport('opencode-v1', version, [row()])).toEqual({
+          supported: false,
+          reason: 'unlisted',
+        })
+      },
+    )
+
+    it('supports a major that has its own row, by that row', () => {
+      const next = row({ version: '10000.2.0' })
+      expect(
+        checkHostSupport('opencode-v1', '10000.3.1', [row(), next]),
+      ).toEqual({ supported: true, row: next })
+      expect(
+        checkHostSupport('opencode-v1', '10000.1.9', [row(), next]),
+      ).toEqual({ supported: false, reason: 'below-floor' })
     })
   })
 
@@ -1226,22 +1324,28 @@ describe('checkHostSupport', () => {
       'v9999.19.5+harness.bf7f7dfe',
       ' 9999.19.5+build.1 ',
       '9999.19.5+a+b',
-    ])('ignores everything from the first plus: %s matches', (version) => {
+    ])('ignores everything from the first plus: %s is the floor', (version) => {
       expect(checkHostSupport('opencode-v1', version, table)).toEqual({
         supported: true,
         row: listed,
       })
     })
 
-    it.each(['9999.19.5-rc.1', '9999.19.5-rc.1+build.7', '9999.19.6+build.1'])(
-      'keeps a prerelease or another version significant: %s is unlisted',
+    it.each(['9999.19.9+harness.abc', '9999.19.10+build.1'])(
+      'supports a newer version that carries build metadata: %s',
       (version) => {
         expect(checkHostSupport('opencode-v1', version, table)).toEqual({
-          supported: false,
-          reason: 'unlisted',
+          supported: true,
+          row: listed,
         })
       },
     )
+
+    it('refuses an older version that carries build metadata', () => {
+      expect(
+        checkHostSupport('opencode-v1', '9999.19.4+build.1', table),
+      ).toEqual({ supported: false, reason: 'below-floor' })
+    })
 
     it.each(['+', '+abc', 'v+abc', ' +harness '])(
       'treats %s, which has no version before the plus, as unobserved',
@@ -1253,45 +1357,56 @@ describe('checkHostSupport', () => {
       },
     )
 
-    it('matches the installed fork build of the pinned release against the shipped v1 row', () => {
-      const v1 = HOST_SUPPORT_TABLE.find(
-        (entry) => entry.host === 'opencode-v1',
-      )
-      if (v1 === undefined) throw new Error('no shipped v1 row')
+    it('supports the installed fork build of a shipped row and anything newer', () => {
+      for (const entry of HOST_SUPPORT_TABLE) {
+        expect(
+          checkHostSupport(entry.host, `${entry.version}+harness.bf7f7dfe`)
+            .supported,
+        ).toBe(true)
+      }
+    })
+  })
+
+  describe('prerelease versions', () => {
+    const table = [row()]
+
+    it.each([
+      '9999.19.5-rc.1',
+      '9999.19.6-rc.1',
+      '9999.20.0-beta',
+      '9999.19.6-rc.1+build.7',
+      '9999.19.4-rc.1',
+    ])('are not supported by a floor: %s', (version) => {
+      expect(checkHostSupport('opencode-v1', version, table)).toEqual({
+        supported: false,
+        reason: 'unlisted',
+      })
+    })
+
+    it('are supported only when a row names that exact prerelease', () => {
+      const candidate = row({ version: '9999.20.0-rc.1' })
       expect(
-        checkHostSupport('opencode-v1', `${v1.version}+harness.bf7f7dfe`)
+        checkHostSupport('opencode-v1', '9999.20.0-rc.1+build.2', [candidate]),
+      ).toEqual({ supported: true, row: candidate })
+      expect(
+        checkHostSupport('opencode-v1', '9999.20.0-rc.2', [candidate])
           .supported,
-      ).toBe(true)
-      expect(
-        checkHostSupport('opencode-v1', `${v1.version}-rc.1`).supported,
       ).toBe(false)
     })
   })
 
-  it('rejects a version listed for another host', () => {
+  it('rejects a host with no row, and a version listed for another host', () => {
+    expect(checkHostSupport('pi', '9999.19.5', [row()])).toEqual({
+      supported: false,
+      reason: 'unlisted',
+    })
     expect(
       checkHostSupport('opencode-v2', '9999.19.5', [row()]).supported,
     ).toBe(false)
   })
 
-  it.each([
-    ['undefined', undefined],
-    ['null', null],
-    ['an empty string', ''],
-    ['whitespace', '   '],
-    ['a non-string', 1.195],
-  ])(
-    'treats %s as an unobserved version and unsupported',
-    (_label, version) => {
-      expect(checkHostSupport('opencode-v1', version, [row()])).toEqual({
-        supported: false,
-        reason: 'unobserved',
-      })
-    },
-  )
-
-  it('treats an unknown host name as unsupported', () => {
-    expect(checkHostSupport('vscode', '1.0.0', [row()])).toEqual({
+  it('treats an unknown host name as unsupported at any version', () => {
+    expect(checkHostSupport('vscode', '9999.20.0', [row()])).toEqual({
       supported: false,
       reason: 'unlisted',
     })
@@ -1302,51 +1417,163 @@ describe('checkHostSupport', () => {
   })
 
   it.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['an empty string', ''],
+    ['whitespace', '   '],
+    ['a non-string', 1.195],
+    ['text with no digits', 'latest'],
+    ['a letter in a part', '9999.x.5'],
+    ['an empty part', '9999..5'],
+    ['a trailing dot', '9999.19.'],
+    ['a leading dot', '.19.5'],
+    ['a bare tag', '-rc.1'],
+    ['the whole line a host printed', '9999.19.5 (Claude Code)'],
+    ['a signed part', '9999.-1.5'],
+    ['an empty prerelease', '9999.19.5-'],
+  ])('treats %s as an unobserved version', (_label, version) => {
+    expect(checkHostSupport('opencode-v1', version, [row()])).toEqual({
+      supported: false,
+      reason: 'unobserved',
+    })
+  })
+
+  it.each([
     ['an empty observedBy', ''],
     ['a blank observedBy', '   '],
-  ])('a row with %s never matches', (_label, observedBy) => {
+  ])('a row with %s never supports anything', (_label, observedBy) => {
     expect(
       checkHostSupport('opencode-v1', '9999.19.5', [row({ observedBy })]),
     ).toEqual({ supported: false, reason: 'unlisted' })
+    expect(
+      checkHostSupport('opencode-v1', '9999.30.0', [row({ observedBy })]),
+    ).toEqual({ supported: false, reason: 'unlisted' })
   })
 
-  it('a row with no observedBy key at all never matches', () => {
+  it('a row with no observedBy key at all never supports anything', () => {
     const bare = { host: 'opencode-v1', version: '9999.19.5' } as HostSupportRow
     expect(checkHostSupport('opencode-v1', '9999.19.5', [bare]).supported).toBe(
       false,
     )
+    expect(checkHostSupport('opencode-v1', '9999.30.0', [bare]).supported).toBe(
+      false,
+    )
+  })
+
+  describe('the known-bad list', () => {
+    const floor = row()
+    const table = [floor, row({ host: 'opencode-v2', version: '9999.22.5' })]
+    const list = [knownBad()]
+
+    it('refuses a listed pair above the floor with its own reason', () => {
+      expect(checkHostSupport('opencode-v1', '9999.19.7', table, list)).toEqual(
+        { supported: false, reason: 'known-bad' },
+      )
+    })
+
+    it('leaves the versions on both sides of it supported', () => {
+      for (const version of ['9999.19.5', '9999.19.6', '9999.19.8']) {
+        expect(checkHostSupport('opencode-v1', version, table, list)).toEqual({
+          supported: true,
+          row: floor,
+        })
+      }
+    })
+
+    it('matches through the same normalising as the table', () => {
+      for (const version of [
+        'v9999.19.7',
+        ' 9999.19.7 ',
+        '9999.19.7+harness.abc',
+      ]) {
+        expect(checkHostSupport('opencode-v1', version, table, list)).toEqual({
+          supported: false,
+          reason: 'known-bad',
+        })
+      }
+    })
+
+    it('names a host and version, so another host at that version is not refused', () => {
+      expect(
+        checkHostSupport('opencode-v2', '9999.22.5', table, list).supported,
+      ).toBe(true)
+      const other = [knownBad({ host: 'opencode-v2', version: '9999.22.5' })]
+      expect(
+        checkHostSupport('opencode-v2', '9999.22.5', table, other),
+      ).toEqual({ supported: false, reason: 'known-bad' })
+      expect(
+        checkHostSupport('opencode-v1', '9999.22.5', table, other).supported,
+      ).toBe(true)
+    })
+
+    it('refuses the floor itself when the floor is listed', () => {
+      const bad = [knownBad({ version: '9999.19.5' })]
+      expect(checkHostSupport('opencode-v1', '9999.19.5', table, bad)).toEqual({
+        supported: false,
+        reason: 'known-bad',
+      })
+    })
+
+    it('refuses an exact prerelease row that is listed', () => {
+      const candidate = row({ version: '9999.20.0-rc.1' })
+      const bad = [knownBad({ version: '9999.20.0-rc.1' })]
+      expect(
+        checkHostSupport('opencode-v1', '9999.20.0-rc.1', [candidate], bad),
+      ).toEqual({ supported: false, reason: 'known-bad' })
+    })
+
+    it('does not support a listed pair that no row covers, and says why', () => {
+      expect(checkHostSupport('opencode-v1', '9999.19.7', [], list)).toEqual({
+        supported: false,
+        reason: 'known-bad',
+      })
+    })
+
+    it('reads an unobservable version as unobserved before the list', () => {
+      expect(checkHostSupport('opencode-v1', undefined, table, list)).toEqual({
+        supported: false,
+        reason: 'unobserved',
+      })
+    })
+
+    it('an empty list changes nothing', () => {
+      expect(
+        checkHostSupport('opencode-v1', '9999.19.7', table, []).supported,
+      ).toBe(true)
+    })
   })
 })
 
 // A row is added only for a host and version where the shipped researcher's
 // denies were seen on a real host. These tests keep each row tied to a proof
-// test that still exists under that title.
+// test that still exists under that title, and check the rule against the
+// shipped rows without naming a host release.
 describe('the shipped host-support table', () => {
   const root = path.join(import.meta.dirname, '../..')
-  const readJson = (file: string): Record<string, unknown> =>
-    JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'))
-  const pins = readJson('scripts/opencode-host-pins.json') as {
-    v1Floor: string
+
+  /** The same version with its major raised by one. */
+  const nextMajor = (version: string): string => {
+    const [major = '0', ...rest] = version.split('.')
+    return [String(Number(major) + 1), ...rest].join('.')
   }
+
   it('reads the version the skill sends from what `claude --version` prints', () => {
-    // The skill sends the first token that starts with a digit: `2.1.319`.
+    // The skill sends the first token that starts with a digit.
     const printed = '2.1.319 (Claude Code)'
     const sent = printed.split(/\s+/).find((token) => /^v?\d/.test(token))
     expect(sent).toBe('2.1.319')
     expect(checkHostSupport('claude-code', sent)).toMatchObject({
       supported: true,
-      row: { host: 'claude-code', version: '2.1.319' },
+      row: { host: 'claude-code' },
     })
-    // The whole line is not a version, and neither is a nearby release.
-    expect(checkHostSupport('claude-code', printed).supported).toBe(false)
-    expect(checkHostSupport('claude-code', '2.1.320').supported).toBe(false)
-    expect(checkHostSupport('claude-code', '2.1.319-beta').supported).toBe(
-      false,
-    )
-    expect(checkHostSupport('opencode-v1', '2.1.319').supported).toBe(false)
+    // The whole line is not a version.
+    expect(checkHostSupport('claude-code', printed)).toEqual({
+      supported: false,
+      reason: 'unobserved',
+    })
   })
 
-  it('supports each listed pair and nothing next to it', () => {
+  it('supports each row at its floor, refuses a prerelease of it, and refuses an unknown host', () => {
     for (const entry of HOST_SUPPORT_TABLE) {
       expect(checkHostSupport(entry.host, entry.version)).toEqual({
         supported: true,
@@ -1355,15 +1582,36 @@ describe('the shipped host-support table', () => {
       expect(
         checkHostSupport(entry.host, `${entry.version}-beta`).supported,
       ).toBe(false)
+      expect(checkHostSupport('vscode', entry.version).supported).toBe(false)
     }
-    // The old v1 floor and an older v1 patch were never observed.
-    expect(checkHostSupport('opencode-v1', pins.v1Floor).supported).toBe(false)
-    expect(checkHostSupport('opencode-v1', '1.19.4').supported).toBe(false)
-    expect(checkHostSupport('claude-code', '2.1.312').supported).toBe(false)
-    expect(checkHostSupport('claude-code', undefined)).toEqual({
-      supported: false,
-      reason: 'unobserved',
-    })
+  })
+
+  it('applies one rule to every row: a newer release in its major is supported, an older one and a higher major are not', () => {
+    for (const entry of HOST_SUPPORT_TABLE) {
+      const [major = '0', minor = '0'] = entry.version.split('.')
+      expect(
+        checkHostSupport(entry.host, `${major}.${Number(minor) + 1}.0`)
+          .supported,
+      ).toBe(true)
+      expect(checkHostSupport(entry.host, `${major}.${minor}.99999`)).toEqual({
+        supported: true,
+        row: entry,
+      })
+      expect(checkHostSupport(entry.host, '0.0.1')).toEqual({
+        supported: false,
+        reason: 'below-floor',
+      })
+      expect(checkHostSupport(entry.host, nextMajor(entry.version))).toEqual({
+        supported: false,
+        reason: 'unlisted',
+      })
+    }
+  })
+
+  it('does not apply one host row to another host', () => {
+    const v1 = HOST_SUPPORT_TABLE.find((entry) => entry.host === 'opencode-v1')
+    if (v1 === undefined) throw new Error('no shipped v1 row')
+    expect(checkHostSupport('claude-code', v1.version).supported).toBe(false)
   })
 
   const MANUAL_EVIDENCE_FILE = 'HARNESSES.md'

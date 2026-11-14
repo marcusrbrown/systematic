@@ -1161,6 +1161,56 @@ function digestModel(over: Partial<DigestModel> = {}): DigestModel {
 }
 
 describe('renderDigest', () => {
+  describe('the host line', () => {
+    const hostLine = (hostSupport: DigestModel['hostSupport']): string =>
+      renderDigest(digestModel({ hostSupport }))
+        .split('\n')
+        .find((line) => line.startsWith('Host: ')) ?? ''
+
+    it('says the denies were observed on the row version when the run is on another', () => {
+      expect(
+        hostLine({
+          supported: true,
+          host: 'opencode-v2',
+          version: '9999.0.3',
+          observedOn: '9999.0.0',
+        }),
+      ).toBe(
+        'Host: `opencode-v2 9999.0.3` (tool denies observed on `9999.0.0`, not on this version)',
+      )
+    })
+
+    it('keeps the plain wording when no other version is recorded', () => {
+      expect(
+        hostLine({ supported: true, host: 'opencode-v2', version: '9999.0.0' }),
+      ).toBe('Host: `opencode-v2 9999.0.0` (tool denies observed)')
+    })
+
+    it('cleans the recorded version like the rest of the line', () => {
+      const line = hostLine({
+        supported: true,
+        host: 'opencode-v2',
+        version: '9999.0.3',
+        observedOn: '9999.0.0\u001b[31m',
+      })
+      expect(line).not.toContain('\u001b')
+    })
+
+    it('does not use it for an unsupported host', () => {
+      expect(
+        hostLine({
+          supported: false,
+          host: 'pi',
+          version: '1.0.0',
+          observedOn: '9999.0.0',
+          consented: true,
+        }),
+      ).toBe(
+        'Host: `pi 1.0.0` (tool denies NOT verified on this host; the user agreed to run anyway)',
+      )
+    })
+  })
+
   it('labels an empty run "no candidate in searched scope" and has all three sections', () => {
     const text = renderDigest(digestModel())
     expect(text).toContain('no candidate in searched scope')

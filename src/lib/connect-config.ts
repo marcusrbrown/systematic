@@ -651,13 +651,16 @@ export const CONNECT_HOSTS = [
 export type ConnectHost = (typeof CONNECT_HOSTS)[number]
 
 /**
- * One host and exact version with host-specific evidence that the researcher's
- * tool limits hold. The evidence is a real-host refusal test, a test showing the
- * allowlist reaching the delegate session, or a recorded manual observation.
- * `observedBy` names it. A test is named as `<file> > <test title>`. A manual
- * observation is named as `HARNESSES.md > <entry id>`; a unit test requires that
- * entry to exist and to be marked manual evidence. A row without `observedBy`
- * never matches.
+ * One host and the lowest version where the researcher's tool limits were
+ * observed to hold, with the host-specific evidence. The evidence is a
+ * real-host refusal test, a test showing the allowlist reaching the delegate
+ * session, or a recorded manual observation. `observedBy` names it. A test is
+ * named as `<file> > <test title>`. A manual observation is named as
+ * `HARNESSES.md > <entry id>`; a unit test requires that entry to exist and to
+ * be marked manual evidence. A row without `observedBy` supports nothing.
+ *
+ * `version` is a floor, not an exact match: it and every newer release in the
+ * same major version are supported (see `checkHostSupport`).
  */
 export interface HostSupportRow {
   readonly host: ConnectHost
@@ -666,35 +669,48 @@ export interface HostSupportRow {
 }
 
 /**
- * The supported combinations. A row is added only for a host and version with
- * host-specific evidence that the shipped agent's tool limits hold there: a
- * real-host refusal test, an allowlist reaching the delegate session, or a
- * recorded manual observation marked as manual evidence. The `claude-code` row
- * rests on a recorded manual tool-list observation, not a tested refusal,
- * because that host cannot be driven by a scripted model here.
+ * A host and exact version where the proof failed: the researcher's tool limits
+ * were seen not to hold. It is refused even when a row's floor is below it.
+ * `evidence` records where the failure was seen. It is documentation: a
+ * listed pair is refused whatever the text says.
+ */
+export interface KnownBadHostVersion {
+  readonly host: ConnectHost
+  readonly version: string
+  readonly evidence: string
+}
+
+/**
+ * The supported hosts, one floor per host. A row is added only for a host with
+ * host-specific evidence that the shipped agent's tool limits hold: a real-host
+ * refusal test, an allowlist reaching the delegate session, or a recorded
+ * manual observation marked as manual evidence. The `claude-code` row rests on
+ * a recorded manual tool-list observation, not a tested refusal, because that
+ * host cannot be driven by a scripted model here.
  *
- * Every row is exact: the version is the one the proof ran against, and any
- * other version, older or newer, is unlisted.
+ * Each `version` is the lowest version where the limits were observed. That
+ * version and any newer release of the same host and major version is
+ * supported, so a host update does not need a Systematic release. A row does
+ * not follow the host pins that the host contract tests run against: raise or
+ * add a row only when the limits are observed on a different release, and put a
+ * release that fails the proof in `KNOWN_BAD_HOST_VERSIONS`.
  */
 export const HOST_SUPPORT_TABLE: readonly HostSupportRow[] = [
   {
     host: 'opencode-v1',
-    // renovate: datasource=npm depName=opencode-ai
     version: '1.19.5',
     observedBy:
       'tests/integration/opencode-v1-isolation.test.ts > the shipped researcher, dispatched from the packed plugin, is refused shell, write, edit and web fetch and its read reaches the parent',
   },
   {
     host: 'opencode-v2',
-    // renovate: datasource=npm depName=@opencode/cli
-    version: '2.2.7',
+    version: '2.2.5',
     observedBy:
       'tests/integration/opencode-v2.test.ts > a session-level allow does not lift the guarded researcher when a parent with that rule dispatches it',
   },
   {
     host: 'pi',
-    // renovate: datasource=npm depName=@earendil-works/pi-coding-agent
-    version: '1.5.2',
+    version: '1.5.0',
     observedBy:
       'tests/unit/pi-delegate-session.test.ts > the shipped researcher reaches createAgentSession with read, grep and find and none of bash, write, edit or systematic_delegate',
   },
@@ -705,12 +721,26 @@ export const HOST_SUPPORT_TABLE: readonly HostSupportRow[] = [
   },
 ]
 
+/**
+ * Host and version pairs where the proof failed. Each is refused with the
+ * reason `known-bad`, even above its host's floor, and in every mode: unlike
+ * the other refusals, no consent runs it. Empty until a release is seen to
+ * break the tool limits.
+ */
+export const KNOWN_BAD_HOST_VERSIONS: readonly KnownBadHostVersion[] = []
+
 export type HostSupportVerdict =
   | { readonly supported: true; readonly row: HostSupportRow }
   | {
       readonly supported: false
-      /** `unobserved`: no usable version. `unlisted`: no row names this host and version. */
-      readonly reason: 'unobserved' | 'unlisted'
+      /**
+       * `unobserved`: no usable version, or one that is not dotted numbers.
+       * `unlisted`: no row covers this host, or the version is a prerelease or
+       * in a major version no row names.
+       * `below-floor`: older than the lowest version observed for the host.
+       * `known-bad`: the pair is on the known-bad list.
+       */
+      readonly reason: 'unobserved' | 'unlisted' | 'below-floor' | 'known-bad'
     }
 
 /**
@@ -719,7 +749,7 @@ export type HostSupportVerdict =
  * metadata does not change which release a build is. A prerelease tag stays,
  * so `1.19.5-rc.1` is not `1.19.5`. `undefined` when no version is left.
  */
-function normalizeVersion(version: unknown): string | undefined {
+export function normalizeVersion(version: unknown): string | undefined {
   if (typeof version !== 'string') return undefined
   const withoutV = version.trim().replace(/^v/i, '')
   const plus = withoutV.indexOf('+')
@@ -727,26 +757,140 @@ function normalizeVersion(version: unknown): string | undefined {
   return core === '' ? undefined : core
 }
 
+interface ParsedVersion {
+  /** The dot-separated numeric parts of the release, as digit strings. */
+  readonly parts: readonly string[]
+  readonly prerelease: boolean
+}
+
+const VERSION_SHAPE = /^(\d+(?:\.\d+)*)(-[0-9A-Za-z.-]+)?$/
+
+/** Split a normalised version into numeric parts, or `undefined` when it is not dotted numbers. */
+function parseVersion(version: string | undefined): ParsedVersion | undefined {
+  if (version === undefined) return undefined
+  const match = VERSION_SHAPE.exec(version)
+  const core = match?.[1]
+  if (core === undefined) return undefined
+  return { parts: core.split('.'), prerelease: match?.[2] !== undefined }
+}
+
+/** Compare two digit strings as numbers, of any length, without converting them. */
+function comparePart(a: string, b: string): number {
+  const left = a.replace(/^0+(?=\d)/, '')
+  const right = b.replace(/^0+(?=\d)/, '')
+  if (left.length !== right.length) return left.length < right.length ? -1 : 1
+  if (left === right) return 0
+  return left < right ? -1 : 1
+}
+
+/** Compare release parts left to right; a missing trailing part is zero. */
+function compareParts(a: readonly string[], b: readonly string[]): number {
+  const length = Math.max(a.length, b.length)
+  for (let index = 0; index < length; index += 1) {
+    const order = comparePart(a[index] ?? '0', b[index] ?? '0')
+    if (order !== 0) return order
+  }
+  return 0
+}
+
+interface Floor {
+  readonly row: HostSupportRow
+  readonly parts: readonly string[]
+}
+
+/** The floor with the highest version at or below `parts`, among floors of the same major. */
+function highestFloorBelow(
+  floors: readonly Floor[],
+  parts: readonly string[],
+): Floor | undefined {
+  let best: Floor | undefined
+  for (const floor of floors) {
+    if (compareParts(floor.parts, parts) > 0) continue
+    if (best === undefined || compareParts(floor.parts, best.parts) > 0) {
+      best = floor
+    }
+  }
+  return best
+}
+
+/** Decide a release version against the floors of one host. */
+function checkFloors(
+  floors: readonly Floor[],
+  parts: readonly string[],
+): HostSupportVerdict {
+  const sameMajor = floors.filter(
+    (floor) => comparePart(floor.parts[0] ?? '0', parts[0] ?? '0') === 0,
+  )
+  if (sameMajor.length > 0) {
+    const best = highestFloorBelow(sameMajor, parts)
+    return best === undefined
+      ? { supported: false, reason: 'below-floor' }
+      : { supported: true, row: best.row }
+  }
+  const belowEveryFloor =
+    floors.length > 0 &&
+    floors.every((floor) => compareParts(parts, floor.parts) < 0)
+  return {
+    supported: false,
+    reason: belowEveryFloor ? 'below-floor' : 'unlisted',
+  }
+}
+
 /**
- * Check an observed host and version against the table. The match is exact:
- * a version that is not listed is refused, whether older or newer. A pair the
- * skill could not observe is unsupported.
+ * Check an observed host and version against the table. The rule, in order:
+ *
+ * 1. A version that is missing or is not dotted numbers (`2.2.9`, optionally
+ *    with a `-` prerelease tag after it) is `unobserved`.
+ * 2. A host and version on the known-bad list is refused as `known-bad`.
+ * 3. A version equal to a row's version is supported.
+ * 4. A prerelease (`2.2.8-rc.1`) is refused as `unlisted` unless it equals a
+ *    row exactly: a prerelease is not a release the proof ran against.
+ * 5. Otherwise the row's version is a floor within its own major version. The
+ *    version is supported when some row of the host has the same major and a
+ *    version at or below it; the row with the highest such version is
+ *    returned. A version below that floor is `below-floor`. A higher major
+ *    version has no row of its own, so it is `unlisted`: OpenCode v1 and v2
+ *    are already separate hosts, and a new major version is a new host to
+ *    prove, not an update.
+ * 6. A host no row names is `unlisted`.
+ *
+ * Parts compare as numbers (`2.2.10` is newer than `2.2.9`) and build
+ * metadata is ignored, as `normalizeVersion` drops it.
  */
 export function checkHostSupport(
   host: unknown,
   version: unknown,
   table: readonly HostSupportRow[] = HOST_SUPPORT_TABLE,
+  knownBad: readonly KnownBadHostVersion[] = KNOWN_BAD_HOST_VERSIONS,
 ): HostSupportVerdict {
   const observed = normalizeVersion(version)
-  if (observed === undefined) return { supported: false, reason: 'unobserved' }
-  const row = table.find(
+  const parsed = parseVersion(observed)
+  if (observed === undefined || parsed === undefined) {
+    return { supported: false, reason: 'unobserved' }
+  }
+  if (
+    knownBad.some(
+      (entry) =>
+        entry.host === host && normalizeVersion(entry.version) === observed,
+    )
+  ) {
+    return { supported: false, reason: 'known-bad' }
+  }
+  const rows = table.filter(
     (candidate) =>
       candidate.host === host &&
       typeof candidate.observedBy === 'string' &&
-      candidate.observedBy.trim() !== '' &&
-      normalizeVersion(candidate.version) === observed,
+      candidate.observedBy.trim() !== '',
   )
-  return row === undefined
-    ? { supported: false, reason: 'unlisted' }
-    : { supported: true, row }
+  const exact = rows.find(
+    (candidate) => normalizeVersion(candidate.version) === observed,
+  )
+  if (exact !== undefined) return { supported: true, row: exact }
+  if (parsed.prerelease) return { supported: false, reason: 'unlisted' }
+
+  const floors = rows.flatMap((row) => {
+    const floor = parseVersion(normalizeVersion(row.version))
+    return floor === undefined ? [] : [{ row, parts: floor.parts }]
+  })
+  return checkFloors(floors, parsed.parts)
 }

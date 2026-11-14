@@ -29,7 +29,7 @@ tags:
 ## Symptoms
 
 - `checkHostSupport('opencode-v1', '1.19.5+harness.bf7f7dfe')` returned `{ supported: false, reason: 'unlisted' }` against a table listing `1.19.5`.
-- Headless `begin` replied `unsupported-host` with `hostSupport: "unlisted"` (`src/ce-connect-helper.ts:1073-1104`, `gateHost`). Interactive mode returned `consent-required` and a warning that the tool limits "have not been verified".
+- Headless `begin` replied `unsupported-host` with `hostSupport: "unlisted"` (`src/ce-connect-helper.ts:1095-1128`, `gateHost`). Interactive mode returned `consent-required` and a warning that the tool limits "have not been verified".
 - A headless run on the real host passed anyway, because the model stripped the suffix on its own. The check was passing by luck, not by design.
 
 ## What Didn't Work
@@ -41,7 +41,7 @@ Two traps to avoid, not recorded attempts:
 
 ## Solution
 
-Normalize in the helper, on both sides of the comparison. `normalizeVersion` trims, drops one leading `v`, cuts everything from the first `+`, and returns `undefined` when nothing is left (`src/lib/connect-config.ts:716-728`). `checkHostSupport` normalizes the observed version and each table row's version before comparing (`src/lib/connect-config.ts:730-752`).
+Normalize in the helper, on both sides of the comparison. `normalizeVersion` trims, drops one leading `v`, cuts everything from the first `+`, and returns `undefined` when nothing is left (`src/lib/connect-config.ts:746-758`). `checkHostSupport` normalizes the observed version and each table row's version before comparing (`src/lib/connect-config.ts:839-896`).
 
 ```ts
 // Before (strict match on the printed string):
@@ -52,7 +52,7 @@ const observed = normalizeVersion(version)
 normalizeVersion(candidate.version) === observed
 ```
 
-The skill keeps its rule to send the first digit-leading token exactly as printed, with any `-` prerelease tag or `+` build suffix, and not to trim or round anything (`skills/ce-connect/SKILL.md:85`).
+The comparison that follows is now a floor per host and not an exact match (see the support-table doc below), but normalization still runs first, on both sides. The skill keeps its rule to send the first digit-leading token exactly as printed, with any `-` prerelease tag or `+` build suffix, and not to trim or round anything (`skills/ce-connect/SKILL.md:85`).
 
 ## Why This Works
 
@@ -60,7 +60,7 @@ SemVer says build metadata is ignored for precedence, so `1.19.5+harness.bf7f7df
 
 ## Prevention
 
-- Pin both directions in tests. `tests/unit/connect-config.test.ts:797-846` (the `build metadata` block) asserts that `9999.19.5+harness.bf7f7dfe`, a leading `v` and surrounding whitespace match; that `9999.19.5-rc.1`, `9999.19.5-rc.1+build.7` and `9999.19.6+build.1` do not; that `+`, `+abc` and ` +harness ` have no version and are `unobserved`; and that the shipped v1 row matches its own pinned version with the fork suffix.
+- Pin both directions in tests. `tests/unit/connect-config.test.ts:1318-1368` (the `build metadata` block) asserts that `9999.19.5+harness.bf7f7dfe`, a leading `v` and surrounding whitespace match the floor; that a newer version with build metadata is supported and an older one is not; that `+`, `+abc` and ` +harness ` have no version and are `unobserved`; and that every shipped row matches its own version with the fork suffix. The `prerelease versions` block that follows it pins that `9999.19.5-rc.1` and `9999.19.5-rc.1+build.7` are refused.
 - When a gate compares a host-printed string, decide what counts as the same release before writing the comparison, and test the real printed form (`claude --version` prints `2.1.319 (Claude Code)`, so the skill sends only `2.1.319`).
 - Known residual: because build metadata is ignored, any fork build of a pinned core version counts as supported. The support row records an observation on one build; a fork that changes the permission code under the same core version is not distinguished.
 
