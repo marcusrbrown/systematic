@@ -205,6 +205,31 @@ env:
     and read the closing comments. Never re-propose a fix that matches a
     declined one; report it as declined instead, with the PR link.
 
+    ACCEPTED RISKS
+    The maintainer accepted these High advisories after confirming that none
+    ships in the published package (not in `dependencies`, the `npm pack` file
+    list, `dist/`, or the bundled skill scripts) or in the docs deploy. All of
+    them live only in the dev toolchain or in host-supplied optional peers:
+    - GHSA-h895-cgqg-jf52, GHSA-4qx8-w7c3-pj3p, GHSA-9j65-hcg3-gc64,
+      GHSA-9qmh-m7c6-f92p (toml 4.3.0): reached through effect beta.83 from
+      `@opencode-ai/plugin` and `@opencode/client`; dev-only toolchain, not
+      shipped.
+    - GHSA-mrhx-c7xc-m3w5 (zod 4.1.8 and 3.25.76): nested copies under
+      `@opencode-ai/plugin` and gitlab-ai-provider; the shipped zod is 4.6.7,
+      which is patched.
+    - GHSA-r292-9mhp-454m (tar 7.5.19), GHSA-2m5v-pch6-74hx,
+      GHSA-qrxm-fqhp-jwvm, GHSA-xjj6-f33q-929c, GHSA-rfgv-xxqx-mfg5
+      (undici 6.27.0), GHSA-mwp4-54f8-5fhr (ip-address 10.2.0): bundled inside
+      npm 11.18.0, which semantic-release uses on the release runner; dev-only
+      toolchain, not shipped.
+    Report these under Security as accepted, with the advisory id. Do not log
+    them under Needs Human Attention, do not count them toward the 3-report
+    CONTINUITY escalation, and do not open a repair PR for them. Escalate
+    again only on new evidence: the package reaches a shipped artifact or a
+    runtime dependency, or a newer advisory appears for the same package.
+    When the installed version moves outside an advisory's range, report that
+    advisory as resolved.
+
     SELF-CLEANUP (own PRs only)
     You may close your own open repair PR only when a newer Fro Bot PR fixes
     the same root cause. Leave a comment linking the successor. Never close a
