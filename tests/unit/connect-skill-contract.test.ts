@@ -167,9 +167,76 @@ describe('ce:connect fetch', () => {
   })
 
   test('takes a numeric GitHub run id only, and counts identical repeats once', () => {
-    expect(fetchSection).toMatch(/digits only, at most 20/)
+    expect(fetchSection).toMatch(/digits only/)
     expect(fetchSection).toMatch(/twice or more counts once/)
     expect(fetchSection).toContain('invalid-request: fetch: needs a numeric')
+  })
+
+  describe('the fetch value', () => {
+    /** The pattern the skill states for a `fetch:` value, read from its own text so the test runs the rule the skill gives. */
+    const valuePattern = (): RegExp => {
+      const stated = fetchSection.match(/value must match `(\^[^`]+\$)`/)
+      expect(stated).not.toBeNull()
+      return new RegExp(stated?.[1] ?? '$^')
+    }
+
+    test('names the attempt form: a run, a dot and the attempt the candidate came from', () => {
+      expect(String(skill.data['argument-hint'])).toContain(
+        'fetch:<run>[.<attempt>]',
+      )
+      expect(fetchSection).toMatch(/`fetch:<run>\.<attempt>`/)
+      expect(fetchSection).toMatch(
+        /`fetch:<run>\.<attempt>`[^\n]*exactly that attempt/,
+      )
+    })
+
+    test('keeps a bare fetch:<run> meaning the newest attempt of that run', () => {
+      expect(fetchSection).toMatch(
+        /bare `fetch:<run>`[^\n]*newest attempt of that run/,
+      )
+      expect(valuePattern().test('43525490720')).toBe(true)
+    })
+
+    test('accepts a run, or a run and an attempt, as positive integers', () => {
+      const accepts = valuePattern()
+      for (const value of ['1', '43525490720', '43525490720.1', '7.12']) {
+        expect(accepts.test(value)).toBe(true)
+      }
+      expect(fetchSection).toMatch(/positive integer/)
+    })
+
+    test('rejects an attempt that is zero, padded, empty, signed or not a number', () => {
+      const accepts = valuePattern()
+      for (const value of [
+        '',
+        '0',
+        '0.1',
+        '900.0',
+        '900.00',
+        '900.01',
+        '900.',
+        '.1',
+        '900.1.2',
+        '900.-1',
+        '900.+1',
+        '900.1a',
+        '900.1;id',
+        '900 .1',
+        `900.${'1'.repeat(11)}`,
+        '1'.repeat(21),
+      ]) {
+        expect(accepts.test(value)).toBe(false)
+      }
+      expect(fetchSection).toContain(
+        'invalid-request: fetch: needs a numeric GitHub run id',
+      )
+    })
+
+    test('counts fetch:<run> and fetch:<run>.<attempt> as two different words', () => {
+      expect(fetchSection).toMatch(
+        /`fetch:<run>` and `fetch:<run>\.<attempt>` are different words/,
+      )
+    })
   })
 
   test('stands alone: it conflicts with a selection and with a different fetch word', () => {
@@ -221,10 +288,39 @@ describe('ce:connect fetch reference', () => {
     expect(text).toMatch(/Never take a repository, a path or a workflow name/)
   })
 
-  test('picks the highest attempt of connect-run-<run>-<attempt> for that run id', () => {
-    expect(text).toContain('connect-run-<run>-<attempt>')
-    expect(text).toMatch(/highest attempt/)
-    expect(text).toContain('connect-run-<run>-2')
+  describe('the artifact choice', () => {
+    const choose = section(text, '### 2. Choose the artifact', '### 3.')
+
+    test('with a bare run, picks the highest attempt of connect-run-<run>-<attempt> for that run id', () => {
+      expect(text).toContain('connect-run-<run>-<attempt>')
+      expect(choose).toMatch(/With a bare `fetch:<run>`/)
+      expect(choose).toMatch(/highest attempt/)
+      expect(choose).toContain('connect-run-<run>-2')
+    })
+
+    test('with an attempt, downloads exactly connect-run-<run>-<attempt> and no other', () => {
+      expect(choose).toMatch(/With `fetch:<run>\.<attempt>`/)
+      expect(choose).toMatch(
+        /download exactly `connect-run-<run>-<attempt>` with that attempt/,
+      )
+      expect(choose).toMatch(/Do not pick the highest attempt/)
+    })
+
+    test('stops with a fixed reason when the named attempt is missing or expired, and never falls back', () => {
+      expect(choose).toMatch(
+        /named attempt[^\n]*stop with `artifact-not-found`/,
+      )
+      expect(choose).toMatch(/named attempt[^\n]*stop with `artifact-expired`/)
+      expect(choose).toMatch(/never fall back to another attempt/i)
+      expect(choose).not.toMatch(
+        /(?:missing|expired)[^\n]*(?:use|take|pick|download) the (?:newest|highest|next|earlier|later)/i,
+      )
+    })
+
+    test('hands import the run id only: the record carries no attempt to check', () => {
+      expect(text).toMatch(/record carries no attempt/)
+      expect(text).not.toMatch(/"provenance": \{[^}]*attempt/)
+    })
   })
 
   test('downloads into a fresh directory it removes afterward, and never opens the record itself', () => {

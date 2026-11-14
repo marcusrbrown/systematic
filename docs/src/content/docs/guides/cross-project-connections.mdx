@@ -242,18 +242,18 @@ A promoted learning never copies another project's text. It cites each source as
 
 ### Bring a scheduled run's candidates here
 
-A lesson found on another machine cannot be promoted from its own record: the paths in it belong to a runner that is gone. `fetch:<run>` brings the candidates of a run of Systematic's `ce:connect` workflow to your machine and re-checks them against your own checkouts, so you can promote them with the usual line. The workflow is described in [Scheduled runs](#scheduled-runs).
+A lesson found on another machine cannot be promoted from its own record: the paths in it belong to a runner that is gone. `fetch:<run>.<attempt>` brings the candidates of a run of Systematic's `ce:connect` workflow to your machine and re-checks them against your own checkouts, so you can promote them with the usual line. The workflow is described in [Scheduled runs](#scheduled-runs).
 
 ```text
-/ce:connect fetch:<run>
+/ce:connect fetch:<run>.<attempt>
 ```
 
-`<run>` is the GitHub run id, digits only. A `fetch:` word stands alone: combined with `group:` or `projects:` it stops with `conflicting-selection`, and it takes no `mode:`, because a fetch dispatches no researcher, asks nothing and observes no host.
+`<run>` is the GitHub run id and `<attempt>` is the attempt number. Each is a positive integer, digits only. A scheduled report prints this form for each candidate, with the attempt that found it, for example `fetch:43525490720.1`. A bare `fetch:<run>` still works and reads the newest attempt of that run. A `fetch:` word stands alone: combined with `group:` or `projects:` it stops with `conflicting-selection`, and it takes no `mode:`, because a fetch dispatches no researcher, asks nothing and observes no host.
 
 The fetch needs the GitHub CLI (`gh`), logged in with a token that can read the Actions runs and artifacts of `marcusrbrown/systematic`. The skill runs `gh` with your own credentials, as explicit commands. The helper never touches the network. In order:
 
 1. **Check the run before downloading anything.** Its workflow must be `.github/workflows/connect.yaml` and its event must be `schedule` or `workflow_dispatch`. A run of another workflow, or one started by a pull request, is refused whatever its artifacts hold.
-2. **Pick the artifact** named `connect-run-<run>-<attempt>` with the highest attempt, and download it into a fresh temporary directory that is removed afterwards.
+2. **Pick the artifact** named `connect-run-<run>-<attempt>`, and download it into a fresh temporary directory that is removed afterwards.
 3. **Import.** The helper reads only `run.json` from that directory (a plain file of at most 2 MiB; never a symlink), as untrusted input.
 
 The import maps each project in the record to exactly one allowed local checkout by its `origin` remote (`owner/repo`). It then recomputes every candidate id and rule id from your local roots, never trusting a recorded one, and re-verifies each cited file's fingerprint and each excerpt against your files. It inserts the accepted candidates into your local ledger as a local run, so the usual promotion lines come out unchanged, and prints them. It never changes coverage, and it writes no learning.
@@ -357,7 +357,7 @@ Each UTC date has one report, titled `ce:connect report — YYYY-MM-DD (UTC)`. A
 The report lists the candidates that are still open, oldest first, as many as fit under the size cap. Each candidate has:
 
 - the sources and the target evidence, shown as quoted text,
-- a `fetch:<run>` line for the run that found it, to bring it to your machine, and
+- a `fetch:<run>.<attempt>` line for the run and attempt that found it, to bring it to your machine, and
 - two boxes, **Promoted** and **Rejected**.
 
 Tick **one** box per candidate. Ticking both is a conflict, and neither is recorded. The next run reads the ticks from the newest open report. Ticks on a closed report are ignored, so settle a candidate before the next report supersedes the report that lists it. A box ticked on any line the report did not generate records nothing.
@@ -385,7 +385,7 @@ GitHub evicts caches that go unused for seven days or push a repository over its
 
 ### Fetch a candidate
 
-The run saves its run record as an artifact named `connect-run-<run>-<attempt>`, kept for 30 days. It holds the run record and nothing else. `fetch:<run>` reads it ([Bring a scheduled run's candidates here](#bring-a-scheduled-runs-candidates-here)). Once the artifact has expired, `fetch` reports `artifact-expired`. Tick **Rejected** on the report, or wait for a later run to propose the candidate again. After a workflow rerun, `fetch:<run>` reads that run's newest attempt.
+The run saves its run record as an artifact named `connect-run-<run>-<attempt>`, kept for 30 days. It holds the run record and nothing else. `fetch:<run>.<attempt>` reads that attempt's artifact and no other ([Bring a scheduled run's candidates here](#bring-a-scheduled-runs-candidates-here)). After a workflow rerun, each attempt keeps its own artifact, and a candidate carried over from an earlier attempt still names that attempt. If the named artifact is missing, `fetch` reports `artifact-not-found`, and once it has expired, `artifact-expired`. It never reads another attempt in its place. Tick **Rejected** on the report, or wait for a later run to propose the candidate again.
 
 `fetch:` reads runs of `marcusrbrown/systematic` only. A copy of the workflow in another repository posts its own reports and ticks, but its runs cannot be fetched.
 

@@ -1,6 +1,6 @@
 # Fetch and import
 
-`fetch:<run>` brings the candidates of a scheduled CI run to this machine, so a lesson the runner found can be promoted here after the runner is gone. The skill does the part that needs the network, with the user's own `gh`. The helper's `import` operation does the rest and never touches the network.
+`fetch:<run>.<attempt>` brings the candidates of one attempt of a scheduled CI run to this machine, so a lesson the runner found can be promoted here after the runner is gone. A bare `fetch:<run>` does the same for the newest attempt of that run. In every command below, `<run>` and `<attempt>` are the numbers `SKILL.md` already checked: positive integers, nothing else. The skill does the part that needs the network, with the user's own `gh`. The helper's `import` operation does the rest and never touches the network.
 
 A fetch dispatches no agent, asks nothing and takes no host observation. It uses neither `begin` nor `publish`. It ends with the `finalLine` that `import` answers, or with `Connect failed` for a stop before `import`.
 
@@ -36,10 +36,16 @@ It prints one JSON array of `{name, expired}` objects. Check the call before you
 - The command fails because `gh` is not logged in: stop with `gh-not-authenticated`.
 - The command fails for any other reason (a non-zero exit), or its output is not a JSON array: stop with `artifact-list-failed`. An empty array is an answer; a failed call is not. Never read a failed call as `artifact-not-found`.
 
-The record is in an artifact named `connect-run-<run>-<attempt>`, where `<attempt>` is digits only. Take the names that match that pattern for this run id exactly, and pick the one with the highest attempt. A run with attempts 1 and 2 downloads `connect-run-<run>-2`.
+The record is in an artifact named `connect-run-<run>-<attempt>`, where `<attempt>` is digits only. Take the names that match that pattern for this run id exactly.
+
+- With a bare `fetch:<run>`, pick the one with the highest attempt. A run with attempts 1 and 2 downloads `connect-run-<run>-2`.
+- With `fetch:<run>.<attempt>`, download exactly `connect-run-<run>-<attempt>` with that attempt. Do not pick the highest attempt. A report names the attempt a candidate came from, and a later attempt may not hold it.
+
+Then:
 
 - The call succeeded and no name matches: stop with `artifact-not-found`.
 - The chosen artifact is expired: stop with `artifact-expired`. The user can tick Rejected in the scheduled run's report, or wait for the candidate to be proposed again.
+- If the named attempt has no artifact, stop with `artifact-not-found`, even when another attempt of the run has one. If the named attempt's artifact is expired, stop with `artifact-expired`. Print the fixed reason and its hint only. Never fall back to another attempt and do not suggest one.
 
 ### 3. Download into a fresh directory
 
@@ -69,7 +75,7 @@ node "$SKILL_DIR/scripts/connect.mjs" import <<'JSON'
 JSON
 ```
 
-`directory` is the absolute path `mktemp -d` printed. `runId` is the run id from the `fetch:` word. Leave `commit` out when step 1 gave none.
+`directory` is the absolute path `mktemp -d` printed. `runId` is the run id from the `fetch:` word, without the attempt. Leave `commit` out when step 1 gave none. The record carries no attempt, so the request carries none either: the artifact name in step 2 is the only place the attempt is checked.
 
 If `node` is missing, the helper file is gone, or `import` prints no JSON answer, the helper is unavailable. Remove `<DEST>`, print `helper-unavailable` and its hint, then `Connect failed`. Nothing was imported.
 
@@ -97,7 +103,7 @@ Print the reason as it is, then the hint.
 | `run-not-found` | No run with that id in `marcusrbrown/systematic`. |
 | `gh-not-authenticated` | `gh` is not logged in, or its token cannot read this repository's runs. Run `gh auth login` and try again. |
 | `artifact-list-failed` | `gh` could not list the run's artifacts, or its answer was not a JSON array. Nothing was downloaded. Try again. |
-| `artifact-not-found` | The run has no `connect-run-<run>-<attempt>` artifact. It stopped before it made a record. |
+| `artifact-not-found` | The run has no `connect-run-<run>-<attempt>` artifact for the attempt asked for. It stopped before it made a record. |
 | `artifact-expired` | The record was kept for a limited time and is gone. Tick Rejected in the report, or wait for the candidate to be proposed again. |
 | `download-failed` | `gh run download` failed for another reason. Nothing was imported. |
 | `record-missing`, `record-symlink`, `record-not-regular`, `record-unreadable`, `directory-unreadable` | The downloaded directory does not hold a plain `run.json`. |

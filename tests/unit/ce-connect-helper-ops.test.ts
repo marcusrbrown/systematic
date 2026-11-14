@@ -3549,7 +3549,7 @@ describe('the report operations at the helper entry', () => {
       shown: 3,
       hidden: 0,
       fresh: 3,
-      runs: ['900'],
+      fetches: ['900.1'],
       outcome: 'complete',
       red: false,
       stateUpdated: true,

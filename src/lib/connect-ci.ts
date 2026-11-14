@@ -759,8 +759,8 @@ export type RenderResult =
       readonly hidden: number
       /** Candidates listed for the first time on this date. */
       readonly fresh: number
-      /** The GitHub runs the listed candidates came from, in the order they appear. */
-      readonly runs: readonly string[]
+      /** The `<run>.<attempt>` fetch words of the listed candidates, in the order they appear. */
+      readonly fetches: readonly string[]
       readonly outcome: ReportOutcome
       /** The workflow job turns red after posting. */
       readonly red: boolean
@@ -801,7 +801,7 @@ interface Assembled {
   readonly body: string
   readonly ids: readonly string[]
   readonly hash: string
-  readonly runs: readonly string[]
+  readonly fetches: readonly string[]
   readonly fresh: number
 }
 
@@ -834,6 +834,11 @@ function factsOf(id: string, payload: Payload): string {
   return lines.join('\n')
 }
 
+/** `<run>.<attempt>`: the artifact of the attempt that listed the candidate. A bare run would read the newest attempt. */
+function fetchWord(payload: Payload): string {
+  return `${payload.runId}.${payload.attempt}`
+}
+
 function blockOf(
   position: number,
   id: string,
@@ -845,7 +850,7 @@ function blockOf(
     lines.push(`Details unavailable for \`${id}\`.`)
   } else {
     lines.push(
-      `- Fetch: \`/ce:connect fetch:${payload.runId}\` (run ${payload.runId}, attempt ${payload.attempt})`,
+      `- Fetch: \`/ce:connect fetch:${fetchWord(payload)}\` (run ${payload.runId}, attempt ${payload.attempt})`,
       '',
       fenceText(factsOf(id, payload)),
     )
@@ -872,19 +877,23 @@ function ranges(positions: readonly number[]): string {
     .join(', ')
 }
 
-function fetchLines(rows: readonly Row[]): { runs: string[]; lines: string[] } {
-  const byRun = new Map<string, number[]>()
+function fetchLines(rows: readonly Row[]): {
+  fetches: string[]
+  lines: string[]
+} {
+  const byFetch = new Map<string, number[]>()
   rows.forEach((row, index) => {
     if (row.payload === undefined) return
-    const list = byRun.get(row.payload.runId) ?? []
+    const word = fetchWord(row.payload)
+    const list = byFetch.get(word) ?? []
     list.push(index + 1)
-    byRun.set(row.payload.runId, list)
+    byFetch.set(word, list)
   })
-  const lines = [...byRun].map(
-    ([run, positions]) =>
-      `- \`/ce:connect fetch:${run}\` for candidates ${ranges(positions)}`,
+  const lines = [...byFetch].map(
+    ([word, positions]) =>
+      `- \`/ce:connect fetch:${word}\` for candidates ${ranges(positions)}`,
   )
-  return { runs: [...byRun.keys()], lines }
+  return { fetches: [...byFetch.keys()], lines }
 }
 
 const RESET_NOTICE =
@@ -939,7 +948,7 @@ function assemble(input: BodyInput, shown: number): Assembled {
   for (const row of rows) out.push(row.block)
   out.push(DECISIONS_END, '')
   if (shown < open) out.push(hiddenLine(open - shown), '')
-  return { body: out.join('\n'), ids, hash, runs: fetch.runs, fresh }
+  return { body: out.join('\n'), ids, hash, fetches: fetch.fetches, fresh }
 }
 
 /** The most candidates whose report fits the cap: the oldest, whole, and never a block cut. */
@@ -1162,7 +1171,7 @@ function renderState(
     shown,
     hidden: open.length - shown,
     fresh: result.fresh,
-    runs: result.runs,
+    fetches: result.fetches,
     outcome,
     red: isRed(outcome),
     stateUpdated: recordState,

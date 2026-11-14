@@ -1,7 +1,7 @@
 ---
 name: ce:connect
 description: "Use when searching the projects the user has allowed for contradictions between their learnings, or for a lesson that one project recorded and a sibling project still needs. Also use when the user asks what their other projects have learned about a failure."
-argument-hint: "[mode:headless | mode:interactive] [group:<name> | projects:<a>,<b> | fetch:<run>]"
+argument-hint: "[mode:headless | mode:interactive] [group:<name> | projects:<a>,<b> | fetch:<run>[.<attempt>]]"
 metadata:
   harness-portability: neutral-v1
 ---
@@ -57,11 +57,11 @@ In the same pass, list every word that starts with `group:` or `projects:`, from
 
 ### Fetch word
 
-In the same pass, list every word that starts with `fetch:`. `fetch:<run>` brings the candidates of a scheduled CI run to this machine: `<run>` is the GitHub run id, digits only, at most 20 of them. The same `fetch:` word twice or more counts once.
+In the same pass, list every word that starts with `fetch:`. `fetch:<run>.<attempt>` brings the candidates of a scheduled CI run to this machine from exactly that attempt of the run. A bare `fetch:<run>` means the newest attempt of that run. A scheduled report prints the `<run>.<attempt>` form. `<run>` is the GitHub run id and `<attempt>` the attempt number; each is a positive integer, digits only, with no sign, no space and no leading zero. A `<run>` has at most 20 digits and an `<attempt>` at most 10. The value must match `^[1-9][0-9]{0,19}(\.[1-9][0-9]{0,9})?$` and nothing else. The same `fetch:` word twice or more counts once. `fetch:<run>` and `fetch:<run>.<attempt>` are different words.
 
 - A `fetch:` word together with a `group:` or `projects:` word: stop. The reason is `conflicting-selection: fetch: cannot be combined with group: or projects:`.
 - Two different `fetch:` words: stop. The reason is `conflicting-selection: two different fetch: words`.
-- A `fetch:` value that is empty or not digits only: stop. The reason is `invalid-request: fetch: needs a numeric GitHub run id`.
+- A `fetch:` value that does not match that pattern, such as an empty one, a zero attempt or a second dot: stop. The reason is `invalid-request: fetch: needs a numeric GitHub run id`. Check this before any value reaches a command.
 - A stop here happens before any command, in the two-line form of Step 1.
 - One valid `fetch:` word: skip Steps 2 to 7 and follow `references/fetch-and-import.md`. A fetch observes no host, dispatches no agent, asks nothing and takes no mode: `mode:` has no effect on it. It ends with the final line that reference names.
 

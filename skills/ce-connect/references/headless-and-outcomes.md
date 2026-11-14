@@ -36,14 +36,14 @@ The digest header and the run record name the selection: `all`, the group, or th
 
 ## Reading a fetch
 
-A `fetch:<run>` word is read from the same place as the mode tokens and the selection words. It brings the candidates of a scheduled CI run to this machine and follows `fetch-and-import.md`.
+A `fetch:<run>.<attempt>` word, or a bare `fetch:<run>` for the newest attempt, is read from the same place as the mode tokens and the selection words. It brings the candidates of a scheduled CI run to this machine and follows `fetch-and-import.md`.
 
 | Words found | Result |
 |---|---|
-| One `fetch:<run>`, or the same word twice or more | A fetch of that run. It observes no host, dispatches no agent and asks nothing, so `mode:` has no effect. |
+| One `fetch:<run>.<attempt>` or `fetch:<run>`, or the same word twice or more | A fetch of that attempt, or of the newest attempt of that run. It observes no host, dispatches no agent and asks nothing, so `mode:` has no effect. |
 | `fetch:` with a `group:` or `projects:` word | Stop: `conflicting-selection`. |
 | Two different `fetch:` words | Stop: `conflicting-selection`. |
-| An empty value, or a value that is not digits only | Stop: `invalid-request`. |
+| An empty value, or a value that is not a positive run id, or a run id and a positive attempt | Stop: `invalid-request`. |
 
 A stop here happens before any command. End as for a failed run: the reason on a line of its own, then `Connect failed`.
 
