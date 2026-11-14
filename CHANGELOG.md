@@ -4,6 +4,41 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.33.1](https://github.com/marcusrbrown/systematic/compare/v3.33.0...v3.33.1) (2026-11-14)
+
+### Bug Fixes
+
+* name the attempt a scheduled ce:connect candidate came from in its fetch line ([#1399](https://github.com/marcusrbrown/systematic/issues/1399)) ([e5d6f5d](https://github.com/marcusrbrown/systematic/commit/e5d6f5db1113acc413052e4b7c680f27d8bfd68b))
+
+### Build System
+
+* **deps:** update OpenCode v2 to v2.2.7 ([#1391](https://github.com/marcusrbrown/systematic/issues/1391)) ([bb1a567](https://github.com/marcusrbrown/systematic/commit/bb1a567e32146bb34c03bce4f4b85646a7ee5c46))
+* **deps:** update Pi to v1.5.1 ([#1382](https://github.com/marcusrbrown/systematic/issues/1382)) ([e025bb2](https://github.com/marcusrbrown/systematic/commit/e025bb271c7d57aa55cc0bce3e81e0517441409a))
+* **deps:** update Pi to v1.5.2 ([#1392](https://github.com/marcusrbrown/systematic/issues/1392)) ([61dee8e](https://github.com/marcusrbrown/systematic/commit/61dee8eecab7ff5e748c5127c5c4e95b60c0a75c))
+
+### Documentation
+
+* say the Claude Code bundle publishes on each release ([#1400](https://github.com/marcusrbrown/systematic/issues/1400)) ([79c996b](https://github.com/marcusrbrown/systematic/commit/79c996ba6c43ffc8ca68e2f65dc4d4484357df30))
+* **solutions:** record what running ce:connect through the agent action on a schedule taught ([#1394](https://github.com/marcusrbrown/systematic/issues/1394)) ([8a1711d](https://github.com/marcusrbrown/systematic/commit/8a1711d3912aa5d6b5b1cb6d4877f130a36e8c7b))
+
+### Tests
+
+* wait for plugins to load before listing agents on OpenCode v2 ([#1395](https://github.com/marcusrbrown/systematic/issues/1395)) ([a1c2627](https://github.com/marcusrbrown/systematic/commit/a1c2627b6e065348ff3f47bf4902c76e3b97fa33))
+
+### Continuous Integration
+
+* **connect:** bound the agent step so a hung run still posts, and record the live runs ([#1393](https://github.com/marcusrbrown/systematic/issues/1393)) ([dde91df](https://github.com/marcusrbrown/systematic/commit/dde91dfa1a63a0e5cbf39c49756c104e2af1715b))
+* **connect:** run a daily headless ce:connect slice and post a rotating report issue ([#1386](https://github.com/marcusrbrown/systematic/issues/1386)) ([950d2af](https://github.com/marcusrbrown/systematic/commit/950d2af1492be5273134f5adce1b72e432552853))
+* **connect:** set up the scheduled agent step like the Fro Bot workflow ([#1390](https://github.com/marcusrbrown/systematic/issues/1390)) ([39e66b3](https://github.com/marcusrbrown/systematic/commit/39e66b30214722c739e6f6b0ec17beef107bdec8))
+* **renovate:** bump the scheduled connect run's Systematic pin with each release ([#1397](https://github.com/marcusrbrown/systematic/issues/1397)) ([f42b18e](https://github.com/marcusrbrown/systematic/commit/f42b18e2b6891497fc9abb453f660f918eb303f0))
+* run the Fro Bot and scheduled connect agent steps through one shared action ([#1396](https://github.com/marcusrbrown/systematic/issues/1396)) ([50ec3ea](https://github.com/marcusrbrown/systematic/commit/50ec3ea14159dbdf76f989c853aacba0516a0a1a))
+* run the host contract only when a file it depends on changes ([#1398](https://github.com/marcusrbrown/systematic/issues/1398)) ([d3c5535](https://github.com/marcusrbrown/systematic/commit/d3c55351b7c0081d73477451a817f2e0d2163522))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.140.2 ([#1383](https://github.com/marcusrbrown/systematic/issues/1383)) ([f1c8c14](https://github.com/marcusrbrown/systematic/commit/f1c8c146d69269400d515443cb0cc00c85678a15))
+* **deps:** update fro-bot/agent to v0.140.3 ([#1388](https://github.com/marcusrbrown/systematic/issues/1388)) ([fab6f00](https://github.com/marcusrbrown/systematic/commit/fab6f00d16776b02b46cdf253f91abba280c8608))
+
 ## [3.33.0](https://github.com/marcusrbrown/systematic/compare/v3.32.3...v3.33.0) (2026-11-12)
 
 ### Features
