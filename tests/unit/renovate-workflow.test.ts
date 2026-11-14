@@ -57,7 +57,10 @@ interface RegexManager {
 
 interface PackageRule {
   matchPackageNames?: string[]
+  matchManagers?: string[]
   groupName?: string
+  semanticCommitType?: string
+  minimumReleaseAge?: string | null
 }
 
 interface RenovateConfig {
@@ -276,5 +279,104 @@ describe('renovate host-support row tracking', () => {
     ['@earendil-works/pi-coding-agent', 'Pi'],
   ])('%s lands in the %s group, with its host pin', (depName, group) => {
     expect(groupFor(config, depName)).toBe(group)
+  })
+})
+
+/**
+ * `.github/workflows/connect.yaml` pins `env.SYSTEMATIC_VERSION`, the release
+ * the scheduled run installs for the helper and passes to the agent action. A
+ * `renovate:` comment directly above the line lets a regex manager bump it when
+ * a new `@fro.bot/systematic` release reaches npm.
+ */
+const CONNECT_WORKFLOW_RELATIVE_PATH = '.github/workflows/connect.yaml'
+const SYSTEMATIC_PACKAGE = '@fro.bot/systematic'
+const SYSTEMATIC_ANNOTATION = `# renovate: datasource=npm depName=${SYSTEMATIC_PACKAGE}`
+
+describe('renovate Systematic pin tracking', () => {
+  const config = readRenovateConfig()
+  const managers = managersFor(config, CONNECT_WORKFLOW_RELATIVE_PATH)
+  const [manager] = managers
+  const source = fs.readFileSync(
+    path.resolve(process.cwd(), CONNECT_WORKFLOW_RELATIVE_PATH),
+    'utf8',
+  )
+  const workflow = yaml.load(source, { schema: yaml.JSON_SCHEMA }) as {
+    env: Record<string, unknown>
+  }
+
+  /** Every match of the manager's patterns over `text`, as Renovate reads them. */
+  function matches(text: string) {
+    return (manager?.matchStrings ?? []).flatMap((pattern) =>
+      [...text.matchAll(new RegExp(pattern, 'g'))].map((match) => ({
+        datasource: match.groups?.datasource,
+        depName: match.groups?.depName,
+        currentValue: match.groups?.currentValue,
+      })),
+    )
+  }
+
+  test('exactly one regex manager targets the connect workflow', () => {
+    expect(managers).toHaveLength(1)
+    expect(manager?.customType).toBe('regex')
+  })
+
+  test('it reads the annotated line as the Systematic package on npm', () => {
+    expect(matches(source)).toEqual([
+      {
+        datasource: 'npm',
+        depName: SYSTEMATIC_PACKAGE,
+        currentValue: workflow.env.SYSTEMATIC_VERSION as string,
+      },
+    ])
+  })
+
+  test('the annotation sits directly above the SYSTEMATIC_VERSION line', () => {
+    const lines = source.split('\n')
+    const index = lines.findIndex((line) =>
+      /^\s*SYSTEMATIC_VERSION:/.test(line),
+    )
+    expect(index).toBeGreaterThan(0)
+    expect(lines[index - 1]?.trim()).toBe(SYSTEMATIC_ANNOTATION)
+  })
+
+  test('a version line without the annotation directly above it does not match', () => {
+    expect(matches('  SYSTEMATIC_VERSION: "1.2.3"')).toEqual([])
+    expect(
+      matches(`  ${SYSTEMATIC_ANNOTATION}\n\n  SYSTEMATIC_VERSION: "1.2.3"`),
+    ).toEqual([])
+    expect(
+      matches(`  ${SYSTEMATIC_ANNOTATION}\n  OTHER_VERSION: "1.2.3"`),
+    ).toEqual([])
+    expect(
+      matches(`  ${SYSTEMATIC_ANNOTATION}\n  SYSTEMATIC_VERSION: "1.2.3"`),
+    ).toEqual([
+      { datasource: 'npm', depName: SYSTEMATIC_PACKAGE, currentValue: '1.2.3' },
+    ])
+  })
+
+  test('its file pattern selects the connect workflow, which no ignorePaths entry covers', () => {
+    for (const ignored of config.ignorePaths) {
+      expect(new Bun.Glob(ignored).match(CONNECT_WORKFLOW_RELATIVE_PATH)).toBe(
+        false,
+      )
+    }
+  })
+
+  test('no rule groups, holds back or releases the Systematic bump', () => {
+    const rules = config.packageRules.filter((rule) =>
+      rule.matchPackageNames?.some((pattern) =>
+        new Bun.Glob(pattern).match(SYSTEMATIC_PACKAGE),
+      ),
+    )
+    expect(groupFor(config, SYSTEMATIC_PACKAGE)).toBeUndefined()
+    for (const rule of rules) {
+      expect(rule.minimumReleaseAge ?? null).toBeNull()
+    }
+    // A pin bump is not a release of this package: `ci` is outside the
+    // releaseRules and the commit-analyzer defaults, where `feat` and `fix` release.
+    expect(rules.map((rule) => rule.semanticCommitType)).toContain('ci')
+    for (const rule of rules) {
+      expect(['feat', 'fix']).not.toContain(rule.semanticCommitType)
+    }
   })
 })
