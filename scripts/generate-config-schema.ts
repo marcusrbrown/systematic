@@ -258,6 +258,22 @@ function asObject(value: unknown): Record<string, unknown> | null {
 }
 
 /**
+ * Unwrap a trivial single-ref `allOf` wrapper (`{ allOf: [{ $ref: ... }] }`).
+ * Zod uses this shape when a schema has metadata (description, default,
+ * examples) at the wrapper level and the structural body (properties,
+ * additionalProperties) at the wrapped level. Returns the wrapped `$ref` node,
+ * or null if the node is not such a wrapper.
+ */
+function unwrapSingleRefAllOf(
+  node: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const allOf = node.allOf
+  if (!Array.isArray(allOf) || allOf.length !== 1) return null
+  const wrapped = asObject(allOf[0])
+  return wrapped !== null && '$ref' in wrapped ? wrapped : null
+}
+
+/**
  * Resolve a node that may be a `{ "$ref": "#/definitions/__schemaN" }` indirection
  * to the underlying definition object. Returns the node itself if it is not a ref,
  * or null if the ref is unresolvable. Mutating the returned object mutates the
@@ -298,17 +314,10 @@ function resolveRef(
       continue
     }
 
-    // Unwrap a trivial single-ref allOf wrapper. Zod uses this shape when a
-    // schema has metadata (description, default, examples) at the wrapper
-    // level and the structural body (properties, additionalProperties) at the
-    // wrapped level.
-    const allOf = current.allOf
-    if (Array.isArray(allOf) && allOf.length === 1) {
-      const wrapped = asObject(allOf[0])
-      if (wrapped !== null && '$ref' in wrapped) {
-        current = wrapped
-        continue
-      }
+    const wrapped = unwrapSingleRefAllOf(current)
+    if (wrapped !== null) {
+      current = wrapped
+      continue
     }
 
     return current
