@@ -1181,6 +1181,44 @@ describe('Fro Bot autoheal strategies', () => {
     ])
   })
 
+  test('records accepted High advisories so they stop escalating', () => {
+    const prompt = autohealPromptText()
+    const heading = prompt.indexOf('ACCEPTED RISKS\n')
+    expect(heading).toBeGreaterThan(prompt.indexOf('DECLINED FIXES\n'))
+    expect(heading).toBeLessThan(prompt.indexOf('SELF-CLEANUP'))
+
+    // The block runs from its heading to the next blank line.
+    const block = prompt.slice(heading).split('\n\n')[0] ?? ''
+    for (const id of [
+      // toml 4.3.0
+      'GHSA-h895-cgqg-jf52',
+      'GHSA-4qx8-w7c3-pj3p',
+      'GHSA-9j65-hcg3-gc64',
+      'GHSA-9qmh-m7c6-f92p',
+      // zod 4.1.8 / 3.25.76
+      'GHSA-mrhx-c7xc-m3w5',
+      // npm 11.18.0 embedded tar, undici, ip-address
+      'GHSA-r292-9mhp-454m',
+      'GHSA-2m5v-pch6-74hx',
+      'GHSA-qrxm-fqhp-jwvm',
+      'GHSA-xjj6-f33q-929c',
+      'GHSA-rfgv-xxqx-mfg5',
+      'GHSA-mwp4-54f8-5fhr',
+    ]) {
+      expect(block).toContain(id)
+    }
+    expectPromptFragments(block, [
+      'dev-only toolchain, not shipped',
+      'Report these under Security as accepted',
+      'Do not log them under Needs Human Attention',
+      'do not open a repair PR',
+      'Escalate again only on new evidence',
+      'reaches a shipped artifact or a runtime dependency',
+      'report that advisory as resolved',
+      'a newer advisory appears',
+    ])
+  })
+
   test('self-cleans only its own superseded PRs', () => {
     expectPromptFragments(autohealPromptText(), [
       'only when a newer fro bot pr fixes the same root cause',
