@@ -642,3 +642,15 @@ describe('one terminal result per persona (real helper)', () => {
     expect(corrected.status).toBe(0)
   })
 })
+
+describe('finalize plan-assessment verdict text', () => {
+  test('names the three allowed verdict strings and the non-clean replacement', () => {
+    const finalize = normalize(sectionByHeading(PIPELINE, '## finalize'))
+    expect(finalize).toContain(
+      '`plan_assessment.verdict` is exactly one of `Ready to merge`, `Ready with fixes`, or `Not ready`',
+    )
+    expect(finalize).toContain(
+      'finalize replaces it with a fixed non-clean phrase otherwise',
+    )
+  })
+})

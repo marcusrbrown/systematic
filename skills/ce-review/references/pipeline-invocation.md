@@ -447,7 +447,10 @@ carried state. `validator_lifecycle_results` carries one entry per
 is the model's Stage 2b requirements check: each result's `kind` routes it --
 `explicit_unmet_requirement` becomes residual actionable work and blocks a
 clean verdict; `inferred_gap` becomes advisory-only output and never blocks
-the verdict by itself. Neither kind becomes a finding. `parent_run_metadata`
+the verdict by itself. Neither kind becomes a finding. `plan_assessment.verdict`
+is exactly one of `Ready to merge`, `Ready with fixes`, or `Not ready`: it is
+the report's verdict text when the run is clean, and finalize replaces it with
+a fixed non-clean phrase otherwise. `parent_run_metadata`
 carries the run's own identity and mode; `validation` is the artifact
 self-validation envelope, but finalize is called before that
 [artifact validation](./synthesis-artifact-contract.md#artifact-validation)
