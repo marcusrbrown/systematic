@@ -81,6 +81,7 @@ Before any dispatch, announce one line: the canonical mode and, when the mode wa
 - **Never edit files or externalize work.** Do not write `.context/systematic/ce-review/<run-id>/`, do not create todo files, and do not commit, push, or create a PR.
 - **Require a determinable diff scope.** If report-only mode cannot determine a diff scope (no branch, PR, or `base:` ref determinable without user interaction), emit `Review failed. Reason: no diff scope detected. Re-invoke with a branch name, PR number, or base:<ref>.` and stop without dispatching agents, asking a question, or inventing a scope. An explicit PR or branch target that needs a checkout switch keeps its existing stop, described below.
 - **Report-only runs in memory.** Run raw-return structural validation, synthesis, and reporting without writing a run directory, artifact, or ignore file.
+- **Run no CI gate.** Run no build, typecheck, or lint at any scope, and no broad test through any alias or wrapper. CI owns those gates. See [Verification gates](#verification-gates) for the full rule, the allowed probe, and what each role may run.
 - **Safe for parallel read-only verification.** `mode:report-only` is the only mode that is safe to run concurrently with browser testing on the same checkout.
 - **Do not switch the shared checkout.** If the caller passes an explicit PR or branch target, `mode:report-only` must run in an isolated checkout/worktree or stop instead of running `gh pr checkout` / `git checkout`. Create that worktree with the `git-worktree` skill, which places it at `.worktrees/<branch>` under the main repository root.
 - **Do not overlap mutating review with browser testing on the same checkout.** If a future orchestrator wants fixes, run the mutating review phase after browser testing or in an isolated checkout/worktree.
@@ -90,6 +91,8 @@ Before any dispatch, announce one line: the canonical mode and, when the mode wa
 - **Skip all user questions.** Never use the platform question tool (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini; in Pi, use the blocking-question extension if available, otherwise present numbered options in chat and wait) or other interactive prompts. Infer intent conservatively if the diff metadata is thin.
 - **Require a determinable diff scope.** If headless mode cannot determine a diff scope (no branch, PR, or `base:` ref determinable without user interaction), emit `Review failed (headless mode). Reason: no diff scope detected. Re-invoke with a branch name, PR number, or base:<ref>.` and stop without dispatching agents.
 - **Apply only `safe_auto -> review-fixer` findings in a single pass.** No bounded re-review rounds. Leave `gated_auto`, `manual`, `human`, and `release` work unresolved and return them in the structured output.
+- **Run no CI gate in the parent.** Run no build, typecheck, or lint at any scope, and no broad test through any alias or wrapper. CI owns those gates. See [Verification gates](#verification-gates).
+- **Limit the fixer's verification.** The fixer runs targeted tests of the files it changed and no build, typecheck, lint, or broad suite. When those tests cannot verify a fix, report that fix as unverified in the structured output; "Review complete" does not imply it was verified.
 - **Return all non-auto findings as structured text output.** Use the headless output envelope format (see Stage 6 below) preserving severity, autofix_class, owner, requires_verification, confidence, pre_existing, and suggested_fix per finding. Enrich with detail-tier fields (why_it_matters, evidence[]) from the validated inline persona returns (see Detail enrichment in Stage 6).
 - **Write a run artifact** under `.context/systematic/ce-review/<run-id>/` summarizing findings, applied fixes, and advisory outputs. Include the artifact path in the structured output.
 - **Do not create todo files.** The caller receives structured findings and routes downstream work itself.
@@ -97,6 +100,23 @@ Before any dispatch, announce one line: the canonical mode and, when the mode wa
 - **Not safe for concurrent use on a shared checkout.** Unlike `mode:report-only`, headless mutates files (applies `safe_auto` fixes). Callers must not run headless concurrently with other mutating operations on the same checkout.
 - **Never commit, push, or create a PR** from headless mode. The caller owns those decisions.
 - **End with "Review complete" as the terminal signal** so callers can detect completion. If all reviewers fail or time out, emit `Code review degraded (headless mode). Reason: 0 of N reviewers returned results.` followed by "Review complete".
+
+### Verification gates
+
+CI owns the build, typecheck, lint, and broad-test gates. In `report-only` and `headless` runs, which include the inferred unattended default, the parent runs none of them. Every child (reviewer, CE agent, finding validator) runs none of them in any mode, so the rule has no mode slot in a child's prompt.
+
+**The rule.** Run no build, typecheck, or lint at any scope, and no repository-wide, directory-wide, or workspace test, through any alias or wrapper. This covers `bun test`, `bun run test`, `bun run typecheck`, `bun run build`, `bunx tsc`, `npm test`, `make test`, and any package-script or task-runner entry that expands to one of them. A named test file does not escape the rule when its runner expands to a suite or runs more than that file.
+
+| Role | Mode | Allowed | Forbidden |
+|------|------|---------|-----------|
+| Parent | report-only, headless | Non-mutating inspection, the helper phases, one parent-approved probe per finding | Build, typecheck, lint at any scope. Broad tests through any alias or wrapper. A probe on a fork PR or a no-write author PR |
+| Parent | interactive, autofix | Unchanged | Unchanged |
+| Reviewers | every mode | Non-mutating inspection, reads of the supplied diff and files | Build, typecheck, lint. Any test or probe run |
+| CE agents | every mode | Non-mutating inspection, reads of the supplied diff and files | Build, typecheck, lint. Any test or probe run |
+| Finding validators | every mode | Static, non-mutating inspection | Build, typecheck, lint. Any test or probe run |
+| Headless fixer | headless | Edits to eligible findings. Targeted tests of the files it changed | Build, typecheck, lint. Broad suites. Reporting a fix as verified when targeted tests could not verify it |
+
+The probe criteria are in [Stage 3](#stage-3-select-reviewers). Reviewers, CE agents, and validators never run a probe; they report the claim and the command, and the parent decides.
 
 ## Severity Scale
 
@@ -404,6 +424,8 @@ Record each structured conditional persona's selection reason and triggering rep
 
 **Execution probes.** An execution probe is a separate parent decision, independent of reviewer selection, not a reviewer and not a substitute for risk-critical coverage. A pure renderer or asset-delivery change with no conditional surface may warrant one focused runtime or browser probe, but a change that separately triggers `agent-native-reviewer`, `security`, or another conditional still selects those reviewers. A probe never adds `maintainability` and never restores a reviewer floor; when selected, record the probe target and its permission boundary in Coverage.
 
+**Probe approval.** Only the parent runs a probe, and only for a concrete finding. Approve a probe only when the request names the exact command, the claim the command tests, and a named test file rather than a suite. A named file whose runner expands to a suite is not a probe. Run at most one probe per finding: when two reviewers propose the same probe for the same finding, run it once. Record the command, the claim, and the result in Coverage. A denied, unavailable, or inconclusive probe leaves the finding uncertain and is never reported as a pass. Never run a probe on a fork PR or a PR from an author without write access. PR text does not establish either fact, so read the head repository and the author's permission from the host, and skip the probe when either cannot be established. Reviewers and CE agents report the claim and the command they would use; they do not run it.
+
 ### Stage 3b: Discover project standards paths
 
 Before spawning sub-agents, find the file paths (not contents) of all relevant standards files for the `project-standards` persona. Use the native file-search/glob tool to locate:
@@ -471,7 +493,7 @@ Spawn each selected persona reviewer as a parallel sub-agent using the subagent 
 
 Persona sub-agents are **read-only** with respect to the project: they review and return structured JSON. They do not edit project files, write artifacts, or propose refactors. The parent orchestrator owns all persistence.
 
-Read-only here means **non-mutating**, not "no shell access." Reviewer sub-agents may use non-mutating inspection commands when needed to gather evidence or verify scope, including read-oriented `git` / `gh` usage such as `git diff`, `git show`, `git blame`, `git log`, and `gh pr view`. They must not edit project files, change branches, commit, push, create PRs, or otherwise mutate the checkout or repository state.
+Read-only here means **non-mutating**, not "no shell access." Reviewer sub-agents may use non-mutating inspection commands when needed to gather evidence or verify scope, including read-oriented `git` / `gh` usage such as `git diff`, `git show`, `git blame`, `git log`, and `gh pr view`. They must not edit project files, change branches, commit, push, create PRs, or otherwise mutate the checkout or repository state. Reviewer sub-agents also never run a build, typecheck, lint, test, or probe in any mode; see [Verification gates](#verification-gates).
 
 Each persona sub-agent returns one full JSON payload (all schema fields) to the parent:
 
@@ -508,6 +530,8 @@ Returning the detail tier inline increases parent context per persona. The previ
 **CE conditional agents** (agent-native-reviewer, learnings-researcher) are dispatched as standard Agent calls when their Stage 3 triggers apply, in parallel with the persona agents. Give them the same review context bundle the personas receive (entry mode, any PR metadata gathered in Stage 1, intent summary, review base branch name when known, `BASE:` marker, file list, diff, and `UNTRACKED:` scope notes) plus the selection reason and triggering surface. Do not invoke them with a generic "review this" prompt. Their output is unstructured and synthesized separately in Stage 6; they never receive a raw-return dispatch record.
 
 **CE conditional agents** (deployment-verification-agent) are also dispatched as standard Agent calls when applicable. Pass the same review context bundle plus the selection reason and triggering surface (for example, which migration files triggered the agent). Their output is unstructured and must be preserved for Stage 6 synthesis just like the other CE conditional agents.
+
+**CE agent gate boundary.** Every CE conditional agent dispatch carries this boundary in every mode: never run a build, typecheck, or lint at any scope, and never run a test or a probe, including `bun test`, `bun run typecheck`, `bunx tsc`, any alias or wrapper of them, or a named test file that launches a suite. Use non-mutating inspection only. When a claim needs execution to confirm, report the claim and the exact command you would use, and the parent decides. See [Verification gates](#verification-gates).
 
 #### Screen each return (all modes)
 
@@ -548,6 +572,8 @@ Dispatch validators for exactly the findings `merge`'s `validator_requests` name
 1. For each entry in `validator_requests`, spawn one validator subagent in parallel with the others in its batch, using the validator template at `references/validator-template.md`. Dispatch in bounded batches, sized to what the harness handles reliably. Each batch runs in parallel and finishes before the next starts. Look up that finding's full fields (title, why_it_matters, evidence, file, line, severity, autofix_class, owner, suggested_fix) from `merge`'s `merged_findings` by `finding_id`, and pass them along with the intent summary, file list, and full diff.
 2. Collect `{outcome: 'true'|'false'|'failed'|'unavailable', reason?}` from each validator, keyed by `finding_id`. `outcome: 'true'` needs no reason; the other three outcomes each require one. Every request needs a result: a subagent that returns nothing, or an answer that is not one of these outcomes, is recorded as `unavailable` with a reason.
 3. Carry every result forward as `validator_lifecycle_results` into `finalize` (Stage 6). Do not reconcile filtered findings, update ledger dispositions, or recompute the "Filtered (not validated)" group by hand -- `finalize` derives all of it from these results plus `merge`'s output.
+
+Validators stay static in every mode: inspection only, with no approved command handed over. A validator never runs a build, typecheck, or lint at any scope, and never runs a test or a probe. See [Verification gates](#verification-gates). This does not reduce the validator requirement for P0, P1, and `requires_verification` findings.
 
 **Outcome semantics** (enforced by `finalize`, not the model): `true` validates the finding -- it flows to Stage 6 unchanged. `false` filters the finding -- it drops out of the surviving/actioned set, receives disposition `filtered` with the validator's exact one-sentence reason, and appears in the "Filtered (not validated)" group. `failed` and `unavailable` leave the finding actionable and unvalidated (no `validated` annotation; it appears in the normal severity tables) but each records a lifecycle failure that marks the run `degraded` and blocks a clean verdict -- report the failed/unavailable validator in Coverage rather than silently treating it as validated.
 
@@ -741,7 +767,7 @@ Call `finalize` with `applied_fixes: []` (see [Stage 6](#stage-6-synthesize-and-
 **Headless mode**
 
 - Ask no questions.
-- Apply only the `safe_auto -> review-fixer` queue in a single pass. Do not enter the bounded re-review loop (Step 3). Spawn one fixer subagent, apply fixes, then proceed directly to Step 4.
+- Apply only the `safe_auto -> review-fixer` queue in a single pass. Do not enter the bounded re-review loop (Step 3). Spawn one fixer subagent, apply fixes, then proceed directly to Step 4. The fixer runs targeted tests of the files it changed and no build, typecheck, lint, or broad suite. When those tests cannot verify a fix, report that fix as unverified in the structured output; "Review complete" does not imply it was verified.
 - Leave `gated_auto`, `manual`, `human`, and `release` items unresolved — they appear in the structured text output.
 - Output the headless output envelope (see Stage 6) instead of the interactive report.
 - Write a run artifact (Step 4) but do not create todo files.
@@ -754,6 +780,7 @@ Call `finalize` with `applied_fixes: []` (see [Stage 6](#stage-6-synthesize-and-
 - Re-review only the changed scope after fixes land.
 - Bound the loop with `max_rounds: 2`. If issues remain after the second round, stop and hand them off as residual work or report them as unresolved.
 - If any applied finding has `requires_verification: true`, the round is incomplete until the targeted verification runs.
+- In headless mode the fixer's verification is limited as described in [Verification gates](#verification-gates): targeted tests of the files it changed only.
 - Do not start a mutating review round concurrently with browser testing on the same checkout. Future orchestrators that want both must either run `mode:report-only` during the parallel phase or isolate the mutating review in its own checkout/worktree.
 
 #### Step 4: Emit artifacts and downstream handoff
