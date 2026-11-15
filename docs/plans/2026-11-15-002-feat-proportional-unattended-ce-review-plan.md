@@ -260,7 +260,7 @@ Each unit lands as one atomic commit. Surface rules for every unit:
 
 ### Phase 1: PR 1, contract, unattended safety and selection
 
-- [ ] U1. Mode default, `read-only` alias and visible failure
+- [x] U1. Mode default, `read-only` alias and visible failure
 
 **Goal:** With no mode token and nobody able to answer, `ce:review` runs report-only and says so. `read-only` is an alias.
 
@@ -301,7 +301,7 @@ No committed docs page lists the mode tokens. The `ce:review` reference page on 
 **Verification:**
 - The announced mode line names the canonical mode and the reason. A reader of the skill cannot reach an interactive prompt on an unattended path.
 
-- [ ] U2. Gate boundaries for every role
+- [x] U2. Gate boundaries for every role
 
 **Goal:** CI owns the build, typecheck, lint and broad-test gates. The parent in a report-only or headless run, and every child in any run, runs none of them.
 
@@ -353,7 +353,7 @@ No committed docs page lists the mode tokens. The `ce:review` reference page on 
 **Verification:**
 - A reader can answer "may this role run X in this mode" for the parent, a reviewer, a CE agent, a validator and the fixer from the table alone.
 
-- [ ] U3. Reviewer schema view and a screened example
+- [x] U3. Reviewer schema view and a screened example
 
 **Goal:** What a reviewer is shown matches what `screen` accepts.
 
@@ -397,7 +397,7 @@ No committed docs page lists the mode tokens. The `ce:review` reference page on 
 **Verification:**
 - The review-schemas drift check passes with the new output. The registry lists the new file.
 
-- [ ] U4. Rejection diagnostics and the machine-readable channel
+- [x] U4. Rejection diagnostics and the machine-readable channel
 
 **Goal:** A rejected return tells the parent every fault in one pass, safely, and hands over the helper's own structured rejection.
 
@@ -444,7 +444,7 @@ No committed docs page lists the mode tokens. The `ce:review` reference page on 
 **Verification:**
 - The validator surface drift check passes. Admission behavior is byte-for-byte unchanged on the existing screen tests.
 
-- [ ] U5. Re-ask policy and one terminal result per persona
+- [x] U5. Re-ask policy and one terminal result per persona
 
 **Goal:** A rejected reviewer gets one bounded second chance, and the pipeline ledger stays coherent.
 
@@ -491,7 +491,7 @@ No committed docs page lists the mode tokens. The `ce:review` reference page on 
 **Verification:**
 - A fixture run with one rejected and one corrected reviewer finalizes with one dispatch entry per persona.
 
-- [ ] U6. Proportional reviewer selection
+- [x] U6. Proportional reviewer selection
 
 **Goal:** Deletion-only and docs-only changes get the core three, without hiding semantic risk.
 
