@@ -44,6 +44,10 @@ inputs:
     description: Comma-separated path prefixes the brokered push may touch beyond the defaults.
     required: false
     default: ""
+  isolate-agent:
+    description: Run the agent as its own user in a read-only view of the runner, true or false.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -64,6 +68,7 @@ runs:
         systematic-version: ${{ inputs.systematic-version }}
         trusted-head-sha: ${{ inputs.trusted-head-sha }}
         brokered-push-extra-paths: ${{ inputs.brokered-push-extra-paths }}
+        isolate-agent: ${{ inputs.isolate-agent }}
         # The action's own runtime is unbounded; each caller bounds the step or
         # the job instead.
         timeout: 0
