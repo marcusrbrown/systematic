@@ -2,12 +2,15 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
+  generateFindingsSchemaContent,
   generatePipelineSchemaContent,
+  generateReviewerReturnSchemaContent,
   generateSchemaContent,
   normalizeForCompare,
   PIPELINE_SCHEMA_RELATIVE_PATH,
   REVIEW_SCHEMA_RELATIVE_PATH,
   REVIEW_SCHEMA_TARGETS,
+  REVIEWER_RETURN_SCHEMA_RELATIVE_PATH,
 } from '../../scripts/generate-review-artifact-schema.js'
 
 const REPO_ROOT = path.resolve(import.meta.dir, '../..')
@@ -148,18 +151,70 @@ describe('review artifact schema generator', () => {
     expect(output(result)).toContain(FINDINGS_SCHEMA_RELATIVE_PATH)
   })
 
-  test('owns exactly the three ce:review schemas and isolates document-review', () => {
+  test('owns exactly the four ce:review schemas and isolates document-review', () => {
     const targets = REVIEW_SCHEMA_TARGETS.map((target) => target.relativePath)
 
     expect(targets).toEqual([
       'skills/ce-review/references/review-summary-schema.json',
       'skills/ce-review/references/findings-schema.json',
+      REVIEWER_RETURN_SCHEMA_RELATIVE_PATH,
       PIPELINE_SCHEMA_RELATIVE_PATH,
     ])
     expect(targets).not.toContain(
       'skills/document-review/references/findings-schema.json',
     )
     expect(generateSchemaContent()).not.toContain('document-review')
+  })
+
+  test('--check exits nonzero and names the reviewer view on drift', () => {
+    const viewPath = path.join(REPO_ROOT, REVIEWER_RETURN_SCHEMA_RELATIVE_PATH)
+    const original = fs.readFileSync(viewPath, 'utf8')
+    try {
+      fs.writeFileSync(viewPath, `${original}\n`, 'utf8')
+      const result = runGenerator('--check')
+
+      expect(result.exitCode).toBe(1)
+      expect(output(result)).toContain(REVIEWER_RETURN_SCHEMA_RELATIVE_PATH)
+    } finally {
+      fs.writeFileSync(viewPath, original, 'utf8')
+    }
+  })
+
+  test('the reviewer view is rooted at subAgentReturn with byte-equal definitions', () => {
+    const view = JSON.parse(generateReviewerReturnSchemaContent()) as {
+      readonly $ref: string
+      readonly definitions: Record<string, unknown>
+    }
+    const full = JSON.parse(generateFindingsSchemaContent()) as {
+      readonly $ref: string
+      readonly definitions: Record<string, unknown>
+    }
+
+    expect(view.$ref).toBe('#/definitions/subAgentReturn')
+    expect(full.$ref).toBe('#/definitions/parentRecord')
+    expect(Object.keys(view.definitions).sort()).toEqual([
+      'subAgentFinding',
+      'subAgentReturn',
+    ])
+    for (const [name, definition] of Object.entries(view.definitions)) {
+      expect(JSON.stringify(definition), name).toBe(
+        JSON.stringify(full.definitions[name]),
+      )
+    }
+  })
+
+  test('the reviewer view carries no parent-owned record or field', () => {
+    const content = generateReviewerReturnSchemaContent()
+
+    for (const name of [
+      'parentRecord',
+      'parentFinding',
+      'harness',
+      'dispatch_outcome',
+      'disposition',
+    ]) {
+      expect(content, name).not.toContain(name)
+    }
   })
 
   test('the generated pipeline schema excludes helper-produced internal phase state', () => {

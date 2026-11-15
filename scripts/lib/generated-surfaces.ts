@@ -125,6 +125,7 @@ export const GENERATED_SURFACES: readonly GeneratedSurface[] = [
     outputs: [
       'skills/ce-review/references/review-summary-schema.json',
       'skills/ce-review/references/findings-schema.json',
+      'skills/ce-review/references/reviewer-return-schema.json',
       'skills/ce-review/references/review-pipeline-schema.json',
     ],
     triggers: [

@@ -5,6 +5,7 @@
  * Targets:
  *   - skills/ce-review/references/review-summary-schema.json (aggregate artifact)
  *   - skills/ce-review/references/findings-schema.json (raw return + parent record)
+ *   - skills/ce-review/references/reviewer-return-schema.json (reviewer-rooted view of the findings schema)
  *   - skills/ce-review/references/review-pipeline-schema.json (model-authored pipeline envelopes)
  *
  * Usage:
@@ -37,6 +38,8 @@ export const REVIEW_SCHEMA_RELATIVE_PATH =
   'skills/ce-review/references/review-summary-schema.json'
 export const FINDINGS_SCHEMA_RELATIVE_PATH =
   'skills/ce-review/references/findings-schema.json'
+export const REVIEWER_RETURN_SCHEMA_RELATIVE_PATH =
+  'skills/ce-review/references/reviewer-return-schema.json'
 export const PIPELINE_SCHEMA_RELATIVE_PATH =
   'skills/ce-review/references/review-pipeline-schema.json'
 
@@ -44,6 +47,9 @@ const DRAFT_7_URI = 'http://json-schema.org/draft-07/schema#'
 const FINDINGS_SCHEMA_TITLE = 'Code Review Findings'
 const FINDINGS_SCHEMA_DESCRIPTION =
   'Structured output schemas for code review sub-agent returns and parent-persisted records'
+const REVIEWER_RETURN_SCHEMA_TITLE = 'Code Review Reviewer Return'
+const REVIEWER_RETURN_SCHEMA_DESCRIPTION =
+  'The payload a code review sub-agent returns to the parent: exactly the subAgentReturn shape. Parent-owned fields are not part of it.'
 const PIPELINE_SCHEMA_TITLE = 'Code Review Pipeline Envelopes'
 const PIPELINE_SCHEMA_DESCRIPTION =
   'Structured output schemas for the model-authored envelopes of the ce:review synthesis pipeline (adjudication decisions, validator lifecycle results, and plan assessment). Helper-produced internal phase state (screen output, prepared state, merge output, finalize output) is intentionally excluded: it is TypeScript/Zod-only and never authored by a model.'
@@ -124,16 +130,24 @@ function setFindingsItemsRef(
   findings.items = { $ref: ref }
 }
 
+interface FindingsDocument {
+  readonly $schema: string
+  readonly title: string
+  readonly description: string
+  readonly $ref: string
+  readonly definitions: Record<string, unknown>
+}
+
 /**
- * Generate the formatted findings JSON Schema (raw return + parent record) from
- * the canonical Zod schemas.
+ * Build the findings document (raw return + parent record) from the canonical
+ * Zod schemas. Both the findings schema and the reviewer view derive from it.
  *
- * The published document keeps its envelope (title, description, draft, and a
- * top-level `$ref` to the parent record) and hoists both finding shapes into
- * named `subAgentFinding` / `parentFinding` definitions referenced by the
+ * The document keeps its envelope (title, description, draft, and a top-level
+ * `$ref` to the parent record) and hoists both finding shapes into named
+ * `subAgentFinding` / `parentFinding` definitions referenced by the
  * `subAgentReturn` / `parentRecord` definitions.
  */
-export function generateFindingsSchemaContent(): string {
+function buildFindingsDocument(): FindingsDocument {
   const subAgentFinding = toDefinition(SubAgentFindingSchema)
   const parentFinding = toDefinition(ParentFindingSchema)
   const subAgentReturn = toDefinition(SubAgentReturnSchema)
@@ -142,7 +156,7 @@ export function generateFindingsSchemaContent(): string {
   setFindingsItemsRef(subAgentReturn, '#/definitions/subAgentFinding')
   setFindingsItemsRef(parentRecord, '#/definitions/parentFinding')
 
-  const document = {
+  return {
     $schema: DRAFT_7_URI,
     title: FINDINGS_SCHEMA_TITLE,
     description: FINDINGS_SCHEMA_DESCRIPTION,
@@ -154,10 +168,88 @@ export function generateFindingsSchemaContent(): string {
       parentRecord,
     },
   }
+}
+
+/** Generate the formatted findings JSON Schema, rooted at the parent record. */
+export function generateFindingsSchemaContent(): string {
+  const formatted = formatJsonWithBiome(
+    `${JSON.stringify(buildFindingsDocument(), null, 2)}\n`,
+    'findings-schema.json',
+  )
+  return ensureTrailingNewline(formatted)
+}
+
+const DEFINITION_REF_PREFIX = '#/definitions/'
+
+/** Every `#/definitions/<name>` reference found anywhere inside a JSON value. */
+function collectDefinitionRefs(value: unknown, found: Set<string>): void {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectDefinitionRefs(item, found)
+    }
+    return
+  }
+  if (typeof value !== 'object' || value === null) {
+    return
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (
+      key === '$ref' &&
+      typeof child === 'string' &&
+      child.startsWith(DEFINITION_REF_PREFIX)
+    ) {
+      found.add(child.slice(DEFINITION_REF_PREFIX.length))
+    } else {
+      collectDefinitionRefs(child, found)
+    }
+  }
+}
+
+/**
+ * Generate the reviewer-rooted view of the findings schema.
+ *
+ * The view is derived, never authored: it re-roots the generated findings
+ * document at `subAgentReturn` and keeps only the definitions that root
+ * reaches, each unchanged. The parent-only records and fields never appear in
+ * what a reviewer is shown. `findings-schema.json` keeps its parent-record
+ * root.
+ */
+export function generateReviewerReturnSchemaContent(): string {
+  const { definitions } = buildFindingsDocument()
+  const rootName = 'subAgentReturn'
+  if (!(rootName in definitions)) {
+    throw new Error(`generated findings schema is missing ${rootName}`)
+  }
+
+  const reachable = new Set<string>([rootName])
+  const queue = [rootName]
+  for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
+    const refs = new Set<string>()
+    collectDefinitionRefs(definitions[name], refs)
+    for (const ref of refs) {
+      if (!reachable.has(ref)) {
+        if (!(ref in definitions)) {
+          throw new Error(`generated findings schema is missing ${ref}`)
+        }
+        reachable.add(ref)
+        queue.push(ref)
+      }
+    }
+  }
+
+  const document = {
+    $schema: DRAFT_7_URI,
+    title: REVIEWER_RETURN_SCHEMA_TITLE,
+    description: REVIEWER_RETURN_SCHEMA_DESCRIPTION,
+    $ref: `${DEFINITION_REF_PREFIX}${rootName}`,
+    definitions: Object.fromEntries(
+      Object.entries(definitions).filter(([name]) => reachable.has(name)),
+    ),
+  }
 
   const formatted = formatJsonWithBiome(
     `${JSON.stringify(document, null, 2)}\n`,
-    'findings-schema.json',
+    'reviewer-return-schema.json',
   )
   return ensureTrailingNewline(formatted)
 }
@@ -209,6 +301,10 @@ export const REVIEW_SCHEMA_TARGETS: readonly ReviewSchemaTarget[] = [
   {
     relativePath: FINDINGS_SCHEMA_RELATIVE_PATH,
     generate: generateFindingsSchemaContent,
+  },
+  {
+    relativePath: REVIEWER_RETURN_SCHEMA_RELATIVE_PATH,
+    generate: generateReviewerReturnSchemaContent,
   },
   {
     relativePath: PIPELINE_SCHEMA_RELATIVE_PATH,

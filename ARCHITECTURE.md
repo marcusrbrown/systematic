@@ -509,8 +509,10 @@ config stays in sync with the generated bundled assets and is one entry in that 
 **Review artifact contract** (`src/lib/review-artifact-schema.ts`) — Zod source of truth for the
 `ce:review` run-level `review-summary.json` artifact. `scripts/generate-review-artifact-schema.ts`
 generates the committed JSON Schema at `skills/ce-review/references/review-summary-schema.json`,
-plus `findings-schema.json` and `review-pipeline-schema.json` (the latter covers only the
-model-authored `review-pipeline.v1` envelopes — adjudication, validator-lifecycle-result, and
+plus `findings-schema.json`, `reviewer-return-schema.json` (a view of the findings schema
+re-rooted at the reviewer return and derived from the same generated document, so it cannot
+drift; it is the schema a reviewer is shown) and `review-pipeline-schema.json` (the latter
+covers only the model-authored `review-pipeline.v1` envelopes — adjudication, validator-lifecycle-result, and
 plan-assessment — from `review-pipeline-contract.ts`; helper-produced phase state stays
 TypeScript-only, in `review-pipeline.ts` and its tests), and is gated against drift via `--check`
 (`bun run review-schema:drift`). `systematic

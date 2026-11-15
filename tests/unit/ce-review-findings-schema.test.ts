@@ -9,6 +9,10 @@ const schemaPath = path.resolve(
   import.meta.dir,
   '../../skills/ce-review/references/findings-schema.json',
 )
+const viewPath = path.resolve(
+  import.meta.dir,
+  '../../skills/ce-review/references/reviewer-return-schema.json',
+)
 const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8')) as Record<
   string,
   unknown
@@ -893,21 +897,29 @@ describe('generated findings document', () => {
     expect(asRecord(definitions.parentRecord).additionalProperties).toBe(false)
   })
 
-  test('the reviewer prompt consumes the committed generated schema payload', () => {
+  test('the reviewer prompt consumes the committed reviewer-rooted view', () => {
     const templatePath = path.resolve(
       import.meta.dir,
       '../../skills/ce-review/references/subagent-template.md',
     )
     const template = fs.readFileSync(templatePath, 'utf8')
-    const committed = fs.readFileSync(schemaPath, 'utf8')
+    const committed = fs.readFileSync(viewPath, 'utf8')
+    const view = JSON.parse(committed) as Record<string, unknown>
     const prompt = template.replace('{schema}', committed)
 
     expect(template).toContain('{schema}')
     expect(prompt).toContain(committed)
 
-    for (const description of collectDescriptions(schema.definitions)) {
+    for (const description of collectDescriptions(view.definitions)) {
       expect(prompt).toContain(description)
     }
+
+    // The reviewer sees the return and finding shapes and nothing parent-owned.
+    expect(Object.keys(asRecord(view.definitions)).sort()).toEqual([
+      'subAgentFinding',
+      'subAgentReturn',
+    ])
+    expect(prompt).not.toContain('parentRecord')
 
     const definitions = asRecord(schema.definitions)
     for (const name of [

@@ -484,7 +484,7 @@ Spawn each selected persona reviewer as a parallel sub-agent using the subagent 
 
 1. Their persona file content (identity, failure modes, calibration, suppress conditions)
 2. Shared diff-scope rules from the diff-scope reference included below
-3. The JSON output contract from the findings schema included below
+3. The JSON output contract from the reviewer return schema included below, with its populated example
 4. PR metadata: title, body, and URL when reviewing a PR (empty string otherwise). Passed in a `<pr-context>` block so reviewers can verify code against stated intent
 5. Review context: intent summary, file list, diff
 6. Reviewer name for the returned `reviewer` field
@@ -837,9 +837,9 @@ If the platform doesn't support parallel sub-agents, run reviewers sequentially.
 
 @./references/diff-scope.md
 
-### Findings Schema
+### Reviewer Return Schema
 
-@./references/findings-schema.json
+@./references/reviewer-return-schema.json
 
 ### Synthesis Artifact Contract
 

@@ -180,8 +180,9 @@ checks behind `bun run surfaces:drift`.
   `--check` for drift detection
 - `scripts/generate-config-schema.ts` — JSON Schema codegen + drift check
 - `scripts/generate-review-artifact-schema.ts` — regenerates
-  `skills/ce-review/references/review-summary-schema.json`, `findings-schema.json`, and
-  `review-pipeline-schema.json` from the Zod schemas in `src/lib/review-artifact-schema.ts` and
+  `skills/ce-review/references/review-summary-schema.json`, `findings-schema.json`,
+  `reviewer-return-schema.json` (the reviewer-rooted view), and `review-pipeline-schema.json`
+  from the Zod schemas in `src/lib/review-artifact-schema.ts` and
   `src/lib/review-pipeline-contract.ts`; pass `--check` for drift detection (`bun run review-schema:drift`)
 - `scripts/generate-ce-review-validator.ts` — bundles `src/ce-review-validator.ts` into the
   committed `skills/ce-review/scripts/validate-review.mjs`; pass `--check` for drift detection

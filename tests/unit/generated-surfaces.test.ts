@@ -21,6 +21,7 @@ import {
   FINDINGS_SCHEMA_RELATIVE_PATH,
   PIPELINE_SCHEMA_RELATIVE_PATH,
   REVIEW_SCHEMA_RELATIVE_PATH,
+  REVIEWER_RETURN_SCHEMA_RELATIVE_PATH,
 } from '../../scripts/generate-review-artifact-schema.js'
 import {
   checkPreflight,
@@ -131,6 +132,7 @@ describe('GENERATED_SURFACES', () => {
       [
         REVIEW_SCHEMA_RELATIVE_PATH,
         FINDINGS_SCHEMA_RELATIVE_PATH,
+        REVIEWER_RETURN_SCHEMA_RELATIVE_PATH,
         PIPELINE_SCHEMA_RELATIVE_PATH,
       ].sort(),
     )
