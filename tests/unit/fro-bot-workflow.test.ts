@@ -1275,13 +1275,17 @@ describe('Fro Bot autoheal strategies', () => {
     expect(froBot['timeout-minutes']).toBe(30)
   })
 
-  test('forbids ce:* skills in the PR review prompt', () => {
+  test('leaves the CI gates to CI in the PR review prompt', () => {
     const env = asRecord(readWorkflow().workflow.env, 'workflow env')
     const review = asString(env.PR_REVIEW_PROMPT, 'PR_REVIEW_PROMPT')
 
     expectPromptFragments(review, [
-      'Do NOT invoke `ce:review` or any other `ce:*` skill',
+      'Do NOT run build, lint, or type-check commands at any scope',
+      'even if repository instructions list them',
+      'You may run one named test file or a minimal empirical probe only to validate a concrete finding',
+      'State the command and the claim it tested.',
     ])
+    expect(review).not.toContain('Do NOT invoke `ce:review`')
   })
 })
 
