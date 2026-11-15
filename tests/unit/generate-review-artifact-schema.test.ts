@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import {
+  checkSchema,
   generateFindingsSchemaContent,
   generatePipelineSchemaContent,
   generateReviewerReturnSchemaContent,
@@ -11,6 +13,7 @@ import {
   REVIEW_SCHEMA_RELATIVE_PATH,
   REVIEW_SCHEMA_TARGETS,
   REVIEWER_RETURN_SCHEMA_RELATIVE_PATH,
+  writeSchema,
 } from '../../scripts/generate-review-artifact-schema.js'
 
 const REPO_ROOT = path.resolve(import.meta.dir, '../..')
@@ -166,17 +169,20 @@ describe('review artifact schema generator', () => {
     expect(generateSchemaContent()).not.toContain('document-review')
   })
 
-  test('--check exits nonzero and names the reviewer view on drift', () => {
-    const viewPath = path.join(REPO_ROOT, REVIEWER_RETURN_SCHEMA_RELATIVE_PATH)
-    const original = fs.readFileSync(viewPath, 'utf8')
+  test('the check fails and names the reviewer view on drift', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'review-schema-'))
     try {
-      fs.writeFileSync(viewPath, `${original}\n`, 'utf8')
-      const result = runGenerator('--check')
+      writeSchema(root)
+      expect(checkSchema(root).ok).toBe(true)
 
-      expect(result.exitCode).toBe(1)
-      expect(output(result)).toContain(REVIEWER_RETURN_SCHEMA_RELATIVE_PATH)
+      const viewPath = path.join(root, REVIEWER_RETURN_SCHEMA_RELATIVE_PATH)
+      fs.appendFileSync(viewPath, '\n', 'utf8')
+      const result = checkSchema(root)
+
+      expect(result.ok).toBe(false)
+      expect(result.message).toContain(REVIEWER_RETURN_SCHEMA_RELATIVE_PATH)
     } finally {
-      fs.writeFileSync(viewPath, original, 'utf8')
+      fs.rmSync(root, { recursive: true, force: true })
     }
   })
 
