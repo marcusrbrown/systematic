@@ -10,6 +10,7 @@ import {
   formatReviewArtifactValidationFailure,
   MAX_PROJECTED_ISSUE_LINES,
   parseValidateReviewArtifactArguments,
+  projectRejectionIssues,
   projectZodIssues,
   REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH,
   resolveReviewArtifactPath,
@@ -318,6 +319,94 @@ describe('projectZodIssues', () => {
     ])
 
     expect(JSON.stringify(projected)).not.toContain('MESSAGE_CANARY')
+  })
+})
+
+describe('projectRejectionIssues', () => {
+  const SEVERITIES = ['P0', 'P1', 'P2', 'P3'] as const
+  const schema = z
+    .object({
+      kind: z.literal('review'),
+      severity: z.enum(SEVERITIES),
+      name: z.string().max(4),
+    })
+    .strict()
+
+  function issuesOf(value: unknown) {
+    const result = schema.safeParse(value)
+    if (result.success) throw new Error('expected a failing parse')
+    return result.error.issues
+  }
+
+  it('lists the schema enum values on an enum issue, and nothing on other issues', () => {
+    const projected = projectRejectionIssues(
+      issuesOf({ kind: 'review', severity: 'VALUE_CANARY', name: 'too long' }),
+    )
+
+    expect(projected.total).toBe(2)
+    expect(projected.issues).toEqual([
+      { path: 'severity', code: 'invalid_value', allowed: [...SEVERITIES] },
+      { path: 'name', code: 'too_big' },
+    ])
+  })
+
+  it('lists a literal as its single accepted value', () => {
+    const projected = projectRejectionIssues(
+      issuesOf({ kind: 'VALUE_CANARY', severity: 'P1', name: 'ok' }),
+    )
+
+    expect(projected.issues).toEqual([
+      { path: 'kind', code: 'invalid_value', allowed: ['review'] },
+    ])
+  })
+
+  it('projects the same path, code, bound and total as projectZodIssues', () => {
+    const issues = Array.from({ length: 12 }, () => ({
+      path: ['items', 0] as PropertyKey[],
+      code: 'too_big',
+    }))
+
+    const projected = projectRejectionIssues(issues)
+
+    expect(projected.issues).toHaveLength(MAX_PROJECTED_ISSUE_LINES)
+    expect(projected.total).toBe(12)
+    expect(projected.issues).toEqual(projectZodIssues(issues).issues)
+  })
+
+  it('drops a non-string accepted value and omits the field when none remain', () => {
+    const projected = projectRejectionIssues([
+      { path: ['n'], code: 'invalid_value', values: [1, 2] },
+      { path: ['s'], code: 'invalid_value', values: [1, 'a'] },
+    ])
+
+    expect(projected.issues).toEqual([
+      { path: 'n', code: 'invalid_value' },
+      { path: 's', code: 'invalid_value', allowed: ['a'] },
+    ])
+  })
+
+  it('reads values only from an invalid_value issue', () => {
+    const projected = projectRejectionIssues([
+      { path: ['a'], code: 'unrecognized_keys', values: ['KEY_CANARY'] },
+    ])
+
+    expect(JSON.stringify(projected)).not.toContain('KEY_CANARY')
+  })
+
+  it('never reads an unrecognized key name or an issue message', () => {
+    const projected = projectRejectionIssues(
+      issuesOf({
+        kind: 'review',
+        severity: 'P1',
+        name: 'ok',
+        KEY_CANARY: 'VALUE_CANARY',
+      }),
+    )
+    const serialized = JSON.stringify(projected)
+
+    expect(projected.issues).toEqual([{ path: '$', code: 'unrecognized_keys' }])
+    expect(serialized).not.toContain('KEY_CANARY')
+    expect(serialized).not.toContain('VALUE_CANARY')
   })
 })
 

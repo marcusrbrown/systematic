@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { screenReviewReturn } from '../../src/lib/review-pipeline.js'
+import {
+  rejectUnreadableScreenInput,
+  screenReviewReturn,
+  screenReviewReturnWithReport,
+} from '../../src/lib/review-pipeline.js'
+import { PROBE_REVIEWER, SCREEN_PROBES } from './screen-rejection-probes.js'
 
 interface RawFindingOverrides {
   readonly [key: string]: unknown
@@ -343,4 +348,258 @@ describe('screenReviewReturn', () => {
     expect(result.dispatch_outcome).toBe('malformed')
     expect(result.harness).toBe('pi')
   })
+})
+
+// A planted value or key name must never reach a rejection report. Every
+// string here is distinctive enough to be found by a substring search.
+const PLANTED_KEY = 'zz_planted_key_name_91f3'
+const PLANTED_VALUE = 'zz_planted_payload_value_77ab'
+
+describe('screenReviewReturnWithReport', () => {
+  test('reports every fault in one pass with its path, code and allowed values', () => {
+    const admission = screenReviewReturnWithReport({
+      expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
+      raw_return: makeReturn({
+        findings: [makeFinding({ owner: 'author', severity: 'P4', line: 0 })],
+      }),
+    })
+
+    expect(admission.ok).toBe(false)
+    if (admission.ok) return
+    expect(admission.rejection.code).toBe('schema_validation')
+    if (admission.rejection.code !== 'schema_validation') return
+    expect(admission.rejection.issue_count).toBe(3)
+    expect(admission.rejection.omitted).toBe(0)
+    expect(admission.rejection.issues).toEqual([
+      {
+        allowed: ['P0', 'P1', 'P2', 'P3'],
+        code: 'invalid_value',
+        path: 'findings.0.severity',
+      },
+      { code: 'too_small', path: 'findings.0.line' },
+      {
+        allowed: ['review-fixer', 'downstream-resolver', 'human', 'release'],
+        code: 'invalid_value',
+        path: 'findings.0.owner',
+      },
+    ])
+  })
+
+  test('caps the entries at eight and counts the rest as omitted', () => {
+    const admission = screenReviewReturnWithReport({
+      expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
+      raw_return: makeReturn({
+        findings: Array.from({ length: 12 }, () =>
+          makeFinding({ severity: 'high' }),
+        ),
+      }),
+    })
+
+    expect(admission.ok).toBe(false)
+    if (admission.ok || admission.rejection.code !== 'schema_validation') return
+    expect(admission.rejection.issue_count).toBe(12)
+    expect(admission.rejection.issues).toHaveLength(8)
+    expect(admission.rejection.omitted).toBe(4)
+  })
+
+  test('the rejected result is the same malformed result screenReviewReturn gives', () => {
+    for (const probe of SCREEN_PROBES) {
+      const input = {
+        expected_reviewer: PROBE_REVIEWER,
+        invoking_harness: 'opencode' as const,
+        raw_return: probe.input,
+      }
+      const admission = screenReviewReturnWithReport(input)
+      expect(admission.result, probe.name).toEqual(screenReviewReturn(input))
+    }
+  })
+
+  describe.each(SCREEN_PROBES.map((probe) => [probe.name, probe] as const))(
+    'probe: %s',
+    (_name, probe) => {
+      const admission = screenReviewReturnWithReport({
+        expected_reviewer: PROBE_REVIEWER,
+        invoking_harness: 'opencode',
+        raw_return: probe.input,
+      })
+
+      test('is admitted or rejected as expected', () => {
+        expect(admission.ok).toBe(probe.expected.kind === 'admitted')
+      })
+
+      test('reports the expected fixed code, count and first issue', () => {
+        if (probe.expected.kind === 'admitted') return
+        if (admission.ok) throw new Error('expected a rejection')
+        expect(admission.rejection.code).toBe(probe.expected.code)
+        if (probe.expected.code !== 'schema_validation') {
+          // A fixed-code report carries the code and nothing else.
+          expect(Object.keys(admission.rejection)).toEqual(['code'])
+          return
+        }
+        if (admission.rejection.code !== 'schema_validation') {
+          throw new Error('expected a schema_validation report')
+        }
+        expect(admission.rejection.issue_count).toBe(probe.expected.issueCount)
+        expect(admission.rejection.issues[0]).toEqual(probe.expected.first)
+      })
+
+      test('produces a rejected summary only where the helper has a count', () => {
+        if (probe.expected.kind === 'admitted') return
+        expect(admission.result.rejected_summary !== undefined).toBe(
+          probe.expected.summaryRow,
+        )
+      })
+    },
+  )
+
+  test('a payload that is not an object reports the root path', () => {
+    const admission = screenReviewReturnWithReport({
+      expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
+      raw_return: '[1,2,3]',
+    })
+
+    expect(admission.ok).toBe(false)
+    if (admission.ok || admission.rejection.code !== 'schema_validation') return
+    expect(admission.rejection.issues).toEqual([
+      { code: 'invalid_type', path: '$' },
+    ])
+  })
+
+  test('an identity mismatch keeps the persisted reason and adds its code only to the report', () => {
+    const admission = screenReviewReturnWithReport({
+      expected_reviewer: 'security',
+      invoking_harness: 'opencode',
+      raw_return: makeReturn({ reviewer: 'correctness' }),
+    })
+
+    expect(admission.ok).toBe(false)
+    if (admission.ok) return
+    expect(admission.rejection).toEqual({ code: 'identity_mismatch' })
+    expect(admission.result.rejected_summary?.reason).toBe(
+      'Rejected persona security return: field reviewer failed schema validation.',
+    )
+    expect(JSON.stringify(admission.result)).not.toContain('identity_mismatch')
+  })
+
+  test('the persisted reason for a schema failure is unchanged', () => {
+    const admission = screenReviewReturnWithReport({
+      expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
+      raw_return: makeReturn({
+        findings: [makeFinding({ severity: 'high' })],
+      }),
+    })
+
+    expect(admission.ok).toBe(false)
+    if (admission.ok) return
+    expect(admission.result.rejected_summary?.reason).toBe(
+      'Rejected persona correctness return: field findings.0.severity failed schema validation.',
+    )
+  })
+
+  test('an admitted return has no rejection', () => {
+    const admission = screenReviewReturnWithReport({
+      expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
+      raw_return: makeReturn(),
+    })
+
+    expect(admission.ok).toBe(true)
+    expect('rejection' in admission).toBe(false)
+  })
+
+  test('no report carries a planted key name, value or issue message', () => {
+    const payloads: readonly unknown[] = [
+      makeReturn({ [PLANTED_KEY]: PLANTED_VALUE }),
+      makeReturn({
+        findings: [makeFinding({ [PLANTED_KEY]: PLANTED_VALUE })],
+      }),
+      makeReturn({
+        findings: [
+          makeFinding({ owner: PLANTED_VALUE, severity: PLANTED_VALUE }),
+        ],
+      }),
+      makeReturn({
+        findings: [makeFinding({ file: `/${PLANTED_VALUE}`, title: 42 })],
+        residual_risks: [{ [PLANTED_KEY]: PLANTED_VALUE }],
+      }),
+      makeReturn({ findings: [], [PLANTED_KEY]: PLANTED_VALUE }),
+      makeReturn({ reviewer: PLANTED_VALUE }),
+      { findings: PLANTED_VALUE, [PLANTED_KEY]: PLANTED_VALUE },
+      `{ "${PLANTED_KEY}": "${PLANTED_VALUE}"`,
+      `\`\`\`json\n{"${PLANTED_KEY}":"${PLANTED_VALUE}"}\n\`\`\``,
+    ]
+
+    for (const raw_return of payloads) {
+      const admission = screenReviewReturnWithReport({
+        expected_reviewer: 'correctness',
+        invoking_harness: 'opencode',
+        raw_return,
+      })
+      expect(admission.ok).toBe(false)
+      if (admission.ok) continue
+      const serialized = JSON.stringify(admission)
+      expect(serialized).not.toContain(PLANTED_KEY)
+      expect(serialized).not.toContain(PLANTED_VALUE)
+    }
+  })
+
+  test('allowed values come only from the authored enums', () => {
+    const admission = screenReviewReturnWithReport({
+      expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
+      raw_return: makeReturn({
+        findings: [
+          makeFinding({
+            autofix_class: PLANTED_VALUE,
+            owner: PLANTED_VALUE,
+            severity: PLANTED_VALUE,
+          }),
+        ],
+      }),
+    })
+
+    expect(admission.ok).toBe(false)
+    if (admission.ok || admission.rejection.code !== 'schema_validation') return
+    const allowed = admission.rejection.issues.flatMap(
+      (issue) => issue.allowed ?? [],
+    )
+    expect(allowed).toEqual([
+      'P0',
+      'P1',
+      'P2',
+      'P3',
+      'safe_auto',
+      'gated_auto',
+      'manual',
+      'advisory',
+      'review-fixer',
+      'downstream-resolver',
+      'human',
+      'release',
+    ])
+  })
+})
+
+describe('rejectUnreadableScreenInput', () => {
+  test.each(['input_oversized', 'input_invalid_utf8'] as const)(
+    '%s yields a malformed result with no rejected summary and a code-only report',
+    (code) => {
+      const admission = rejectUnreadableScreenInput({
+        code,
+        expected_reviewer: 'correctness',
+        invoking_harness: 'pi',
+      })
+
+      expect(admission.ok).toBe(false)
+      expect(admission.result.dispatch_outcome).toBe('malformed')
+      expect(admission.result.harness).toBe('pi')
+      expect(admission.result.rejected_summary).toBeUndefined()
+      expect(admission.result.admitted_findings).toEqual([])
+      expect(admission.rejection).toEqual({ code })
+    },
+  )
 })

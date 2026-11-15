@@ -12,8 +12,10 @@ import {
   applyReviewAdjudication,
   finalizeReview,
   prepareReviewCandidates,
+  rejectUnreadableScreenInput,
   type SchemaRejection,
-  screenReviewReturn,
+  type ScreenAdmission,
+  screenReviewReturnWithReport,
 } from './lib/review-pipeline.js'
 import {
   AGGREGATE_STDIN_BYTE_CAP,
@@ -37,8 +39,12 @@ import {
  * beyond `screen`'s flag parsing and stdin plumbing.
  * - `return`   -> the bounded raw persona-return validator (stdin).
  * - `artifact` -> the existing aggregate review-artifact validator.
- * - `screen`   -> executable reviewer-return admission (`screenReviewReturn`),
- *                 reusing the same bounded stdin reader as `return`.
+ * - `screen`   -> executable reviewer-return admission
+ *                 (`screenReviewReturnWithReport`), reusing the same bounded
+ *                 stdin reader as `return`. Exit 0 prints the screen result.
+ *                 Exit 1 prints `{ screen, rejection }` on stdout: the
+ *                 helper's own malformed screen result and a bounded,
+ *                 payload-safe rejection report.
  * - `prepare`  -> executable candidate preparation (`prepareReviewCandidates`),
  *                 reusing the same bounded stdin reader with the larger
  *                 aggregate byte cap.
@@ -240,6 +246,21 @@ export type AggregateRejection =
       readonly reason: string
     }
 
+/**
+ * The exit-1 stdout of `screen`: one JSON object holding the helper's own
+ * malformed screen result (the entry `prepare` consumes) and the rejection
+ * report. `rejection` is payload-safe by construction, so it can be quoted back
+ * to the reviewer verbatim.
+ */
+function formatScreenRejectionOutput(
+  admission: Extract<ScreenAdmission, { readonly ok: false }>,
+): string {
+  return JSON.stringify({
+    screen: admission.result,
+    rejection: admission.rejection,
+  })
+}
+
 function runScreenSubcommand(
   options: CeReviewValidatorOptions,
   outputSink: (message: string) => void,
@@ -258,22 +279,43 @@ function runScreenSubcommand(
     return 2
   }
 
+  const rejectUnreadable = (
+    code: 'input_oversized' | 'input_invalid_utf8',
+    message: string,
+  ): number => {
+    outputSink(
+      formatScreenRejectionOutput(
+        rejectUnreadableScreenInput({
+          code,
+          expected_reviewer: flags.reviewer,
+          invoking_harness: flags.harness,
+        }),
+      ),
+    )
+    errorSink(message)
+    return 1
+  }
+
   const read = readBoundedStdin(fd, options.readChunk ?? defaultReadChunk)
   if (read.status === 'read-error') {
     errorSink(CE_REVIEW_SCREEN_STDIN_READ_FAILED_MESSAGE)
     return 2
   }
   if (read.status === 'oversized') {
-    errorSink(CE_REVIEW_SCREEN_STDIN_OVERSIZED_MESSAGE)
-    return 1
+    return rejectUnreadable(
+      'input_oversized',
+      CE_REVIEW_SCREEN_STDIN_OVERSIZED_MESSAGE,
+    )
   }
 
   let text: string
   try {
     text = new TextDecoder('utf-8', { fatal: true }).decode(read.buffer)
   } catch {
-    errorSink(CE_REVIEW_SCREEN_STDIN_INVALID_UTF8_MESSAGE)
-    return 1
+    return rejectUnreadable(
+      'input_invalid_utf8',
+      CE_REVIEW_SCREEN_STDIN_INVALID_UTF8_MESSAGE,
+    )
   }
 
   if (text.trim() === '') {
@@ -281,20 +323,22 @@ function runScreenSubcommand(
     return 2
   }
 
-  const result = screenReviewReturn({
+  const admission = screenReviewReturnWithReport({
     expected_reviewer: flags.reviewer,
     invoking_harness: flags.harness,
     raw_return: text,
   })
 
-  if (result.dispatch_outcome === 'malformed') {
+  if (!admission.ok) {
+    outputSink(formatScreenRejectionOutput(admission))
     errorSink(
-      result.rejected_summary?.reason ?? CE_REVIEW_SCREEN_REJECTED_MESSAGE,
+      admission.result.rejected_summary?.reason ??
+        CE_REVIEW_SCREEN_REJECTED_MESSAGE,
     )
     return 1
   }
 
-  outputSink(JSON.stringify(result))
+  outputSink(JSON.stringify(admission.result))
   return 0
 }
 

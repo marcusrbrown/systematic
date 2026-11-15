@@ -440,7 +440,8 @@ const PIPELINE_MAINTAINABILITY_RETURN = {
 
 // Deliberately incomplete JSON: `screen` rejects it as a whole-payload
 // `malformed` outcome (never a partial finding-level rejection -- `screen`
-// has no such thing) with the fixed rejection message and empty stdout.
+// has no such thing) with the fixed rejection message on stderr and its
+// rejection envelope on stdout.
 const PIPELINE_SECURITY_MALFORMED_PAYLOAD =
   '{ "reviewer": "security", "findings": ['
 
@@ -455,16 +456,25 @@ const PIPELINE_MAINTAINABILITY_SCREEN = screenReviewReturn({
   raw_return: PIPELINE_MAINTAINABILITY_RETURN,
 })
 // Constructed directly, never through `screenReviewReturn`: the real `screen`
-// call for this persona rejects the payload (exit 1) and prints no envelope
-// to admit, so the parent hand-builds the `malformed` entry per
-// pipeline-invocation.md's exit-1 handling, exactly as the unit-test fixture
-// hand-builds a `validation_unavailable` entry for its exit-2 case.
+// call for this persona rejects the payload (exit 1). Its stdout envelope's
+// `screen` member is this same malformed entry, which the parent passes to
+// `prepare`; `expectMalformedJsonRejectionEnvelope` asserts the two agree.
 const PIPELINE_SECURITY_SCREEN = {
   admitted_findings: [],
   dispatch_outcome: 'malformed',
   harness: 'opencode',
   residual_risks: [],
   testing_gaps: [],
+}
+
+/** Asserts a rejected `screen` call's captured stdout is its rejection
+ * envelope: the malformed result `prepare` consumes and the fixed code. */
+function expectMalformedJsonRejectionEnvelope(stdoutPath: string): void {
+  const envelope: unknown = JSON.parse(fs.readFileSync(stdoutPath, 'utf8'))
+  expect(envelope).toEqual({
+    rejection: { code: 'malformed_json' },
+    screen: PIPELINE_SECURITY_SCREEN,
+  })
 }
 
 const PIPELINE_SCREEN_RESULTS = [
@@ -1229,13 +1239,13 @@ describe.skipIf(!isOpencodeAvailable())(
           expect(artifactRun.output).toContain('Review artifact is valid')
 
           // The malformed `screen` call exits 1 with the fixed rejection
-          // message and writes nothing to stdout; its stdout was redirected to
-          // a scratch file, which stays empty.
+          // message on stderr and its rejection envelope on stdout; stdout was
+          // redirected to a scratch file.
           expect(securityRun.exit, securityRun.output).toBe(1)
           expect(securityRun.output).toContain(
             'screen rejected the reviewer return',
           )
-          expect(fs.statSync(screenSecurityStdoutPath).size).toBe(0)
+          expectMalformedJsonRejectionEnvelope(screenSecurityStdoutPath)
 
           // Read `finalize`'s captured stdout back from disk -- never the
           // host's own text rendering, which joins/duplicates channels -- and
@@ -1481,7 +1491,7 @@ describe.skipIf(!isOpencodeAvailable())(
           expect(securityRun.output).toContain(
             'screen rejected the reviewer return',
           )
-          expect(fs.statSync(screenSecurityStdoutPath).size).toBe(0)
+          expectMalformedJsonRejectionEnvelope(screenSecurityStdoutPath)
 
           const capturedFinalizeText = fs.readFileSync(captureOnePath, 'utf8')
           const capturedFinalize: unknown = JSON.parse(capturedFinalizeText)

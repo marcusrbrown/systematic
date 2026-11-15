@@ -28,7 +28,13 @@ import {
   applyReviewAdjudication,
   prepareReviewCandidates,
   screenReviewReturn,
+  screenReviewReturnWithReport,
 } from '../../src/lib/review-pipeline.js'
+import {
+  PROBE_REVIEWER,
+  probeStdin,
+  SCREEN_PROBES,
+} from './screen-rejection-probes.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 const REGISTRY_PATH = path.join(REPO_ROOT, 'registry/registry.jsonc')
@@ -407,6 +413,9 @@ interface PipelinePhaseCase {
   readonly args: readonly string[]
   readonly conformingInput: unknown
   readonly malformedMessage: string
+  /** What stdout holds on an exit 1: nothing, or `screen`'s rejection
+   * envelope. */
+  readonly malformedStdout: 'empty' | 'screen-rejection'
 }
 
 const PIPELINE_PHASE_CASES: readonly PipelinePhaseCase[] = [
@@ -414,33 +423,90 @@ const PIPELINE_PHASE_CASES: readonly PipelinePhaseCase[] = [
     args: PIPELINE_SCREEN_ARGS,
     conformingInput: PIPELINE_SCREEN_RETURN,
     malformedMessage: 'screen rejected the reviewer return',
+    malformedStdout: 'screen-rejection',
     name: 'screen',
   },
   {
     args: PIPELINE_PREPARE_ARGS,
     conformingInput: PIPELINE_PREPARE_INPUT,
     malformedMessage: 'rejected the aggregate envelope',
+    malformedStdout: 'empty',
     name: 'prepare',
   },
   {
     args: PIPELINE_MERGE_ARGS,
     conformingInput: PIPELINE_MERGE_INPUT,
     malformedMessage: 'rejected the aggregate envelope',
+    malformedStdout: 'empty',
     name: 'merge',
   },
   {
     args: PIPELINE_FINALIZE_ARGS,
     conformingInput: PIPELINE_FINALIZE_INPUT,
     malformedMessage: 'finalize rejected the aggregate envelope',
+    malformedStdout: 'empty',
     name: 'finalize',
   },
 ]
 
 /**
+ * Every `screen` probe through the packaged script under real Node: the same
+ * exit code, stdout and stderr the in-process admission produces, plus the
+ * unreadable-input cases that never reach the admission function.
+ */
+function exerciseScreenRejections(scriptPath: string, label: string): void {
+  for (const probe of SCREEN_PROBES) {
+    const admission = screenReviewReturnWithReport({
+      expected_reviewer: PROBE_REVIEWER,
+      invoking_harness: 'claude-code',
+      raw_return: probe.input,
+    })
+    const result = runNode(scriptPath, [...PIPELINE_SCREEN_ARGS], {
+      input: probeStdin(probe),
+    })
+    const context = `${label}: screen probe "${probe.name}"`
+
+    if (admission.ok) {
+      expect(result.exitCode, context).toBe(0)
+      expect(result.stdout.trimEnd(), context).toBe(
+        JSON.stringify(admission.result),
+      )
+      continue
+    }
+    expect(result.exitCode, context).toBe(1)
+    expect(JSON.parse(result.stdout), context).toEqual({
+      rejection: admission.rejection,
+      screen: admission.result,
+    })
+  }
+
+  const oversized = runNode(scriptPath, [...PIPELINE_SCREEN_ARGS], {
+    input: Buffer.alloc(1024 * 1024 + 1, 0x20),
+  })
+  expect(oversized.exitCode, `${label}: oversized`).toBe(1)
+  expect(JSON.parse(oversized.stdout).rejection).toEqual({
+    code: 'input_oversized',
+  })
+
+  const invalidUtf8 = runNode(scriptPath, [...PIPELINE_SCREEN_ARGS], {
+    input: Buffer.from([0x7b, 0xff, 0x7d]),
+  })
+  expect(invalidUtf8.exitCode, `${label}: invalid UTF-8`).toBe(1)
+  expect(JSON.parse(invalidUtf8.stdout).rejection).toEqual({
+    code: 'input_invalid_utf8',
+  })
+
+  const empty = runNode(scriptPath, [...PIPELINE_SCREEN_ARGS], { input: '' })
+  expect(empty.exitCode, `${label}: empty stdin`).toBe(2)
+  expect(empty.stdout).toBe('')
+}
+
+/**
  * Runs `screen`, `prepare`, `merge`, and `finalize` from a packaged script
  * path under real Node: one conforming envelope (exit 0, parseable stdout)
- * and one malformed envelope (exit 1, fixed stderr message, empty stdout)
- * per phase. Import-without-execution is already covered per layout by
+ * and one malformed envelope (exit 1, fixed stderr message) per phase. A
+ * rejected `screen` prints its rejection envelope on stdout; the other phases
+ * print nothing there. Import-without-execution is already covered per layout by
  * `assertRunsUnderRealNode`, which this function's callers also invoke.
  */
 function exercisePipelinePhases(scriptPath: string, label: string): void {
@@ -459,8 +525,16 @@ function exercisePipelinePhases(scriptPath: string, label: string): void {
     })
     expect(malformed.exitCode, `${label}: ${phase.name} malformed`).toBe(1)
     expect(malformed.stderr).toContain(phase.malformedMessage)
-    expect(malformed.stdout).toBe('')
+    if (phase.malformedStdout === 'empty') {
+      expect(malformed.stdout).toBe('')
+    } else {
+      const parsed = JSON.parse(malformed.stdout)
+      expect(parsed.screen.dispatch_outcome).toBe('malformed')
+      expect(parsed.rejection).toEqual({ code: 'malformed_json' })
+    }
   }
+
+  exerciseScreenRejections(scriptPath, label)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

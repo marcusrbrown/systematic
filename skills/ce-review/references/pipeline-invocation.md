@@ -102,11 +102,14 @@ Read the exit status:
   per-agent dispatch record. `dispatch_outcome: "empty"` means zero
   findings; `"findings"` means one or more admitted findings.
 - **exit 1** -- the whole return is `dispatch_outcome: "malformed"`, covering
-  malformed JSON, a schema violation, and a `reviewer`-field identity
-  mismatch alike. Retain only the bounded validator diagnostic on stderr in
-  Coverage; never parse or persist payload fields or values.
+  malformed JSON, a schema violation, a `reviewer`-field identity mismatch,
+  and input over the size limit or not valid UTF-8 alike. stdout holds the
+  [rejection output](#rejection-output-on-exit-1) below. Retain only that
+  bounded report in Coverage; never parse or persist payload fields or values.
 - **exit 2**, a missing or unreadable helper, or a command launch failure --
-  validation unavailable. Withhold the return and report the exact
+  validation unavailable. Empty or whitespace-only stdin is exit 2 as well: the
+  return never arrived, so it is not a malformed payload. Retry the launch once
+  with byte-identical input; a second exit 2 is validation unavailable. Withhold the return and report the exact
   unavailability and what was withheld. Update that selected persona's
   preinitialized dispatch entry from `never_returned` to `dispatch_outcome:
   "validation_unavailable"`, adding no other field (the dispatch object is
@@ -121,6 +124,68 @@ Read the exit status:
 Structural validity never implies evidence validity. A return that passes
 `screen` is admitted structurally only; its claims still require evidence
 assessment during adjudication.
+
+### Rejection output on exit 1
+
+Every exit 1 prints one JSON object on stdout and one summary line on stderr.
+The object is the only supported source of a rejected return's `prepare`
+entry and of its rejected-summary row, so capture it rather than rebuilding it:
+
+```json
+{ "screen": { "dispatch_outcome": "malformed", "...": "..." }, "rejection": { "code": "schema_validation", "...": "..." } }
+```
+
+- `screen` is the helper's own malformed screen result, in the shape `prepare`
+  reads. It carries a `rejected_summary` row only when the helper produced
+  one. Never add a row by hand.
+- `rejection` is a bounded report for the parent to quote back to the
+  reviewer. It holds no payload value, no unrecognized key name and no issue
+  message.
+
+The report's `code` is one of five fixed values:
+
+| `code` | When | Report fields |
+|--------|------|---------------|
+| `schema_validation` | The JSON parsed but breaks the reviewer return schema. This also covers a `findings` array that is absent, not an array, empty beside another fault, or over 32 entries. | `code`, `issue_count`, `issues`, `omitted` |
+| `malformed_json` | stdin is not exactly one JSON document: a code fence, prose before or after it, a `<task_result>` wrapper, a trailing comma, or truncation. | `code` |
+| `identity_mismatch` | The return is schema-valid but its `reviewer` is not the dispatched persona. | `code` |
+| `input_oversized` | stdin is over 1 MiB. | `code` |
+| `input_invalid_utf8` | stdin is not valid UTF-8. | `code` |
+
+A `schema_validation` report lists every fault in one pass. `issue_count` is
+the full count. `issues` holds at most 8 entries, each `{ path, code }`, and
+`omitted` is the number left out (`issue_count` minus the entries listed).
+`path` is a dotted JSON path (`findings.0.owner`, or `$` for the whole payload) and `code` is a
+schema issue code such as `invalid_type`, `too_big` or `unrecognized_keys`. An
+issue on a closed set (`severity`, `owner`, `autofix_class`) adds `allowed`, the
+values the schema accepts. `unrecognized_keys` at a path means an unlisted key
+sits at that object; the report does not name it. Remove keys the return
+schema does not list.
+
+stderr is one line: the rejected-summary row's `reason` when there is a row,
+`screen rejected the reviewer return` for a schema or JSON rejection with no
+row, and the size or encoding message for the other two codes.
+
+The persisted `reason` is unchanged and path-only, for example `Rejected
+persona correctness return: field findings.0.severity failed schema
+validation.` An identity mismatch keeps the `reviewer` schema-validation
+reason; `identity_mismatch` appears only in `rejection.code`.
+
+How each case enters `prepare` and `finalize`. In every case the envelope's
+`screen` member goes into `prepare`'s `screen_results` unchanged, with the
+persona's dispatch outcome `malformed`:
+
+| Case | `rejected_summary` row | `finalize` |
+|------|------------------------|------------|
+| Schema failure with 1 to 32 `findings` entries | Present | The dispatch entry carries `rejection_reason` from the row |
+| Identity mismatch with 1 or more findings | Present, reason names `reviewer` | The dispatch entry carries `rejection_reason` from the row |
+| Schema failure with `findings` absent, not an array, empty, or over 32 | Absent | `malformed`, no `rejection_reason` |
+| Identity mismatch with empty `findings` | Absent | `malformed`, no `rejection_reason` |
+| Payload is not a JSON object | Absent | `malformed`, no `rejection_reason` |
+| `malformed_json`, `input_oversized`, `input_invalid_utf8` | Absent | `malformed`, no `rejection_reason` |
+
+A row appears only when the helper could count the rejected findings, so a
+missing row is not an error and is never a reason to build one.
 
 ## prepare
 
