@@ -375,13 +375,14 @@ const SHARED_REQUIRED_INPUTS = [
 ]
 // An empty optional input must act as an omitted one. The action reads every
 // input below through `getInput(...).trim()` and treats an empty value as unset
-// (fro-bot/agent src/harness/config/inputs.ts at the pinned SHA). The two inputs
+// (fro-bot/agent src/harness/config/inputs.ts at the pinned SHA). The inputs
 // that have a non-empty default in the action's own action.yaml are given the
 // same default here, so the runner never hands the action an empty string where
 // its default would have applied.
 const SHARED_OPTIONAL_DEFAULTS: Readonly<Record<string, string>> = {
   'brokered-push-extra-paths': '',
   'dedup-window': '600000',
+  'isolate-agent': 'false',
   'output-mode': '',
   'response-mode': 'github',
   'systematic-version': '',

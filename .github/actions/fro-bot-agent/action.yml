@@ -44,12 +44,16 @@ inputs:
     description: Comma-separated path prefixes the brokered push may touch beyond the defaults.
     required: false
     default: ""
+  isolate-agent:
+    description: Run the agent as its own user in a read-only view of the runner, true or false.
+    required: false
+    default: "false"
 
 runs:
   using: composite
   steps:
     - name: Run the agent
-      uses: fro-bot/agent@4e394905b7eafda2d7424816eb7846d3f09c40df # v0.144.2
+      uses: fro-bot/agent@637173d4fd0e9551b1c9f10fea6787e4395db660 # v0.144.3
       env:
         OPENCODE_PROMPT_ARTIFACT: "true"
       with:
@@ -64,6 +68,7 @@ runs:
         systematic-version: ${{ inputs.systematic-version }}
         trusted-head-sha: ${{ inputs.trusted-head-sha }}
         brokered-push-extra-paths: ${{ inputs.brokered-push-extra-paths }}
+        isolate-agent: ${{ inputs.isolate-agent }}
         # The action's own runtime is unbounded; each caller bounds the step or
         # the job instead.
         timeout: 0

@@ -902,6 +902,7 @@ jobs:
               || ''
             }}
         with:
+          isolate-agent: "true"
           auth-json: ${{ secrets.OPENCODE_AUTH_JSON }}
           github-token: ${{ secrets.FRO_BOT_PAT }}
           trusted-head-sha: ${{ steps.prehead.outputs.sha }}
