@@ -237,6 +237,16 @@ describe('ce:review selection taxonomy (U6)', () => {
     expect(SKILL_NORM).toMatch(/validation_unavailable|validation unavailable/)
   })
 
+  test('a rejected reviewer return gets one same-session re-ask and one terminal result', () => {
+    expect(SKILL_NORM).toMatch(/at most 2 returns and 2 screens/)
+    expect(SKILL_NORM).toMatch(/resume the same reviewer session once/)
+    expect(SKILL_NORM).toMatch(/Assemble each persona's terminal screen result/)
+    expect(SKILL_NORM).toMatch(/continuation unavailable/)
+    expect(SKILL_NORM).toMatch(
+      /malformed, never-returned and validation-unavailable stay three distinct/i,
+    )
+  })
+
   test('execution probes are a separate parent decision with a boundary', () => {
     expect(SKILL_NORM).toMatch(
       /probe(?:s)?[^.]*(?:separate|not a reviewer|not reviewers)/i,

@@ -505,6 +505,42 @@ describe('prepareReviewCandidates -- rejections', () => {
     expect(result.rejection.path).not.toContain('Example issue')
   })
 
+  test('a rejected return and its corrected return for one persona are a duplicate, and the corrected return alone is accepted', () => {
+    const rejected = {
+      reviewer: 'security',
+      result: {
+        admitted_findings: [],
+        dispatch_outcome: 'malformed',
+        harness: 'opencode',
+        rejected_summary: {
+          dispatch_outcome: 'malformed',
+          rejected_finding_count: 1,
+          rejected_severities: ['unknown'],
+          reason:
+            'Rejected persona security return: field findings.0.severity failed schema validation.',
+        },
+        residual_risks: [],
+        testing_gaps: [],
+      },
+    }
+    const corrected = makeScreenResult('security', [
+      makeAdmittedFinding({ input_id: 'security#0' }),
+    ])
+    const dispatches = [makeSelectedDispatch('security')]
+
+    const both = prepareReviewCandidates(
+      buildInput([rejected, corrected], dispatches),
+    )
+    const terminalOnly = prepareReviewCandidates(
+      buildInput([corrected], dispatches),
+    )
+
+    expect(both.ok).toBe(false)
+    if (both.ok) throw new Error('expected rejection')
+    expect(both.rejection.reason).toBe('duplicate persona outcome')
+    expect(terminalOnly.ok).toBe(true)
+  })
+
   test('rejects duplicate input IDs without leaking payload content', () => {
     const result = prepareReviewCandidates(
       buildInput(

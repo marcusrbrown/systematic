@@ -19,11 +19,16 @@ with `;`, and invokes `node "$SKILL_DIR/scripts/validate-review.mjs" <phase>`
 A helper failure (exit 1 or exit 2) is never permission to hand-synthesize
 the phase's output. On exit 2 (usage error, TTY input, or a stdin read
 failure), retry the launch exactly once with byte-identical input; a second
-exit 2 is a launch failure, not a payload problem. On exit 1 (the input
-was structurally rejected), the parent may correct its own JSON envelope
-exactly once -- fixing a genuine encoding mistake, never reshaping the
-envelope to force acceptance -- and retry; a second exit 1 stops the run
-visibly with degraded or abnormal status. An exit 1 whose message says the
+exit 2 is a launch failure, not a payload problem. That retry re-runs the
+same bytes, so it is never a re-ask and never counts toward a reviewer's
+re-ask limit. On exit 1 from `prepare`, `merge` or `finalize` (the aggregate
+envelope was structurally rejected), the parent may correct its own JSON
+envelope exactly once -- fixing a genuine encoding mistake, never reshaping
+the envelope to force acceptance -- and retry; a second exit 1 stops the run
+visibly with degraded or abnormal status. That correction covers aggregate
+envelopes only. It never licenses editing a reviewer's payload or dispatching
+a reviewer again; an exit 1 from `screen` follows the
+[re-ask policy](#re-ask-after-a-screen-rejection) instead. An exit 1 whose message says the
 input exceeds the aggregate byte cap is not an encoding mistake: do not retry
 the same bytes, and do not shrink the payload to fit. Stop visibly and report
 the cap the message names. Never fall back to writing a
@@ -106,6 +111,8 @@ Read the exit status:
   and input over the size limit or not valid UTF-8 alike. stdout holds the
   [rejection output](#rejection-output-on-exit-1) below. Retain only that
   bounded report in Coverage; never parse or persist payload fields or values.
+  The first exit 1 for a persona may be followed by one
+  [re-ask](#re-ask-after-a-screen-rejection); a second exit 1 is final.
 - **exit 2**, a missing or unreadable helper, or a command launch failure --
   validation unavailable. Empty or whitespace-only stdin is exit 2 as well: the
   return never arrived, so it is not a malformed payload. Retry the launch once
@@ -187,6 +194,42 @@ persona's dispatch outcome `malformed`:
 A row appears only when the helper could count the rejected findings, so a
 missing row is not an error and is never a reason to build one.
 
+### Re-ask after a screen rejection
+
+A persona gets at most 2 returns and 2 screens. After the first exit 1, the
+parent may resume the same reviewer session once. It sends the `rejection`
+report exactly as printed, the existing return contract, and a request for a
+complete corrected payload under the same reviewer name, then screens the new
+return with a fresh heredoc and a fresh delimiter. A second exit 1 is final.
+
+- The parent never edits, trims or re-serializes a rejected payload, never
+  dispatches a correction, repair or replacement agent, and never reads the
+  helper source or bundle.
+- If the harness cannot continue that session, the persona is `malformed` from
+  its first `screen` result, Coverage says "continuation unavailable", and no
+  new session is opened.
+- The byte-identical retry of an exit 2 launch failure re-runs the same bytes.
+  It is not a re-ask and does not count toward the cap.
+- One persona has one terminal result. A corrected return supersedes the
+  earlier one, so only the terminal `screen` result goes into `prepare` and the
+  superseded result is dropped. `prepare` still rejects two entries for one
+  persona as a duplicate; that guard backstops the rule and does not replace it.
+- A re-ask never counts as coverage. A risk-critical persona whose terminal
+  result is `malformed` blocks a clean verdict as it does without a re-ask.
+
+| Sequence for one persona | Terminal result | Coverage records |
+|---|---|---|
+| Accepted first time | The accepted result | Nothing extra |
+| Rejected, then accepted | The second, accepted result | One re-ask |
+| Rejected, then rejected | The second `malformed` result and its `rejection` report | One re-ask, final `malformed` |
+| Rejected, continuation unavailable | The first `malformed` result | Continuation unavailable |
+| Launch failure (exit 2) | `validation_unavailable` | The exit status and what was withheld |
+| Never returned | `never_returned` | The task-lifecycle fact, with no `screen` call |
+
+`malformed`, `never_returned` and `validation_unavailable` stay three distinct
+dispatch outcomes through `prepare` and `finalize`. The parent invents no
+finding, payload or rejected-summary row for any of them.
+
 ## prepare
 
 Applies the confidence gate, forms dedup candidate groups, and unions
@@ -194,10 +237,22 @@ selection-surface coverage across every screened return -- deterministic
 parent-owned bookkeeping that no longer needs model recomputation.
 
 **Input:** `{ screen_results[{reviewer, result:<screen output>}], selected_dispatches[{persona, dispatch_outcome, selection_surface?}] }`.
-Assemble `screen_results` from every `screen` call made in this run, and
-`selected_dispatches` from the Stage 3 selection record (including any
-persona whose dispatch never produced a screen result, so `never_returned`
-and `validation_unavailable` personas are represented too).
+Assemble `screen_results` from each persona's terminal `screen` result, never
+from every `screen` call made in this run: a persona that was re-asked
+contributes its last result only, so a superseded rejection is not passed
+alongside the corrected return. `prepare` rejects a second entry for one
+persona as a duplicate; that guard stays. Assemble `selected_dispatches` from
+the Stage 3 selection record (including any persona whose dispatch never
+produced a screen result, so `never_returned` and `validation_unavailable`
+personas are represented too).
+
+`prepare` needs one `screen_results` entry for every selected dispatch. A
+persona with no helper `screen` output (`never_returned`, or
+`validation_unavailable` after an exit 2) gets a lifecycle entry the parent
+writes from the lifecycle fact, not from a payload: `{ reviewer, result: {
+dispatch_outcome, admitted_findings: [], residual_risks: [], testing_gaps: [],
+harness } }`, with `dispatch_outcome` set to that outcome. It carries no
+finding and no `rejected_summary`.
 
 **Output:** `{ confidence_dispositions, coverage_union, singletons, candidate_groups[{file, members[{input_id,line}]}], surviving_findings }`.
 `candidate_groups` are the file-grouped, line-sorted sets of two or more

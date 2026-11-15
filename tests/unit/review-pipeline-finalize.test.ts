@@ -4141,6 +4141,74 @@ describe('finalizeReview', () => {
     expect(result.value.artifact.verdict).not.toBe('All requirements met.')
   })
 
+  test('a persona re-asked after a rejection finalizes with one dispatch entry and no stale rejection reason', () => {
+    const securityDispatch = dispatchRecord('security', {
+      selection_surface: ['src/auth.ts'],
+    })
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+        confidenceDisposition('security#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness', {
+          requires_verification: false,
+          severity: 'P3',
+        }),
+        survivingFinding('security#0', 'security', {
+          file: 'src/auth.ts',
+          requires_verification: false,
+          severity: 'P3',
+        }),
+      ],
+      singletons: ['correctness#0', 'security#0'],
+    })
+    const scenario = finalizeReviewScenario({
+      dispatch_records: [dispatchRecord('correctness'), securityDispatch],
+      merge: buildAdjudicatedMergeOutput(prepared),
+      prepared,
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [
+            admittedScreenFinding('correctness#0', {
+              requires_verification: false,
+              severity: 'P3',
+            }),
+          ],
+        }),
+        financeScreenResult('security', {
+          admitted_findings: [
+            admittedScreenFinding('security#0', {
+              file: 'src/auth.ts',
+              requires_verification: false,
+              severity: 'P3',
+            }),
+          ],
+        }),
+      ],
+    })
+
+    const result = finalizeReview({
+      ...scenario,
+      parent_run_metadata: {
+        ...scenario.parent_run_metadata,
+        selected_dispatches: [dispatchRecord('correctness'), securityDispatch],
+      },
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok || result.value.kind !== 'writing') return
+    const { dispatches } = result.value.artifact
+    expect(dispatches.map((entry) => entry.persona)).toEqual([
+      'correctness',
+      'security',
+    ])
+    expect(dispatches.every((entry) => !('rejection_reason' in entry))).toBe(
+      true,
+    )
+    expect(result.value.artifact.run_status).toBe('completed')
+  })
+
   test('an unavailable persona degrades the run even when risk coverage is otherwise satisfied', () => {
     const securityDispatch = dispatchRecord('security', {
       dispatch_outcome: 'validation_unavailable',
