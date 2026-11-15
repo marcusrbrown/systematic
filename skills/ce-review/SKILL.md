@@ -163,13 +163,13 @@ Routing rules:
 
 | Agent | Select when diff touches... |
 |-------|---------------------------|
-| `systematic:review:maintainability-reviewer` | Materially adds/reshapes abstractions, coupling, state/control-flow complexity, naming/ownership, dead code, or a broad refactor |
+| `systematic:review:maintainability-reviewer` | Materially adds/reshapes abstractions, coupling, state/control-flow complexity, naming/ownership, or a broad refactor. Dead-code removal alone does not select it |
 | `systematic:review:security-reviewer` | Auth, public endpoints, user input, permissions |
 | `systematic:review:performance-reviewer` | DB queries, data transforms, caching, async |
 | `systematic:review:api-contract-reviewer` | Routes, serializers, type signatures, versioning |
 | `systematic:review:data-migrations-reviewer` | Migrations, schema changes, backfills |
 | `systematic:review:reliability-reviewer` | Error handling, retries, timeouts, background jobs |
-| `systematic:review:adversarial-reviewer` | >=50 changed lines of executable production code, excluding tests, generated files, lockfiles, instruction/prose Markdown, JSON schemas, and config; OR regardless of file type for auth, payments, data mutations, external APIs, or another explicitly high-risk domain |
+| `systematic:review:adversarial-reviewer` | >=50 added or changed lines of executable production code (deleted lines do not count), excluding tests, generated files, lockfiles, instruction/prose Markdown, JSON schemas, and config; OR regardless of file type for auth, payments, data mutations, external APIs, or another explicitly high-risk domain |
 | `systematic:review:cli-readiness-reviewer` | CLI command definitions, argument parsing, CLI framework usage, command handler implementations |
 | `systematic:review:previous-comments-reviewer` | Reviewing a PR that has existing review comments or threads |
 
@@ -189,7 +189,7 @@ Routing rules:
 
 ## Review Scope
 
-Every review selects exactly the three always-on personas -- `correctness`, `testing`, and `project-standards` -- then adds the cross-cutting, stack-specific, and CE conditional agents that fit the diff. A tiny prose or fixture correction with no structural decision and no user- or agent-facing or other specialist surface selects only the core three; a structural refactor may add `maintainability`; an auth feature may add `security` and `reliability`. Reviewer count is an outcome, not a target or a success metric. All four modes (interactive, autofix, report-only, and headless) use the same reviewer-selection policy; only mutation and output behavior differ.
+Every review selects exactly the three always-on personas -- `correctness`, `testing`, and `project-standards` -- then adds the cross-cutting, stack-specific, and CE conditional agents that fit the diff. A deletion-only or docs-only change selects only the core three, however large, unless a semantic risk override fires (see Stage 3); a structural refactor may add `maintainability`; an auth feature may add `security` and `reliability`. Reviewer count is an outcome, not a target or a success metric. All four modes (interactive, autofix, report-only, and headless) use the same reviewer-selection policy; only mutation and output behavior differ.
 
 ## Protected Artifacts
 
@@ -388,13 +388,22 @@ If a plan is found, read its **Requirements Trace** (R1, R2, etc.) and **Impleme
 
 Read the diff and file list from Stage 1. Always select exactly the three always-on personas: `correctness`, `testing`, and `project-standards`. For each cross-cutting, stack-specific, and CE conditional in the persona catalog included below, decide whether the diff warrants it. This is agent judgment, not keyword matching. Intent, PR, and plan context may clarify whether a changed surface is a bug/regression, an agent-facing capability, or a risk domain, but they never select a reviewer without a corresponding changed repository surface.
 
-- **`maintainability`** -- select when the diff materially adds or reshapes abstractions, raises cross-module coupling, adds state/control-flow complexity, changes naming or ownership structure, removes dead code, or performs a broad refactor. Do not select it for a tiny prose or fixture correction with no structural decision.
+- **`maintainability`** -- select when the diff materially adds or reshapes abstractions, raises cross-module coupling, adds state/control-flow complexity, changes naming or ownership structure, or performs a broad refactor. Dead-code removal alone does not select `maintainability`, and a deletion-only or docs-only change selects only the core three unless a semantic risk override fires.
 - **CE `agent-native-reviewer`** -- select for user- or agent-facing UI/CLI/tool/workflow capabilities or changed access paths where agent parity or discoverability is material.
 - **CE `learnings-researcher`** -- select for bug, regression, or hardening work, a recurring failure class, a change to a documented solution or module, or a plan/PR that cites relevant prior art.
 - **CE `deployment-verification-agent`** -- select for migrations, schema changes, or data backfills.
 - **All other conditionals** -- preserve their catalog triggers: `security`, `performance`, `api-contract`, `data-migrations`, `reliability`, `adversarial`, `cli-readiness`, `previous-comments`, and `kieran-typescript`.
 
-**File-type awareness for conditional selection:** Instruction-prose files (Markdown skill definitions, JSON schemas, config files) are product code but do not benefit from runtime-focused reviewers. The adversarial reviewer's techniques (race conditions, cascade failures, abuse cases) target executable code behavior. Select it for >=50 changed lines of executable production code -- excluding tests, generated files, lockfiles, instruction/prose Markdown, JSON schemas, and config -- or regardless of file type when the diff touches auth, payments, data mutations, external APIs, or another explicitly high-risk domain; count only executable production code lines toward the line-count threshold.
+**File-type awareness for conditional selection:** Instruction-prose files (Markdown skill definitions, JSON schemas, config files) are product code but do not benefit from runtime-focused reviewers. The adversarial reviewer's techniques (race conditions, cascade failures, abuse cases) target executable code behavior. Select it for >=50 added or changed lines of executable production code -- excluding tests, generated files, lockfiles, instruction/prose Markdown, JSON schemas, and config -- or regardless of file type when the diff touches auth, payments, data mutations, external APIs, or another explicitly high-risk domain; count only added and changed lines of executable production code toward the line-count threshold, and never count deleted lines. The high-risk-domain trigger is unchanged, so deleting auth or payments code still selects it.
+
+**Deletion-only and docs-only changes.** Classify the change from the changed paths and the diff alone. Never classify from the PR title, body, comments or commit messages: a PR that calls itself "docs only" or "dead code cleanup" is classified by its paths. Read each path's status from the diff headers (`deleted file mode`, `new file mode`, `old mode` and `new mode`, `rename from`, `Binary files`, `Subproject commit`), or from `git diff --name-status $BASE` when the headers do not settle it.
+
+- A change is deletion-only when every changed path has status D, with no mode, symlink, submodule or file-type change. Lines removed from a file that still exists make that path M, so that change is not deletion-only.
+- A change is docs-only when every changed path is documentation prose that no agent or operator follows as an instruction. Skill and agent definitions, agent instruction files, workflow prompts and operational runbooks are behavior-bearing, so they are not docs-only. The test is whether an agent or operator would behave differently after the change.
+- A deletion-only or docs-only change selects only the core three, however many files or lines it touches, unless a semantic risk override fires. Dead-code removal alone does not select `maintainability`, and deleted lines do not count toward the `adversarial` size threshold.
+- Semantic risk overrides read the deleted lines as well as the added ones, and they apply to behavior-bearing docs on both sides of the diff. Removing an authorization check, permission check, guard or input validation selects `security`, and `adversarial` through its high-risk-domain trigger. Removing a retry, timeout or migration step selects `reliability` or `data-migrations`. Removing or changing a public interface selects `api-contract`. A change to agent instructions, skill text or operational docs that widen permissions, execution or trust selects `security`, plus `agent-native-reviewer` where agent or operator behavior changes. `learnings-researcher` and `agent-native-reviewer` fire for docs only through this behavior-bearing path.
+- Do not shortcut ambiguous cases: binary-only, rename-only, generated-only, mode-only, symlink, submodule and file-type changes use normal selection, even when no line was added.
+- `previous-comments` selection depends on PR comments only and is independent of this classification.
 
 **`previous-comments` is PR-only.** Only select this persona when Stage 1 gathered PR metadata (PR number or URL was provided as an argument, or `gh pr view` returned metadata for the current branch). Skip it entirely for standalone branch reviews with no associated PR -- there are no prior comments to check.
 
