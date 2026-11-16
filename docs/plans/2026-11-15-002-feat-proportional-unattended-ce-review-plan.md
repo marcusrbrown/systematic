@@ -1,7 +1,7 @@
 ---
 title: "feat: proportional unattended ce:review"
 type: feat
-status: active
+status: completed
 date: 2026-11-15
 ---
 

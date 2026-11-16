@@ -49,6 +49,8 @@ All tokens are optional. Each one present means one less thing to infer. When ab
 | **Report-only** | `mode:report-only` or `mode:read-only` in arguments, or inferred when nobody can answer (see Default mode) | Strictly read-only. Review and report only, then stop with no edits, artifacts, todos, commits, pushes, or PR actions |
 | **Headless** | `mode:headless` in arguments | Programmatic mode for skill-to-skill invocation. Apply `safe_auto` fixes silently (single pass), return all other findings as structured text output, write run artifacts, skip todos, and return "Review complete" signal. No interactive prompts. |
 
+A run whose head moved during the review is stale and writes no artifact in any mode (see Stage 6).
+
 ### Default mode
 
 An explicit mode token always wins. `mode:headless` and `mode:autofix` stay what they say, and the detection below never overrides or downgrades them.
@@ -71,7 +73,7 @@ Before any dispatch, announce one line: the canonical mode and, when the mode wa
 
 - **Skip all user questions.** Never pause for approval or clarification once scope has been established.
 - **Apply only `safe_auto -> review-fixer` findings.** Leave `gated_auto`, `manual`, `human`, and `release` work unresolved.
-- **Write a run artifact** under `.context/systematic/ce-review/<run-id>/` summarizing findings, applied fixes, residual actionable work, and advisory outputs.
+- **Write a run artifact** under `.context/systematic/ce-review/<run-id>/` summarizing findings, applied fixes, residual actionable work, and advisory outputs. A stale run (see Stage 6) writes none.
 - **Create durable todo files only for unresolved actionable findings** whose final owner is `downstream-resolver`. Load the `todos` skill (Create section) for the canonical directory path and naming convention.
 - **Never commit, push, or create a PR** from autofix mode. Parent workflows own those decisions.
 
@@ -94,7 +96,7 @@ Before any dispatch, announce one line: the canonical mode and, when the mode wa
 - **Run no CI gate in the parent.** Run no build, typecheck, or lint at any scope, and no broad test through any alias or wrapper. CI owns those gates. See [Verification gates](#verification-gates).
 - **Limit the fixer's verification.** The fixer runs targeted tests of the files it changed and no build, typecheck, lint, or broad suite. When those tests cannot verify a fix, report that fix as unverified in the structured output; "Review complete" does not imply it was verified.
 - **Return all non-auto findings as structured text output.** Use the headless output envelope format (see Stage 6 below) preserving severity, autofix_class, owner, requires_verification, confidence, pre_existing, and suggested_fix per finding. Enrich with detail-tier fields (why_it_matters, evidence[]) from the validated inline persona returns (see Detail enrichment in Stage 6).
-- **Write a run artifact** under `.context/systematic/ce-review/<run-id>/` summarizing findings, applied fixes, and advisory outputs. Include the artifact path in the structured output.
+- **Write a run artifact** under `.context/systematic/ce-review/<run-id>/` summarizing findings, applied fixes, and advisory outputs. Include the artifact path in the structured output. A stale run (see Stage 6) writes none and its envelope has no `Artifact:` line.
 - **Do not create todo files.** The caller receives structured findings and routes downstream work itself.
 - **Do not switch the shared checkout.** If the caller passes an explicit PR or branch target, `mode:headless` must run in an isolated checkout/worktree or stop instead of running `gh pr checkout` / `git checkout`. Create that worktree with the `git-worktree` skill, which places it at `.worktrees/<branch>` under the main repository root. When stopping, emit `Review failed (headless mode). Reason: cannot switch shared checkout. Re-invoke with base:<ref> to review the current checkout, or run from an isolated worktree.`
 - **Not safe for concurrent use on a shared checkout.** Unlike `mode:report-only`, headless mutates files (applies `safe_auto` fixes). Callers must not run headless concurrently with other mutating operations on the same checkout.
@@ -334,7 +336,9 @@ HEAD_COMMIT=$(git rev-parse --verify "HEAD^{commit}" 2>/dev/null) || { echo "ERR
 CHECKOUT=$(git rev-parse --show-toplevel) || { echo "ERROR: checkout unresolved"; exit 1; }
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then HEAD_PIN="working tree"; else HEAD_PIN="$HEAD_COMMIT"; fi
 NAME_STATUS=$(git diff --name-status -M "$BASE_SHA") && NUMSTAT=$(git diff --numstat -M "$BASE_SHA") || { echo "ERROR: manifest unavailable"; exit 1; }
-echo "CHECKOUT:$CHECKOUT" && echo "BASE:$BASE_SHA" && echo "HEAD:$HEAD_PIN" && echo "HEAD_COMMIT:$HEAD_COMMIT" && echo "STATUS:" && echo "$NAME_STATUS" && echo "COUNTS:" && echo "$NUMSTAT" && echo "UNTRACKED:" && git ls-files --others --exclude-standard
+[ -z "$(git ls-files --unmerged)" ] && [ -z "$(printf '%s\n' "$NAME_STATUS" | cut -f1 | grep -v -E '^([AMDRT][0-9]*)?$')" ] || { echo "ERROR: manifest status unsupported"; exit 1; }
+FINGERPRINT=$(set -o pipefail; git diff --binary --no-ext-diff --no-textconv "$BASE_SHA" | git hash-object --stdin) || { echo "ERROR: fingerprint unavailable"; exit 1; }
+echo "CHECKOUT:$CHECKOUT" && echo "BASE:$BASE_SHA" && echo "HEAD:$HEAD_PIN" && echo "HEAD_COMMIT:$HEAD_COMMIT" && echo "FINGERPRINT:$FINGERPRINT" && echo "STATUS:" && echo "$NAME_STATUS" && echo "COUNTS:" && echo "$NUMSTAT" && echo "UNTRACKED:" && git ls-files --others --exclude-standard
 ```
 
 The four pinned values:
@@ -343,8 +347,9 @@ The four pinned values:
 - **Base SHA.** The full SHA printed after `BASE:`.
 - **Head.** The checked-out commit, or `"working tree"` when the checkout has staged or unstaged changes, which keeps the earlier behavior for a dirty checkout. `HEAD_COMMIT:` records the commit either way. Untracked files stay `UNTRACKED:` scope notes and are not manifest entries.
 - **Manifest.** One entry per changed path, joined from `STATUS:` and `COUNTS:` by path: the path, its status (`A`, `M`, `D`, `R`, or `T`), the rename source (for `R` only), and the added and deleted line counts. A binary path has no line counts and is recorded as binary. The manifest lists every changed path, so no diff is needed to know what changed.
+- **Fingerprint.** `FINGERPRINT:` is a hash of the tracked review state, `git diff --binary` against the base SHA, so it covers content, binary, and mode changes, including an edit that leaves the head commit, the dirty state, and every line count the same. The Stage 6 re-check compares it to detect a working tree that changed during the review.
 
-If the base cannot be resolved, the head cannot be resolved, or the manifest cannot be produced (a git error, or a status other than `A`, `M`, `D`, `R`, or `T`, such as an unmerged `U`), the scope is not pinned. End the run visibly incomplete before any dispatch: emit `Review failed. Reason: scope could not be pinned (<base unresolved | head unresolved | manifest unavailable>). Re-invoke from a checkout where the base and head resolve.` (headless: `Review failed (headless mode). Reason: scope could not be pinned (<...>). Re-invoke from a checkout where the base and head resolve.`), dispatch nothing, ask nothing, and never claim full coverage.
+If the base cannot be resolved, the head cannot be resolved, or the manifest cannot be produced (a git error, a failed fingerprint, or a status other than `A`, `M`, `D`, `R`, or `T`, or an unmerged path, whose status is `U`), the scope is not pinned. End the run visibly incomplete before any dispatch: emit `Review failed. Reason: scope could not be pinned (<base unresolved | head unresolved | manifest unavailable | manifest status unsupported>). Re-invoke from a checkout where the base and head resolve.` (headless: `Review failed (headless mode). Reason: scope could not be pinned (<...>). Re-invoke from a checkout where the base and head resolve.`), dispatch nothing, ask nothing, and never claim full coverage.
 
 The parent reads one path's diff the same way a child does (see [Diff Scope Rules](#diff-scope-rules)), and only for the paths that selection or verification turns on.
 
@@ -619,19 +624,27 @@ Findings outside the gating band (no `validator_requests` entry) carry no `valid
 
 ### Stage 6: Synthesize and present
 
-**Re-resolve the head.** Before `finalize`, and so before any report or fix, re-resolve the head. Substitute the pinned base SHA for `$BASE_SHA`:
+**Re-resolve the head.** Before `finalize`, and so before any report, fix, artifact, or todo, re-resolve the head. Substitute the pinned base SHA for `$BASE_SHA`:
 
 ```
 HEAD_COMMIT=$(git rev-parse --verify "HEAD^{commit}" 2>/dev/null) || { echo "ERROR: head unresolved"; exit 1; }
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then HEAD_NOW="working tree"; else HEAD_NOW="$HEAD_COMMIT"; fi
-echo "HEAD:$HEAD_NOW" && echo "HEAD_COMMIT:$HEAD_COMMIT" && echo "COUNTS:" && git diff --numstat -M "$BASE_SHA"
+FINGERPRINT=$(set -o pipefail; git diff --binary --no-ext-diff --no-textconv "$BASE_SHA" | git hash-object --stdin) || { echo "ERROR: fingerprint unavailable"; exit 1; }
+echo "HEAD:$HEAD_NOW" && echo "HEAD_COMMIT:$HEAD_COMMIT" && echo "FINGERPRINT:$FINGERPRINT"
 ```
 
-Compare the output with the pinned `HEAD:`, `HEAD_COMMIT:`, and `COUNTS:`. The head moved when the head commit differs, when the head kind changed (a commit head that is now dirty, or a working-tree head that is now clean), or when the manifest line counts differ. A working tree whose manifest line counts changed during the review is stale even when the head commit did not move, because the code the reviewers read is no longer the code in the checkout. An unresolvable head or a failed re-check counts as moved.
+Compare the output with the pinned `HEAD:`, `HEAD_COMMIT:`, and `FINGERPRINT:`. The head moved when the head commit differs, when the head kind changed (a commit head that is now dirty, or a working-tree head that is now clean), or when the fingerprint differs. A working tree that was edited during the review is stale even when the head commit, the dirty state, and the manifest line counts did not change, because the code the reviewers read is no longer the code in the checkout. An unresolvable head or a failed re-check counts as moved.
 
-A moved head makes the result stale, with no clean verdict. A stale run applies no fixes and issues no verdict. Report the findings as observations about the pinned scope, say so in Coverage, and replace the Verdict with `Review stale. Reason: the head moved from <pinned head> to <current head> during the review, so no verdict is issued. Re-run the review.` In headless mode, set the envelope's `Verdict:` line to `Code review stale (headless mode). Reason: the head moved during the review, so no verdict is issued.` and still end with "Review complete". The parent's own fixes are not a moved head, because the re-check runs before any fix.
+**A moved head is one terminal path.** A moved head makes the result stale, with no clean verdict, and the run ends here. A stale run:
 
-Call `finalize` with `applied_fixes: []` to synthesize the run's report projection -- verdict, findings, coverage, disposition counts, and every queue (`fixer`, `residual`, `report_only`) -- from `merge`'s output, `prepare`'s output, the screen results, the dispatch records, the Stage 5b validator lifecycle results, and the Stage 2b plan assessment below. See [pipeline invocation: finalize](./references/pipeline-invocation.md#finalize) for the exact envelope. This first call's `report.queues` feeds the post-review action sets directly (see Step 1 under [After Review](#after-review)); a fix-applying mode calls `finalize` again after fixes land with the real `applied_fixes`, and only that second call is persisted.
+- does not call `finalize`, neither the first call nor the persisted one, and skips Plan assessment, which only feeds it;
+- applies no fixes and spawns no fixer;
+- writes no `review-summary.json` artifact and creates no todo files, and asks no policy question or next-step question;
+- renders no findings tables, queues, or verdict.
+
+Output only the stale reason, with the pinned head and the current head (each is the `HEAD:` value, its `HEAD_COMMIT:`, and the first 12 characters of its `FINGERPRINT:`), and a request to run again: `Review stale. Reason: the head moved from <pinned head> to <current head> during the review, so no verdict is issued. Re-run the review.` Then a Coverage section that says what was withheld: findings, verdict, fixes, run artifact, and todos. In headless mode the envelope is `Code review stale (headless mode). Reason: the head moved from <pinned head> to <current head> during the review, so no verdict is issued. Re-run the review.`, followed by the same Coverage lines, with no `Artifact:` line, and it still ends with "Review complete". The parent's own fixes are not a moved head, because the re-check runs before any fix. Per-agent records written during Stage 4 are left as they are and are never summarized into an artifact.
+
+When the head has not moved, call `finalize` with `applied_fixes: []` to synthesize the run's report projection -- verdict, findings, coverage, disposition counts, and every queue (`fixer`, `residual`, `report_only`) -- from `merge`'s output, `prepare`'s output, the screen results, the dispatch records, the Stage 5b validator lifecycle results, and the Stage 2b plan assessment below. See [pipeline invocation: finalize](./references/pipeline-invocation.md#finalize) for the exact envelope. This first call's `report.queues` feeds the post-review action sets directly (see Step 1 under [After Review](#after-review)); a fix-applying mode calls `finalize` again after fixes land with the real `applied_fixes`, and only that second call is persisted.
 
 **Plan assessment.** Read the plan's Requirements Trace and Implementation Units located in Stage 2b, and check each one against the diff: met / not addressed / partially addressed. For every requirement or unit not clearly met, produce one plan-assessment result:
 
@@ -640,7 +653,7 @@ Call `finalize` with `applied_fixes: []` to synthesize the run's report projecti
 
 Neither kind becomes a finding -- `finalize` routes `results` directly into `residual_actionable_work` or `advisory_outputs` strings, never into the severity tables. Omit plan assessment entirely when no plan was found in Stage 2b -- do not mention the absence of a plan, and pass an empty `results` array so `finalize` neither fabricates a gap nor silently relaxes the verdict gate.
 
-Assemble the final report using **pipe-delimited markdown tables for findings** from the review output template included below, rendering `finalize`'s report projection directly -- do not recompute any of the fields it already derived. The table format is mandatory for finding rows in interactive mode — do not render findings as freeform text blocks or horizontal-rule-separated prose. Other report sections (Applied Fixes, Learnings, Coverage, etc.) use bullet lists and the `---` separator before the verdict, as shown in the template.
+When the head has not moved, assemble the final report using **pipe-delimited markdown tables for findings** from the review output template included below, rendering `finalize`'s report projection directly -- do not recompute any of the fields it already derived. The table format is mandatory for finding rows in interactive mode — do not render findings as freeform text blocks or horizontal-rule-separated prose. Other report sections (Applied Fixes, Learnings, Coverage, etc.) use bullet lists and the `---` separator before the verdict, as shown in the template.
 
 1. **Header.** Scope, intent, mode, harness, reviewer team with per-conditional justifications.
 2. **Findings.** Rendered as pipe-delimited tables grouped by severity (`### P0 -- Critical`, `### P1 -- High`, `### P2 -- Moderate`, `### P3 -- Low`) from `report.findings`. Each finding row shows `#`, file, issue, reviewer(s), confidence, and synthesized route. Omit empty severity levels. Never render findings as freeform text blocks or numbered lists. Only findings with `validated: true` (or no `validated` annotation) appear in these tables.
@@ -653,7 +666,7 @@ Assemble the final report using **pipe-delimited markdown tables for findings** 
 9. **Agent-Native Gaps.** Render only when CE `agent-native-reviewer` was selected and returned relevant output. Omit the section otherwise.
 10. **Deployment Notes.** If deployment-verification-agent ran, surface the key Go/No-Go items: blocking pre-deploy checks, the most important verification queries, rollback caveats, and monitoring focus areas. Keep the checklist actionable rather than dropping it into Coverage.
 11. **Coverage.** Render `report.coverage` directly: suppressed count, residual risks, testing gaps, failed/timed-out reviewers, validator lifecycle failures (`failed`/`unavailable` outcomes from Stage 5b), risk-coverage entries with citing input finding IDs and exit conditions for blocked entries, and any intent uncertainty carried by non-interactive modes. For raw returns, state each selected persona's admission state — `findings`, `empty`, `malformed`, `never_returned`, `validation_unavailable` (the persisted raw dispatch outcome; distinct from the artifact-level `validation.status: "unavailable"`) — and what was admitted or withheld. Report admission states here only; do not add fields to `review-summary.v1`. Distinguish core reviewers, each selected conditional with its one-line rationale and triggering repository-relative paths, an explicit "no conditional selected" case, and any selected-but-failed/malformed/validation-unavailable reviewer; never label an unselected reviewer as failed.
-12. **Verdict.** Render `report.verdict` directly: Ready to merge / Ready with fixes / Not ready, with fix order if applicable. `finalize` already applies the risk-aware degraded verdict rule and the plan-assessment gate from the [synthesis artifact contract](./references/synthesis-artifact-contract.md) -- do not recompute or override it.
+12. **Verdict.** Render `report.verdict` directly: Ready to merge / Ready with fixes / Not ready, with fix order if applicable. `finalize` already applies the risk-aware degraded verdict rule and the plan-assessment gate from the [synthesis artifact contract](./references/synthesis-artifact-contract.md) -- do not recompute or override it. A stale run has no `finalize` result and no verdict, so this item never renders for it (see Re-resolve the head).
 
 Do not include time estimates.
 
@@ -762,11 +775,11 @@ Do not spawn them mechanically from file extensions alone. The trigger is meanin
 
 ### Mode-Driven Post-Review Flow
 
-After presenting findings and verdict (Stage 6), route the next steps by mode. Review and synthesis stay the same in every mode; only mutation and handoff behavior changes.
+After presenting findings and verdict (Stage 6), route the next steps by mode. Review and synthesis stay the same in every mode; only mutation and handoff behavior changes. A stale run (Stage 6, "A moved head is one terminal path") skips this whole flow: no fixer, no artifact, no todos, no policy question, and no next-step offer.
 
 #### Step 1: Build the action sets
 
-Call `finalize` with `applied_fixes: []` (see [Stage 6](#stage-6-synthesize-and-present)) and read the action sets directly from `report.queues` -- do not recompute them by hand.
+Unless the run is stale, call `finalize` with `applied_fixes: []` (see [Stage 6](#stage-6-synthesize-and-present)) and read the action sets directly from `report.queues` -- do not recompute them by hand.
 
 - **Clean review** means `report.queues.fixer`, `report.queues.residual`, and `report.queues.report_only` are all empty. Skip the fix/handoff phase when the review is clean.
 - **Fixer queue:** `report.queues.fixer` -- findings routed to `safe_auto -> review-fixer`.
@@ -820,7 +833,7 @@ Call `finalize` with `applied_fixes: []` (see [Stage 6](#stage-6-synthesize-and-
 - Apply only the `safe_auto -> review-fixer` queue in a single pass. Do not enter the bounded re-review loop (Step 3). Spawn one fixer subagent, apply fixes, then proceed directly to Step 4. The fixer runs targeted tests of the files it changed and no build, typecheck, lint, or broad suite. When those tests cannot verify a fix, report that fix as unverified in the structured output; "Review complete" does not imply it was verified.
 - Leave `gated_auto`, `manual`, `human`, and `release` items unresolved — they appear in the structured text output.
 - Output the headless output envelope (see Stage 6) instead of the interactive report.
-- Write a run artifact (Step 4) but do not create todo files.
+- Write a run artifact (Step 4, unless the run is stale) but do not create todo files.
 - Stop after the structured text output and "Review complete" signal. No commit/push/PR.
 
 #### Step 3: Apply fixes with one fixer and bounded rounds
@@ -835,7 +848,7 @@ Call `finalize` with `applied_fixes: []` (see [Stage 6](#stage-6-synthesize-and-
 
 #### Step 4: Emit artifacts and downstream handoff
 
-- In interactive, autofix, and headless modes, write **`review-summary.json` unconditionally** under `.context/systematic/ce-review/<run-id>`; `mode:report-only` remains the deliberate no-write exception.
+- In interactive, autofix, and headless modes, write **`review-summary.json` unconditionally** under `.context/systematic/ce-review/<run-id>`; `mode:report-only` and a stale run (Stage 6) are the only no-write exceptions.
 - If a fix phase ran (Step 3), call `finalize` again with the exact applied-fix outcomes in `parent_run_metadata.applied_fixes` and the same `validator_lifecycle_results` used in Step 1; only this second call's output is persisted. If no fix phase ran, Step 1's call already is the output to persist -- do not call `finalize` a third time.
 - `review-summary.json` is the persisted call's `artifact` value, written verbatim. `finalize`'s writing-mode stdout is the wrapper `{ kind: 'writing', artifact, report }`, so extract only its `artifact` member -- never the whole wrapper -- and write that JSON to a same-directory temp file created exclusively with owner-only permissions inside `.context/systematic/ce-review/<run-id>`, then atomically rename it over `review-summary.json`; remove the temp file on any non-success. See [Persisting the artifact](./references/pipeline-invocation.md#persisting-the-artifact).
 - After the rename, run the existing `artifact` subcommand on the persisted file exactly as before; see the [artifact validation and failure path](./references/synthesis-artifact-contract.md#artifact-validation).

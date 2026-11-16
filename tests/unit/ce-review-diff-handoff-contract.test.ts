@@ -263,21 +263,123 @@ describe('ce:review pinned scope: how a child reads it', () => {
 })
 
 describe('ce:review pinned scope: the head is re-resolved before the report', () => {
-  test('a moved head makes the result stale with no clean verdict', () => {
+  test('the re-check runs before the first finalize call', () => {
     expect(STAGE_6).toMatch(/re-resolve the head/i)
     expect(STAGE_6).toMatch(/before `finalize`/i)
+    const recheckAt = STAGE_6_RAW.indexOf('**Re-resolve the head.**')
+    const finalizeAt = STAGE_6_RAW.indexOf('call `finalize` with')
+    expect(recheckAt).toBeGreaterThanOrEqual(0)
+    expect(finalizeAt).toBeGreaterThan(recheckAt)
+  })
+
+  test('a moved head makes the result stale with no clean verdict', () => {
     expect(STAGE_6).toMatch(/moved[^.]*(?:stale|is stale)/i)
     expect(STAGE_6).toMatch(/no clean verdict/i)
     expect(STAGE_6).toMatch(/Review stale\. Reason:/)
   })
 
-  test('a working tree whose manifest line counts changed is stale', () => {
-    expect(STAGE_6).toMatch(/working tree[^.]*line counts[^.]*stale/i)
+  test('the fingerprint, not the line counts, detects a working tree that changed', () => {
+    expect(PIN).toMatch(/`FINGERPRINT:`/)
+    expect(PIN).toMatch(/content, binary, and mode changes/i)
+    expect(STAGE_6).toMatch(/`FINGERPRINT:`/)
+    expect(STAGE_6).toMatch(
+      /working tree[^.]*edited during the review[^.]*stale[^.]*even when[^.]*line counts did not change/i,
+    )
   })
 
-  test('a stale run applies no fixes and carries no verdict in any mode', () => {
-    expect(STAGE_6).toMatch(/applies? no fixes/i)
-    expect(STAGE_6).toMatch(/Code review stale \(headless mode\)\./)
+  test('an unresolvable head or a failed re-check counts as moved', () => {
+    expect(STAGE_6).toMatch(/unresolvable head[^.]*failed re-check[^.]*moved/i)
+  })
+})
+
+/** The stale terminal path: the paragraph that opens with its label. */
+const STALE_PATH = normalize(
+  STAGE_6_RAW.slice(
+    STAGE_6_RAW.indexOf('**A moved head is one terminal path.**'),
+  ),
+).split('**Plan assessment.**')[0] as string
+
+describe('ce:review pinned scope: a stale run is one terminal path', () => {
+  test('the terminal path exists and sits before synthesis in Stage 6', () => {
+    expect(STALE_PATH.length).toBeGreaterThan(0)
+    const pathAt = STAGE_6_RAW.indexOf('**A moved head is one terminal path.**')
+    expect(pathAt).toBeGreaterThan(
+      STAGE_6_RAW.indexOf('**Re-resolve the head.**'),
+    )
+    expect(pathAt).toBeLessThan(STAGE_6_RAW.indexOf('call `finalize` with'))
+  })
+
+  test('a stale run makes no finalize call and applies no fixes', () => {
+    expect(STALE_PATH).toMatch(/does not call `finalize`/i)
+    expect(STALE_PATH).toMatch(/applies no fixes/i)
+    expect(STALE_PATH).toMatch(/spawns no fixer/i)
+  })
+
+  test('a stale run writes no artifact and creates no todos', () => {
+    expect(STALE_PATH).toMatch(/writes no `review-summary\.json`/i)
+    expect(STALE_PATH).toMatch(/creates no todo files/i)
+  })
+
+  test('a stale run renders no findings tables, queues or verdict', () => {
+    expect(STALE_PATH).toMatch(/renders no findings tables/i)
+    expect(STALE_PATH).toMatch(/no verdict/i)
+    expect(STALE_PATH).not.toMatch(/observations about the pinned scope/i)
+    expect(STAGE_6).not.toMatch(/observations about the pinned scope/i)
+  })
+
+  test('the output is the stale reason with both heads, the re-run request, and what was withheld', () => {
+    expect(STALE_PATH).toMatch(
+      /Review stale\. Reason: the head moved from <pinned head> to <current head> during the review, so no verdict is issued\. Re-run the review\./,
+    )
+    expect(STALE_PATH).toMatch(/Coverage[^.]*withheld/i)
+  })
+
+  test('the headless envelope is the stale line with no Artifact line, then Review complete', () => {
+    expect(STALE_PATH).toMatch(
+      /Code review stale \(headless mode\)\. Reason: the head moved from <pinned head> to <current head> during the review, so no verdict is issued\. Re-run the review\./,
+    )
+    expect(STALE_PATH).toMatch(/no `Artifact:` line/i)
+    expect(STALE_PATH).toMatch(/ends? with "Review complete"/)
+  })
+
+  test('every later rule that would write, apply or override carries the stale exception', () => {
+    const lines = SKILL.split('\n')
+    const needles = [
+      /write a run artifact/i,
+      /review-summary\.json` unconditionally/i,
+      /do not recompute or override it/i,
+      /call `finalize` with `applied_fixes: \[\]` \(see \[Stage 6\]/i,
+    ]
+    for (const needle of needles) {
+      const hits = lines.filter(
+        (line) =>
+          (line.startsWith('- ') || !line.startsWith('|')) &&
+          needle.test(line.trim()),
+      )
+      expect(hits.length, needle.source).toBeGreaterThan(0)
+      for (const line of hits) {
+        expect(line, needle.source).toMatch(/stale/i)
+      }
+    }
+    const finalizeLine = lines.find((line) =>
+      line.startsWith('Call `finalize` with `applied_fixes: []` to synthesize'),
+    )
+    expect(finalizeLine).toBeUndefined()
+    expect(STAGE_6).toMatch(
+      /when the head has not moved, call `finalize` with `applied_fixes: \[\]`/i,
+    )
+  })
+
+  test('the post-review flow is skipped for a stale run', () => {
+    const flow = normalize(section(SKILL, '### Mode-Driven Post-Review Flow'))
+    expect(flow).toMatch(
+      /stale run[^.]*skips this whole flow[^.]*no fixer, no artifact, no todos/i,
+    )
+  })
+
+  test('the mode table says a stale run writes no artifact in any mode', () => {
+    const modes = normalize(section(SKILL, '## Mode Detection'))
+    expect(modes).toMatch(/stale[^.]*writes no artifact in any mode/i)
   })
 })
 
@@ -359,12 +461,13 @@ interface Pinned {
   base: string
   head: string
   headCommit: string
+  fingerprint: string
   status: string[]
   counts: string[]
   untracked: string[]
 }
 
-type Scalar = 'checkout' | 'base' | 'headCommit' | 'head'
+type Scalar = 'checkout' | 'base' | 'headCommit' | 'head' | 'fingerprint'
 type Rows = 'status' | 'counts' | 'untracked'
 
 // HEAD_COMMIT: precedes HEAD: so the longer prefix wins.
@@ -373,6 +476,7 @@ const SCALAR_PREFIXES: readonly (readonly [string, Scalar])[] = [
   ['BASE:', 'base'],
   ['HEAD_COMMIT:', 'headCommit'],
   ['HEAD:', 'head'],
+  ['FINGERPRINT:', 'fingerprint'],
 ]
 const ROW_MARKERS: Readonly<Record<string, Rows>> = {
   'STATUS:': 'status',
@@ -386,6 +490,7 @@ function parsePinned(stdout: string): Pinned {
     base: '',
     head: '',
     headCommit: '',
+    fingerprint: '',
     status: [],
     counts: [],
     untracked: [],
@@ -407,6 +512,16 @@ function makeRepo(): { root: string; base: string; cleanup: () => void } {
   )
   git(root, 'init', '-q', '-b', 'main')
   writeFile(root, 'src/keep.ts', 'export const keep = 1\n')
+  writeFile(
+    root,
+    'src/policy.ts',
+    'export const allow = false\nexport const tail = 1\n',
+  )
+  fs.mkdirSync(path.join(root, 'assets'), { recursive: true })
+  fs.writeFileSync(
+    path.join(root, 'assets/blob.bin'),
+    Buffer.from([0, 1, 2, 3, 4, 5]),
+  )
   writeFile(root, 'src/gone.ts', 'export const gone = 1\nexport const g2 = 2\n')
   writeFile(
     root,
@@ -574,16 +689,42 @@ describe('ce:review pinned scope: the documented capture, run for real', () => {
     return parsePinned(run.stdout)
   }
 
-  test('an untouched checkout re-resolves to exactly the pinned head and counts', () => {
+  function pin(repo: { root: string; base: string }): Pinned {
+    const run = runShell(repo.root, PIN_SCRIPT, { BASE: repo.base })
+    expect(run.status).toBe(0)
+    return parsePinned(run.stdout)
+  }
+
+  /** The comparison the skill tells the parent to make. */
+  function moved(pinned: Pinned, again: Pinned): boolean {
+    return (
+      pinned.head !== again.head ||
+      pinned.headCommit !== again.headCommit ||
+      pinned.fingerprint !== again.fingerprint
+    )
+  }
+
+  function numstat(root: string, base: string): string {
+    return git(root, 'diff', '--numstat', '-M', base)
+  }
+
+  test('the pin prints a fingerprint of the tracked review state', () => {
     const repo = makeRepo()
     try {
-      const pinned = parsePinned(
-        runShell(repo.root, PIN_SCRIPT, { BASE: repo.base }).stdout,
-      )
-      const again = recheck(repo.root, pinned.base)
-      expect(again.head).toBe(pinned.head)
-      expect(again.headCommit).toBe(pinned.headCommit)
-      expect(again.counts).toEqual(pinned.counts)
+      expect(pin(repo).fingerprint).toMatch(/^[0-9a-f]{40,64}$/)
+    } finally {
+      repo.cleanup()
+    }
+  })
+
+  test('an untouched checkout re-resolves to exactly the pinned state', () => {
+    const repo = makeRepo()
+    try {
+      const pinned = pin(repo)
+      expect(moved(pinned, recheck(repo.root, pinned.base))).toBe(false)
+      writeFile(repo.root, 'src/keep.ts', 'export const keep = 9\n')
+      const dirty = pin(repo)
+      expect(moved(dirty, recheck(repo.root, dirty.base))).toBe(false)
     } finally {
       repo.cleanup()
     }
@@ -592,33 +733,93 @@ describe('ce:review pinned scope: the documented capture, run for real', () => {
   test('a new commit moves the head', () => {
     const repo = makeRepo()
     try {
-      const pinned = parsePinned(
-        runShell(repo.root, PIN_SCRIPT, { BASE: repo.base }).stdout,
-      )
+      const pinned = pin(repo)
       writeFile(repo.root, 'src/keep.ts', 'export const keep = 10\n')
       git(repo.root, 'commit', '-q', '-am', 'later')
       const again = recheck(repo.root, pinned.base)
       expect(again.headCommit).not.toBe(pinned.headCommit)
+      expect(moved(pinned, again)).toBe(true)
     } finally {
       repo.cleanup()
     }
   })
 
-  test('a working tree whose line counts change during the review is detected', () => {
+  test('a working tree edit that changes the line counts is detected', () => {
     const repo = makeRepo()
     try {
       writeFile(repo.root, 'src/keep.ts', 'export const keep = 9\n')
-      const pinned = parsePinned(
-        runShell(repo.root, PIN_SCRIPT, { BASE: repo.base }).stdout,
-      )
+      const pinned = pin(repo)
       expect(pinned.head).toBe('working tree')
-      expect(recheck(repo.root, pinned.base).counts).toEqual(pinned.counts)
       writeFile(
         repo.root,
         'src/keep.ts',
         'export const keep = 9\nexport const more = 1\nexport const extra = 2\n',
       )
-      expect(recheck(repo.root, pinned.base).counts).not.toEqual(pinned.counts)
+      expect(moved(pinned, recheck(repo.root, pinned.base))).toBe(true)
+    } finally {
+      repo.cleanup()
+    }
+  })
+
+  test('a same-count edit to an already-edited line is detected', () => {
+    const repo = makeRepo()
+    try {
+      writeFile(
+        repo.root,
+        'src/policy.ts',
+        'export const allow = false // edited\nexport const tail = 1\n',
+      )
+      const pinned = pin(repo)
+      const countsBefore = numstat(repo.root, pinned.base)
+      writeFile(
+        repo.root,
+        'src/policy.ts',
+        'export const allow = true // edited\nexport const tail = 1\n',
+      )
+      const again = recheck(repo.root, pinned.base)
+      // HEAD, the dirty state and the line counts are all unchanged.
+      expect(again.head).toBe(pinned.head)
+      expect(again.headCommit).toBe(pinned.headCommit)
+      expect(numstat(repo.root, pinned.base)).toBe(countsBefore)
+      expect(moved(pinned, again)).toBe(true)
+    } finally {
+      repo.cleanup()
+    }
+  })
+
+  test('replacing a binary file with other bytes of the same size is detected', () => {
+    const repo = makeRepo()
+    try {
+      fs.writeFileSync(
+        path.join(repo.root, 'assets/blob.bin'),
+        Buffer.from([0, 9, 9, 9, 9, 9]),
+      )
+      const pinned = pin(repo)
+      const countsBefore = numstat(repo.root, pinned.base)
+      fs.writeFileSync(
+        path.join(repo.root, 'assets/blob.bin'),
+        Buffer.from([0, 7, 7, 7, 7, 7]),
+      )
+      const again = recheck(repo.root, pinned.base)
+      expect(numstat(repo.root, pinned.base)).toBe(countsBefore)
+      expect(again.head).toBe(pinned.head)
+      expect(moved(pinned, again)).toBe(true)
+    } finally {
+      repo.cleanup()
+    }
+  })
+
+  test('a mode change to a tracked file is detected', () => {
+    const repo = makeRepo()
+    try {
+      writeFile(repo.root, 'src/keep.ts', 'export const keep = 9\n')
+      const pinned = pin(repo)
+      const countsBefore = numstat(repo.root, pinned.base)
+      fs.chmodSync(path.join(repo.root, 'src/keep.ts'), 0o755)
+      const again = recheck(repo.root, pinned.base)
+      expect(numstat(repo.root, pinned.base)).toBe(countsBefore)
+      expect(again.head).toBe(pinned.head)
+      expect(moved(pinned, again)).toBe(true)
     } finally {
       repo.cleanup()
     }
@@ -627,12 +828,100 @@ describe('ce:review pinned scope: the documented capture, run for real', () => {
   test('a commit head that becomes dirty no longer re-resolves to the pinned head', () => {
     const repo = makeRepo()
     try {
-      const pinned = parsePinned(
-        runShell(repo.root, PIN_SCRIPT, { BASE: repo.base }).stdout,
-      )
+      const pinned = pin(repo)
       writeFile(repo.root, 'src/keep.ts', 'export const keep = 11\n')
-      expect(recheck(repo.root, pinned.base).head).toBe('working tree')
-      expect(recheck(repo.root, pinned.base).head).not.toBe(pinned.head)
+      const again = recheck(repo.root, pinned.base)
+      expect(again.head).toBe('working tree')
+      expect(moved(pinned, again)).toBe(true)
+    } finally {
+      repo.cleanup()
+    }
+  })
+
+  test('an unmerged path is an unsupported manifest status and ends the pin before any manifest', () => {
+    const repo = makeRepo()
+    try {
+      git(repo.root, 'checkout', '-q', '-b', 'other', repo.base)
+      writeFile(repo.root, 'src/keep.ts', 'export const keep = 99\n')
+      git(repo.root, 'commit', '-q', '-am', 'other')
+      const merge = spawnSync(
+        'git',
+        [
+          '-c',
+          'user.name=t',
+          '-c',
+          'user.email=t@t',
+          'merge',
+          '--no-ff',
+          '--no-edit',
+          'topic',
+        ],
+        { cwd: repo.root, encoding: 'utf8' },
+      )
+      expect(merge.status).not.toBe(0)
+      // The scenario is real: git itself reports the path as unmerged.
+      expect(git(repo.root, 'ls-files', '--unmerged')).toContain('src/keep.ts')
+      const run = runShell(repo.root, PIN_SCRIPT, { BASE: repo.base })
+      expect(run.status).not.toBe(0)
+      expect(run.stdout).toMatch(/^ERROR: manifest status unsupported/m)
+      expect(run.stdout).not.toMatch(/^STATUS:/m)
+      expect(run.stdout).not.toMatch(/^FINGERPRINT:/m)
+    } finally {
+      repo.cleanup()
+    }
+  })
+
+  test('a manifest status outside A, M, D, R and T ends the pin before any manifest', () => {
+    const repo = makeRepo()
+    const shim = fs.mkdtempSync(path.join(os.tmpdir(), 'ce-review-shim-'))
+    try {
+      const realGit = spawnSync('which', ['git'], {
+        encoding: 'utf8',
+      }).stdout.trim()
+      // A shim stands in for git only where the manifest is listed.
+      fs.writeFileSync(
+        path.join(shim, 'git'),
+        `#!/bin/bash\nif [ "$1" = diff ] && [[ " $* " == *" --name-status "* ]]; then printf 'X\\tsrc/x.ts\\n'; exit 0; fi\nexec "${realGit}" "$@"\n`,
+        { mode: 0o755 },
+      )
+      const run = runShell(repo.root, PIN_SCRIPT, {
+        BASE: repo.base,
+        PATH: `${shim}:${process.env.PATH ?? ''}`,
+      })
+      expect(run.status).not.toBe(0)
+      expect(run.stdout).toMatch(/^ERROR: manifest status unsupported/m)
+      expect(run.stdout).not.toMatch(/^STATUS:/m)
+      // The same shim without the bad status pins normally, so the shim is not the cause.
+      const ok = runShell(repo.root, PIN_SCRIPT, { BASE: repo.base })
+      expect(ok.status).toBe(0)
+    } finally {
+      fs.rmSync(shim, { recursive: true, force: true })
+      repo.cleanup()
+    }
+  })
+
+  test('a re-check against an unresolvable base fails instead of printing a fingerprint', () => {
+    const repo = makeRepo()
+    try {
+      const run = runShell(repo.root, RECHECK_SCRIPT, {
+        BASE_SHA: 'no-such-ref',
+      })
+      expect(run.status).not.toBe(0)
+      expect(run.stdout).toMatch(/^ERROR:/m)
+      expect(run.stdout).not.toMatch(/^FINGERPRINT:/m)
+    } finally {
+      repo.cleanup()
+    }
+  })
+
+  test('a re-check with an unresolvable head fails', () => {
+    const repo = makeRepo()
+    try {
+      git(repo.root, 'checkout', '-q', '--orphan', 'unborn')
+      const run = runShell(repo.root, RECHECK_SCRIPT, { BASE_SHA: repo.base })
+      expect(run.status).not.toBe(0)
+      expect(run.stdout).toMatch(/^ERROR: head/m)
+      expect(run.stdout).not.toMatch(/^FINGERPRINT:/m)
     } finally {
       repo.cleanup()
     }
