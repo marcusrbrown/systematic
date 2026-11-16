@@ -47,12 +47,10 @@ read_release_body() {
 }
 
 # Scratch directory: the ONLY place the dispatched agent may write scratch files.
-# The agent runs on a different runner, and its runtime denies every external
-# path except $RUNNER_TEMP/fro-bot-response/*. The prompt therefore names the
-# path with $RUNNER_TEMP left literal; the agent resolves it on its own runner
-# and creates the directory there. Nothing is created on this runner.
-# shellcheck disable=SC2016  # $RUNNER_TEMP must stay unexpanded
-SCRATCH_PATH='$RUNNER_TEMP/fro-bot-response/release-notes'
+# The agent's sandbox leaves $RUNNER_TEMP read-only; its checkout is writable in
+# every mode, so scratch lives under the gitignored .context/ there. The agent
+# resolves the path on its own runner; nothing is created on this one.
+SCRATCH_PATH='.context/release-notes'
 
 # Idempotency: skip dispatch entirely when the release is already narrated.
 BODY_BEFORE="$(read_release_body)"
@@ -98,11 +96,11 @@ Scratch directory: $SCRATCH_PATH
 - This is the ONLY directory you may write scratch files to (pre-edit snapshot, rendered
   body file, anything temporary). Do NOT write to /tmp, /tmp/opencode, or any other path;
   every other external path is denied.
-- \$RUNNER_TEMP is resolved on your runner, not this one. Before using any file tool
-  (which needs absolute paths), run \`echo "\$RUNNER_TEMP"\` and use the printed value
-  in place of \$RUNNER_TEMP. Create the directory with \`mkdir -p\`.
-- Set \`SCRATCH_DIR="$SCRATCH_PATH"\` (with \$RUNNER_TEMP expanded) before running the
-  skill's bash snippets; the skill uses it in place of its default local paths.
+- It is relative to the repository root, which is your checkout (writable, and \`.context/\`
+  is gitignored). File tools need absolute paths: run \`git rev-parse --show-toplevel\` and
+  append \`/$SCRATCH_PATH\` to the printed value. Create the directory with \`mkdir -p\`.
+- Set \`SCRATCH_DIR="<repository root>/$SCRATCH_PATH"\` (with the printed root substituted) before
+  running the skill's bash snippets; the skill uses it in place of its default local paths.
 
 Idempotency check (do this FIRST):
 - Fetch the current release body: \`gh release view $RELEASE_VERSION --json body --jq '.body'\`
@@ -118,7 +116,7 @@ Scope constraints (do not violate):
 - Do NOT comment on any PR, issue, or discussion.
 - Do NOT open or close any issue.
 - Do NOT edit any release body OTHER than $RELEASE_VERSION.
-- Do NOT modify any file in the repository.
+- Do NOT modify any tracked file in the repository (the scratch directory is untracked).
 - Do NOT push commits, create branches, or create tags.
 
 Report back with: the target tag, the chars-before and chars-after counts, and the

@@ -34,8 +34,8 @@
  * 17.  Edge case — generic narrative failure → narrative-not-applied
  * 18.  Edge case — unknown future conclusion → narrative-not-applied
  * 19.  Integration — prompt construction includes correlation token, target tag, repo name
- * 20.  Integration — prompt names the literal $RUNNER_TEMP/fro-bot-response/release-notes scratch directory as the only writable path
- * 20b. Integration — the same literal path appears when the dispatcher's RUNNER_TEMP is unset
+ * 20.  Integration — prompt names the checkout-relative .context/release-notes scratch directory as the only writable path
+ * 20b. Integration — the same path appears when the dispatcher's RUNNER_TEMP is unset
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
@@ -1026,15 +1026,16 @@ describe('release-notes-ci dispatch script smoke tests', () => {
   )
 
   // -------------------------------------------------------------------------
-  // 20. Integration — prompt names the fro-bot-response scratch dir, unexpanded
+  // 20. Integration — prompt names the checkout scratch dir
   // -------------------------------------------------------------------------
-  // The Fro Bot run happens on a different runner and denies every external
-  // path except $RUNNER_TEMP/fro-bot-response/*, so the dispatcher must name
-  // that path literally and let the agent resolve $RUNNER_TEMP itself.
-  const SCRATCH_LITERAL = '$RUNNER_TEMP/fro-bot-response/release-notes'
+  // The Fro Bot run is isolated: $RUNNER_TEMP is read-only there, and its
+  // response directory exists only for some delivery modes. The checkout is
+  // writable in every mode, so the scratch directory lives inside it, under the
+  // gitignored .context/ at the repository root.
+  const SCRATCH_RELATIVE = '.context/release-notes'
 
   it(
-    'prompt names $RUNNER_TEMP/fro-bot-response/release-notes literally as the only writable directory',
+    'prompt names .context/release-notes inside the checkout as the only writable directory',
     () => {
       const promptCapturePath = path.join(testTempDir, 'captured-prompt.txt')
       const runnerTemp = path.join(testTempDir, 'runner-temp')
@@ -1050,17 +1051,20 @@ describe('release-notes-ci dispatch script smoke tests', () => {
       expect(fs.existsSync(promptCapturePath)).toBe(true)
       const capturedPrompt = fs.readFileSync(promptCapturePath, 'utf8')
       expect(capturedPrompt.split('\n')).toContain(
-        `Scratch directory: ${SCRATCH_LITERAL}`,
+        `Scratch directory: ${SCRATCH_RELATIVE}`,
       )
-      expect(capturedPrompt).toContain(`SCRATCH_DIR="${SCRATCH_LITERAL}"`)
       expect(capturedPrompt).toMatch(/only directory/i)
-      // The variable stays unexpanded: it resolves on the agent's runner.
+      // File tools need absolute paths: the agent resolves the checkout root itself.
+      expect(capturedPrompt).toContain('git rev-parse --show-toplevel')
+      expect(capturedPrompt).toContain('mkdir -p')
+      expect(capturedPrompt).toContain('SCRATCH_DIR=')
+      expect(capturedPrompt).toContain('Do NOT write to /tmp')
+      // The isolated agent cannot write under $RUNNER_TEMP or the response
+      // directory, so neither may be named, and the dispatcher's own value
+      // must not leak into the prompt.
+      expect(capturedPrompt).not.toContain('RUNNER_TEMP')
+      expect(capturedPrompt).not.toContain('fro-bot-response')
       expect(capturedPrompt).not.toContain(runnerTemp)
-      // The agent must resolve it before using file tools (absolute paths only).
-      expect(capturedPrompt).toContain('echo "$RUNNER_TEMP"')
-      // The old path is denied by the agent runtime and must never be named.
-      expect(capturedPrompt).not.toMatch(/_temp\/release-notes/)
-      expect(capturedPrompt).not.toContain('$RUNNER_TEMP/release-notes')
       // The dispatcher's runner is not the agent's runner: nothing is created here.
       expect(fs.readdirSync(runnerTemp)).toEqual([])
     },
@@ -1071,7 +1075,7 @@ describe('release-notes-ci dispatch script smoke tests', () => {
   // 20b. Integration — the prompt does not depend on the dispatcher's RUNNER_TEMP
   // -------------------------------------------------------------------------
   it(
-    'prompt names the same literal scratch directory when RUNNER_TEMP is unset',
+    'prompt names the same scratch directory when RUNNER_TEMP is unset',
     () => {
       const promptCapturePath = path.join(testTempDir, 'captured-prompt.txt')
 
@@ -1082,8 +1086,12 @@ describe('release-notes-ci dispatch script smoke tests', () => {
 
       expect(result.exitCode).toBe(0)
       const capturedPrompt = fs.readFileSync(promptCapturePath, 'utf8')
-      expect(capturedPrompt).toContain(`Scratch directory: ${SCRATCH_LITERAL}`)
+      expect(capturedPrompt.split('\n')).toContain(
+        `Scratch directory: ${SCRATCH_RELATIVE}`,
+      )
       expect(capturedPrompt).toMatch(/only directory/i)
+      expect(capturedPrompt).not.toContain('RUNNER_TEMP')
+      expect(capturedPrompt).not.toContain('fro-bot-response')
     },
     SCENARIO_TIMEOUT_MS,
   )
