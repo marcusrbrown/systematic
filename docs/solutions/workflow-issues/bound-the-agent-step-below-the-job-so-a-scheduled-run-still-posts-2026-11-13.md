@@ -18,6 +18,7 @@ root_cause: missing_workflow_step
 resolution_type: workflow_improvement
 tags: [github-actions, timeout-minutes, continue-on-error, scheduled-workflow, ce-connect, artifacts, actionlint, report-author]
 last_refreshed: 2026-11-13
+last_updated: 2026-11-16
 ---
 
 # Bound the agent step below the job so a hung scheduled run still reads its record and posts
@@ -76,8 +77,10 @@ Run 43475406631 was a dispatch with `FRO_BOT_CONNECT_STEP_TIMEOUT` set to `2`. I
 
 A rerun of only the failed jobs raises `run_attempt`, while skipped jobs keep the artifacts they uploaded under the old attempt. A job that rebuilt the artifact name from `github.run_attempt` would look for a name that does not exist. So each producing job outputs the name it uploaded under, and the consuming job reads that output (`.github/workflows/connect.yaml:68`, `handoff`; `.github/workflows/connect.yaml:383`, `handoff`; `.github/workflows/connect.yaml:416`, `needs.prepare.outputs.handoff`). The tests check each producer's output and each consumer's input (`tests/unit/connect-workflow.test.ts:2556-2573`, `producers`).
 
+**The attempt reaches the fetch line too.** An artifact is named `connect-run-<run>-<attempt>`, and a candidate carried into a later attempt's report may have come from an earlier one. The report therefore prints `fetch:<run>.<attempt>` with the attempt that listed the candidate (`src/lib/connect-ci.ts:838`, `fetchWord`). The skill downloads exactly that attempt's artifact and stops with `artifact-not-found` or `artifact-expired` when it is missing or expired, with no fallback to another attempt (`skills/ce-connect/references/fetch-and-import.md:41-48`, `fetch:<run>.<attempt>`). A bare `fetch:<run>` still means the newest attempt (#1399; `tests/unit/connect-skill-contract.test.ts:183`, `names the attempt form`).
+
 ## Related
 
 - [`green-job-is-not-proof-of-publication-2026-08-18.md`](../integration-issues/green-job-is-not-proof-of-publication-2026-08-18.md): a job's conclusion does not prove what it was meant to produce. Here the red `Settle result` step is the other half: the report is posted first, then the workflow reports the failure.
 - [`post-commit-failure-left-the-committed-run-claiming-success-2026-11-09.md`](../logic-errors/post-commit-failure-left-the-committed-run-claiming-success-2026-11-09.md): the helper's own version of the same rule, that an artifact must say what happened after the commit point.
-- #1393 (step timeout and report authors).
+- #1393 (step timeout and report authors), #1399 (attempt in the fetch word).

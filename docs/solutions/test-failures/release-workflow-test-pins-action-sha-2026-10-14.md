@@ -11,8 +11,8 @@ symptoms:
 root_cause: logic_error
 resolution_type: test_fix
 severity: medium
-tags: [renovate, github-actions, sha-pinning, workflow-tests, test-fix, regex-manager, host-support-table]
-last_updated: 2026-11-12
+tags: [renovate, github-actions, sha-pinning, workflow-tests, test-fix, regex-manager, host-floor]
+last_updated: 2026-11-16
 ---
 
 # A workflow test asserted an exact action SHA, so every Renovate bump failed the Test check
@@ -67,39 +67,19 @@ The workflows pin every action to a full commit SHA, and Renovate owns which SHA
 - Before adding a per-step assertion, check whether a file-wide test already covers the invariant.
 - Before merging a workflow test, apply a dependency bump to the workflow and re-run it. The test should still pass.
 - Tests check behavior at the current version, never the version itself. A test that compares a restated version with a pin adds a hand step to every bump and proves nothing the real-host jobs do not. When one fails on a Renovate PR, delete it.
-- A value in source that must track a pinned version gets a `// renovate:` annotation and a regex manager whose package name falls in the pin's group, so Renovate moves both together and `postUpgradeTasks` regenerates whatever depends on it.
+- Decide first what a version in source means. If it must equal a pin, it gets a `renovate:` annotation and a regex manager, so Renovate moves both together and `postUpgradeTasks` regenerates whatever depends on it. `env.SYSTEMATIC_VERSION` in `.github/workflows/connect.yaml` is that case. If it records the lowest version where something was observed, it is a floor: it follows no pin, and it gets no annotation.
 
 ## The same failure with a version restated in source
 
-`HOST_SUPPORT_TABLE` in `src/lib/connect-config.ts` lists the OpenCode v1, OpenCode v2 and Pi versions the ce:connect researcher was proven on. A unit test required each row to equal the pin in `scripts/opencode-host-pins.json` or `package.json`. Renovate bumped the v2 pin, the Host Contract v2 jobs proved the researcher at the new version in the same PR, and the Test check still failed on that one assertion. Satisfying it by hand meant editing the row, regenerating `skills/ce-connect/scripts/connect.mjs` and recording a new evaluation digest, on every bump.
+`HOST_SUPPORT_TABLE` in `src/lib/connect-config.ts` listed the host versions the ce:connect researcher was proven on, and a unit test required each row to equal a host pin. Renovate PR #1359 bumped the v2 pin, the Host Contract v2 jobs proved the researcher at the new version in the same PR, and the Test check still failed on that one assertion. #1369 deleted the test and #1371 added a `// renovate:` annotation to each row. Both kept the wrong reading: the row is not the version in use. It is the lowest version where the researcher's tool limits were observed.
 
-The fix had two parts:
+The fix in #1407 made each row a floor, so a newer release in the same major version is supported without a Systematic release, and a release seen to fail the proof goes on `KNOWN_BAD_HOST_VERSIONS` (`src/lib/connect-config.ts:665`, `HostSupportRow`; `src/lib/connect-config.ts:724-730`, `KNOWN_BAD_HOST_VERSIONS`). A floor follows no pin. The v2 pin is `2.2.7` (`scripts/opencode-host-pins.json:2`, `v2`) while the v2 row stays at `2.2.5`, and nothing fails. The annotation and its regex manager are gone, and a test pins their absence (`tests/unit/renovate-workflow.test.ts:197-207`, `no regex manager targets the connect config file`). The host-version evidence is in [`support-a-host-only-after-an-observed-deny-2026-11-09.md`](../best-practices/support-a-host-only-after-an-observed-deny-2026-11-09.md).
 
-- Delete the assertion (#1369). Behavior at the new version is what the real-host jobs prove; a test that a restated version equals the pin proves nothing more.
-- Connect the row to the bump (#1371). Each row carries an annotation, and one regex manager in `.github/renovate.json5` reads it, so the row bumps in the same group PR as its pin:
+The risk is that a newer host release is supported without its own observation. What catches a release that breaks the limits is the researcher deny proofs in the Host Contract jobs, which run on every host pin bump ([`host-contract-evidence-is-ci-owned-2026-09-04.md`](../workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md)). #1407 did not run a real host above a floor.
 
-```ts
-  {
-    host: 'opencode-v2',
-    // renovate: datasource=npm depName=@opencode/cli
-    version: '2.2.6',
-```
-
-```json5
-{
-  customType: 'regex',
-  managerFilePatterns: ['/^src/lib/connect-config\\.ts$/'],
-  matchStrings: [
-    '//\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*version:\\s*\'(?<currentValue>\\d+\\.\\d+\\.\\d+)\'',
-  ],
-}
-```
-
-The existing `groupName` rules for `opencode-ai`, `@opencode/**` and `@earendil-works/**` put each row in its pin's PR. `postUpgradeTasks` already runs `bun run postupgrade`, which regenerates every surface, so the helper bundle that embeds the table is rebuilt in the same PR. The next v2 bump changed the row and the bundle with no hand edit. The Claude Code row has no package to track and keeps its manual evidence.
-
-The tests for the wiring run the manager's own regex over the real file (`tests/unit/renovate-workflow.test.ts`). They check that it finds exactly the annotated rows, that each captured version equals its table row, and that each package lands in its pin's group. Neither side is a literal, so a bump never breaks them; removing or misnaming an annotation does.
+An exact pin still follows Renovate. `env.SYSTEMATIC_VERSION` in `.github/workflows/connect.yaml` must be the one published release the scheduled run installs, so it keeps its annotation and regex manager (`.github/workflows/connect.yaml:40`, `SYSTEMATIC_VERSION`; `.github/renovate.json5:37-49`, `SYSTEMATIC_VERSION`; pinned by `tests/unit/renovate-workflow.test.ts:224`, `renovate Systematic pin tracking`).
 
 ## Related Issues
 
 - #1102, #1121
-- #1359, #1369, #1371
+- #1359, #1369, #1371, #1407 (host rows become floors), #1397 (`SYSTEMATIC_VERSION` tracked)

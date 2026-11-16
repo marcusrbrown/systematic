@@ -1,6 +1,6 @@
 ---
 name: running-with-without-evals
-description: Use when producing or refreshing a "with vs without Systematic" demo, an A/B plugin evaluation, or any recorded-session comparison of OpenCode behavior with and without a plugin loaded — for a public page, a credibility artifact, or internal validation.
+description: Use when producing or refreshing a "with vs without Systematic" demo, an A/B plugin evaluation, or any recorded-session comparison of OpenCode behavior with and without a plugin loaded, or between two builds or skill-text trees of the same plugin — for a public page, a credibility artifact, or internal validation.
 ---
 
 # Running With/Without Evals
@@ -17,12 +17,14 @@ The reusable harness lives at `tests/manual/with-without-eval/run-arm.sh`. Reuse
 
 - Building or refreshing the `with-without-systematic` demo page
 - Validating that a plugin/skill change actually moves model behavior
+- Comparing two skill-text trees (a candidate edit against the shipped text) through the real host; see [Comparing two skill-text trees](#comparing-two-skill-text-trees)
 - Producing a credibility artifact for public promotion
 
 ## When NOT to use
 
 - You need statistical claims — this is n=1–3 recorded sessions, not a benchmark. Don't dress it up as one.
 - The task is trivial (the baseline will look fine and the eval proves nothing)
+- The ask is a skill edit. Test it with `writing-skills` RED/GREEN scenarios first, and build an eval only when someone asked to measure ([Size a skill refresh to the ask](../../../docs/solutions/workflow-issues/size-a-skill-refresh-to-the-ask-2026-10-25.md))
 
 ## The method
 
@@ -34,7 +36,20 @@ The reusable harness lives at `tests/manual/with-without-eval/run-arm.sh`. Reuse
 
 ## Isolation recipe (the part that bites)
 
-Redirect **only `XDG_CONFIG_HOME`** to drop the user's global config and its MCP servers for a vanilla baseline. Do **NOT** redirect `XDG_DATA_HOME` (holds `auth.json` — the paid model won't authenticate) or `XDG_CACHE_HOME` (holds the model catalog — `ProviderModelNotFoundError`). `OPENCODE_CONFIG_DIR=<empty temp>` skips the project-level user config; `OPENCODE_CONFIG_CONTENT` sets the per-arm plugin array. This is the minimum isolation that works — heavier isolation breaks auth and model resolution.
+Redirect **only `XDG_CONFIG_HOME`** to drop OpenCode's own global config (`opencode.json`) and its MCP servers for a vanilla baseline. Do **NOT** redirect `XDG_DATA_HOME` (holds `auth.json` — the paid model won't authenticate) or `XDG_CACHE_HOME` (holds the model catalog — `ProviderModelNotFoundError`). `OPENCODE_CONFIG_DIR=<empty temp>` adds an empty custom config directory, and `OPENCODE_CONFIG_CONTENT` sets the per-arm plugin array. This is the minimum isolation that works for OpenCode itself — heavier isolation breaks auth and model resolution.
+
+**What this recipe does not isolate.** Systematic reads its config through `HOME`, not `XDG_CONFIG_HOME`: `<homedir>/.config/opencode` (`os.homedir()`) plus the `OPENCODE_CONFIG_DIR` directory (`src/lib/search-user-config.ts:872-883`, called from `src/lib/config.ts:3519`). The treatment arm therefore loads the user's real `systematic.jsonc`, including any `agents.<name>.model` overlay, and subagents can run on models other than the one you passed with `-m`. The baseline arm is unaffected: `--pure` with an empty plugin array never loads Systematic. Check the model of every child session in the transcript before you read a result, then pick one:
+
+- **Keep the owner's config.** The arm runs the owner's real per-agent routing, which is the system people use. Report the child models. `run-arm.sh` does this today.
+- **Use a private `HOME`.** The overlay is gone, and so is the routing: every subagent runs the arm model. State in the result that routing was flattened. Set `XDG_DATA_HOME` and `XDG_CACHE_HOME` to the real directories, because a new `HOME` moves their defaults. A credential copied into a private data directory stays readable by the same user at any file mode, so use a scoped key, not a copy of the owner's `auth.json`.
+
+Read [An eval of a multi-agent workflow must run the real system](../../../docs/solutions/best-practices/an-eval-of-a-multi-agent-workflow-must-run-the-real-system-2026-11-16.md) before you evaluate a workflow that dispatches subagents.
+
+## Comparing two skill-text trees
+
+`run-arm.sh` computes the plugin path from its own location (`REPO_ROOT`, then `$REPO_ROOT/dist/index.js`), and it treats any arm name other than `baseline` as a treatment arm. To compare two trees, build each in its own checkout or worktree and run that checkout's copy of the script. Give each run its own output directory: the transcript is named `<arm>.jsonl`, so two runs into one directory overwrite each other. Keep the model, prompt, seed and config identical, and pre-register which tree is the reference. The script's `baseline` arm is not a "shipped tree" arm: it runs with no plugin at all.
+
+Set the attempt time limit from observed wall times before the run, because a limit that binds harder on the candidate tree turns a signal into a null. See the linked doc above.
 
 ## Required controls
 
@@ -66,4 +81,5 @@ Redirect **only `XDG_CONFIG_HOME`** to drop the user's global config and its MCP
 
 - Harness + prompts + pre-registrations + raw transcripts: `tests/manual/with-without-eval/`
 - Public artifact produced from it: `docs/src/content/docs/guides/with-without-systematic.mdx`
-- Isolation lineage: `docs/solutions/best-practices/reliable-cli-integration-testing-2026-04-26.md`
+- What an eval of a multi-agent workflow must hold fixed: [An eval of a multi-agent workflow must run the real system](../../../docs/solutions/best-practices/an-eval-of-a-multi-agent-workflow-must-run-the-real-system-2026-11-16.md)
+- Pre-registering an evaluation of a model-driven tool: [Evaluate a model-driven tool with a pre-registered protocol](../../../docs/solutions/best-practices/pre-registered-evaluation-of-a-model-driven-tool-2026-11-09.md)

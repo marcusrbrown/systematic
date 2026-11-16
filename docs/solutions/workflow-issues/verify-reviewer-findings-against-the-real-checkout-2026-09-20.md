@@ -1,6 +1,7 @@
 ---
 title: Reviewer findings need verification against the checkout the code lives in
 date: 2026-09-20
+last_updated: 2026-11-16
 category: workflow-issues
 module: ce-review
 problem_type: workflow_issue
@@ -11,10 +12,12 @@ applies_when:
   - Dispatching read-only review personas that compute their own diff
   - Deciding whether to act on a high-confidence finding without reading the code
   - Evaluating a finding that claims a feature is entirely missing
+  - Reviewing a branch whose base branch can gain commits while the review runs
 symptoms:
   - "Personas report a feature as completely unimplemented while its test suite passes"
   - "Findings cite real symbol names but describe pre-change behavior"
   - "Stated confidence is 0.94-0.99 on claims a single grep refutes"
+  - "Findings report a change that landed on the base branch mid-review as a regression on the branch"
 related_components:
   - tooling
   - testing_framework
@@ -70,6 +73,10 @@ briefs in this run did name the worktree path and did say not to touch the prima
 checkout. Four findings still came from the wrong tree. Path instructions reduce the
 failure; they do not remove it.
 
+Since [#1424](https://github.com/marcusrbrown/systematic/pull/1424), the pinned review scope carries the checkout path and every child runs `git -C <checkout_path>` (`skills/ce-review/references/diff-scope.md:7-17`), which removes the empty-diff case for git reads; this has not been re-measured. See [Pin the review scope once and fingerprint it](../best-practices/pin-the-review-scope-once-and-fingerprint-it-2026-11-16.md).
+
+**Expect findings about the base's own commits when the base moves mid-review.** In a review of a branch cut from [`55e9794c`](https://github.com/marcusrbrown/systematic/commit/55e9794c), [#1420](https://github.com/marcusrbrown/systematic/pull/1420) landed on main mid-review. Three reviewers attributed that change (the `isolate-agent` setting) to the feature branch. Validators read the cited file against the pinned merge-base, found it unchanged, and returned false, so the finding was marked `validated: false` and shown as filtered (`skills/ce-review/SKILL.md:623`, `finalize`). Three reviewers agreeing was no evidence. Checking against a pinned base was.
+
 **Check the export surface before accepting a breaking-change claim.** A claim that
 an exported type change breaks consumers is only meaningful if consumers can reach
 the type. `package.json`'s `exports` map and the entry file's named exports settle it.
@@ -91,6 +98,7 @@ information about whether the reviewer read the right bytes.
   a paragraph someone can ignore.
 - Any finding whose claim is the *absence* of something, which is cheap to check and
   easy to get wrong.
+- Any review that outlasts a merge to its base branch.
 
 ## Examples
 
@@ -127,6 +135,10 @@ grep -cE "^export (const|function|interface|type|class|\{)" src/index.ts   # 0
   — worktree scoping producing observations that do not describe the intended target.
 - [`../best-practices/verify-a-no-change-claim-against-the-consumer-2026-09-08.md`](../best-practices/verify-a-no-change-claim-against-the-consumer-2026-09-08.md)
   — the same shape at a different boundary: check the claim where its consumer lives.
+- [`../best-practices/pin-the-review-scope-once-and-fingerprint-it-2026-11-16.md`](../best-practices/pin-the-review-scope-once-and-fingerprint-it-2026-11-16.md)
+  — the structural fix: one pinned checkout, base SHA and head for every child.
+- [`unattended-ce-review-cost-follows-the-prompt-contract-2026-11-16.md`](./unattended-ce-review-cost-follows-the-prompt-contract-2026-11-16.md)
+  — the cost side of the same change set.
 
 ## Postscript
 

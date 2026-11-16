@@ -2,7 +2,7 @@
 title: "Host-contract evidence is CI-owned: nobody re-runs the suite by hand"
 module: ".github/workflows/main.yaml host-contract jobs + scripts/host-contract-guard.ts + scripts/lib/opencode-pin.ts"
 date: 2026-09-04
-last_updated: 2026-11-12
+last_updated: 2026-11-16
 problem_type: workflow_issue
 component: testing_framework
 severity: medium
@@ -90,9 +90,7 @@ The evidence itself is five job kinds in `.github/workflows/main.yaml`:
 `Host Contract` is a required status check in the `main` ruleset and in the
 classic branch protection (`.github/settings.yml`), so a red `host-contract`
 job blocks the merge of any pull request, including the release PR. For pull
-requests the gate filters on `src/**`, `tests/**`, `scripts/**`, `evals/**`,
-`skills/**`, `agents/**`, `registry/**`, `package.json`, `bun.lock`, and
-`.github/**`, via its "Detect relevant path changes" step. On push to `main`
+requests the gate runs the suite only when a file the host jobs depend on changes, via its "Detect relevant path changes" step (`.github/workflows/main.yaml:175-196`, `filters`). The earlier filter listed `tests/**`, `registry/**` and `.github/**` whole, so a pull request that touched only a unit test, the Renovate config or a docs page ran the full suite (#1398). The current filter is the dependency closure of the host jobs' integration files plus their runtime inputs, and a unit test fails when the filter misses a closure file or carries an entry no closure file needs (`tests/unit/host-contract-workflow.test.ts:273`, `hostContractDependencyClosure`). On push to `main`
 the suite does not run and the gate reports it as not required: the release
 gate reads the check runs on the release PR's head
 (`scripts/release/gate-decide.ts`), and the strict up-to-date merge policy
