@@ -80,7 +80,7 @@ Before any dispatch, announce one line: the canonical mode and, when the mode wa
 - **Skip all user questions.** Infer intent conservatively if the diff metadata is thin.
 - **Never edit files or externalize work.** Do not write `.context/systematic/ce-review/<run-id>/`, do not create todo files, and do not commit, push, or create a PR.
 - **Require a determinable diff scope.** If report-only mode cannot determine a diff scope (no branch, PR, or `base:` ref determinable without user interaction), emit `Review failed. Reason: no diff scope detected. Re-invoke with a branch name, PR number, or base:<ref>.` and stop without dispatching agents, asking a question, or inventing a scope. An explicit PR or branch target that needs a checkout switch keeps its existing stop, described below.
-- **Report-only runs in memory.** Run raw-return structural validation, synthesis, and reporting without writing a run directory, artifact, or ignore file.
+- **Report-only runs in memory.** Run raw-return structural validation, synthesis, and reporting without writing a run directory, artifact, or ignore file. The pinned scope is read from git, so report-only writes no diff file.
 - **Run no CI gate.** Run no build, typecheck, or lint at any scope, and no broad test through any alias or wrapper. CI owns those gates. See [Verification gates](#verification-gates) for the full rule, the allowed probe, and what each role may run.
 - **Safe for parallel read-only verification.** `mode:report-only` is the only mode that is safe to run concurrently with browser testing on the same checkout.
 - **Do not switch the shared checkout.** If the caller passes an explicit PR or branch target, `mode:report-only` must run in an isolated checkout/worktree or stop instead of running `gh pr checkout` / `git checkout`. Create that worktree with the `git-worktree` skill, which places it at `.worktrees/<branch>` under the main repository root.
@@ -111,8 +111,8 @@ CI owns the build, typecheck, lint, and broad-test gates. In `report-only` and `
 |------|------|---------|-----------|
 | Parent | report-only, headless | Non-mutating inspection, the helper phases, one parent-approved probe per finding | Build, typecheck, lint at any scope. Broad tests through any alias or wrapper. A probe on a fork PR or a no-write author PR |
 | Parent | interactive, autofix | Unchanged | Unchanged |
-| Reviewers | every mode | Non-mutating inspection, reads of the supplied diff and files | Build, typecheck, lint. Any test or probe run |
-| CE agents | every mode | Non-mutating inspection, reads of the supplied diff and files | Build, typecheck, lint. Any test or probe run |
+| Reviewers | every mode | Non-mutating inspection, reads against the pinned scope | Build, typecheck, lint. Any test or probe run |
+| CE agents | every mode | Non-mutating inspection, reads against the pinned scope | Build, typecheck, lint. Any test or probe run |
 | Finding validators | every mode | Static, non-mutating inspection | Build, typecheck, lint. Any test or probe run |
 | Headless fixer | headless | Edits to eligible findings. Targeted tests of the files it changed | Build, typecheck, lint. Broad suites. Reporting a fix as verified when targeted tests could not verify it |
 
@@ -205,7 +205,7 @@ If a reviewer flags any file in these directories for cleanup or removal, discar
 
 ### Stage 1: Determine scope
 
-Compute the diff range, file list, and diff. Minimize permission prompts by combining into as few commands as possible.
+Resolve the diff base, then [Pin the scope](#pin-the-scope) once. The pinned scope is the review's only scope: Stage 3, every reviewer, every CE agent, and every Stage 5b validator reads it, and none of them recomputes or widens it. The skill never inlines a whole-range diff into a prompt. Minimize permission prompts by combining into as few commands as possible.
 
 **If `base:` argument is provided (fast path):**
 
@@ -216,11 +216,7 @@ BASE_ARG="{base_arg}"
 BASE=$(git merge-base HEAD "$BASE_ARG" 2>/dev/null) || BASE="$BASE_ARG"
 ```
 
-Then produce the same output as the other paths:
-
-```
-echo "BASE:$BASE" && echo "FILES:" && git diff --name-only $BASE && echo "DIFF:" && git diff -U10 $BASE && echo "UNTRACKED:" && git ls-files --others --exclude-standard
-```
+Then [Pin the scope](#pin-the-scope), the same as the other paths.
 
 This path works with any ref — a SHA, `origin/main`, a branch name. Automated callers (ce:work, lfg, slfg) should prefer this to avoid the detection overhead. **Do not combine `base:` with a PR number or branch target.** If both are present, stop with an error: "Cannot use `base:` with a PR number or branch target — `base:` implies the current checkout is already the correct branch. Pass `base:` alone, or pass the target alone and let scope detection resolve the base." This avoids scope/intent mismatches where the diff base comes from one source but the code and metadata come from another.
 
@@ -270,11 +266,9 @@ fi
 if [ -n "$PR_BASE_REF" ]; then BASE=$(git merge-base HEAD "$PR_BASE_REF" 2>/dev/null) || BASE=""; else BASE=""; fi
 ```
 
-```
-if [ -n "$BASE" ]; then echo "BASE:$BASE" && echo "FILES:" && git diff --name-only $BASE && echo "DIFF:" && git diff -U10 $BASE && echo "UNTRACKED:" && git ls-files --others --exclude-standard; else echo "ERROR: Unable to resolve PR base branch <base> locally. Fetch the base branch and rerun so the review scope stays aligned with the PR."; fi
-```
+If `$BASE` is empty, output `ERROR: Unable to resolve PR base branch <base> locally. Fetch the base branch and rerun so the review scope stays aligned with the PR.` and stop. Otherwise [Pin the scope](#pin-the-scope).
 
-Extract PR title/body, base branch, and PR URL from `gh pr view`, then extract the base marker, file list, diff content, and `UNTRACKED:` list from the local command. Do not use `gh pr diff` as the review scope after checkout -- it only reflects the remote PR state and will miss local fix commits until they are pushed. If the base ref still cannot be resolved from the PR's actual base repository after the fetch attempt, stop instead of falling back to `git diff HEAD`; a PR review without the PR base branch is incomplete.
+Extract PR title/body, base branch, and PR URL from `gh pr view`, then take the checkout path, base SHA, head, manifest, and `UNTRACKED:` list from the pinned scope. Do not use `gh pr diff` as the review scope after checkout -- it only reflects the remote PR state and will miss local fix commits until they are pushed. If the base ref still cannot be resolved from the PR's actual base repository after the fetch attempt, stop instead of falling back to `git diff HEAD`; a PR review without the PR base branch is incomplete.
 
 **If a branch name is provided as an argument:**
 
@@ -308,11 +302,7 @@ BASE=$(echo "$RESOLVE_OUT" | sed 's/^BASE://')
 
 If the script outputs an error, stop instead of falling back to `git diff HEAD`; a branch review without the base branch would only show uncommitted changes and silently miss all committed work.
 
-On success, produce the diff:
-
-```
-echo "BASE:$BASE" && echo "FILES:" && git diff --name-only $BASE && echo "DIFF:" && git diff -U10 $BASE && echo "UNTRACKED:" && git ls-files --others --exclude-standard
-```
+On success, [Pin the scope](#pin-the-scope).
 
 You may still fetch additional PR metadata with `gh pr view` for title, body, and linked issues, but do not fail if no PR exists.
 
@@ -330,15 +320,35 @@ BASE=$(echo "$RESOLVE_OUT" | sed 's/^BASE://')
 
 If the script outputs an error, stop instead of falling back to `git diff HEAD`; a standalone review without the base branch would only show uncommitted changes and silently miss all committed work on the branch.
 
-On success, produce the diff:
+On success, [Pin the scope](#pin-the-scope).
+
+Diffing the merge-base against the working tree (`git diff $BASE`, without `..HEAD`) includes committed, staged, and unstaged changes together. That is why a dirty checkout pins its head as the working tree.
+
+#### Pin the scope
+
+Run this once, after `BASE` is set by the path above. It pins the scope once: the authoritative checkout path, the base SHA, the head, and a manifest. The parent writes no diff file in any mode, and no whole-range diff crosses a prompt or the tool-output cap.
 
 ```
-echo "BASE:$BASE" && echo "FILES:" && git diff --name-only $BASE && echo "DIFF:" && git diff -U10 $BASE && echo "UNTRACKED:" && git ls-files --others --exclude-standard
+BASE_SHA=$(git rev-parse --verify "${BASE}^{commit}" 2>/dev/null) || { echo "ERROR: base unresolved"; exit 1; }
+HEAD_COMMIT=$(git rev-parse --verify "HEAD^{commit}" 2>/dev/null) || { echo "ERROR: head unresolved"; exit 1; }
+CHECKOUT=$(git rev-parse --show-toplevel) || { echo "ERROR: checkout unresolved"; exit 1; }
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then HEAD_PIN="working tree"; else HEAD_PIN="$HEAD_COMMIT"; fi
+NAME_STATUS=$(git diff --name-status -M "$BASE_SHA") && NUMSTAT=$(git diff --numstat -M "$BASE_SHA") || { echo "ERROR: manifest unavailable"; exit 1; }
+echo "CHECKOUT:$CHECKOUT" && echo "BASE:$BASE_SHA" && echo "HEAD:$HEAD_PIN" && echo "HEAD_COMMIT:$HEAD_COMMIT" && echo "STATUS:" && echo "$NAME_STATUS" && echo "COUNTS:" && echo "$NUMSTAT" && echo "UNTRACKED:" && git ls-files --others --exclude-standard
 ```
 
-Using `git diff $BASE` (without `..HEAD`) diffs the merge-base against the working tree, which includes committed, staged, and unstaged changes together.
+The four pinned values:
 
-**Untracked file handling:** Always inspect the `UNTRACKED:` list, even when `FILES:`/`DIFF:` are non-empty. Untracked files are outside review scope until staged. If the list is non-empty, tell the user which files are excluded. If any of them should be reviewed, stop and tell the user to `git add` them first and rerun. Only continue when the user is intentionally reviewing tracked changes only. In `mode:headless`, `mode:autofix`, or `mode:report-only`, do not stop to ask — proceed with tracked changes only and note the excluded untracked files in the Coverage section of the output.
+- **Checkout path.** The absolute path printed after `CHECKOUT:`. Every git command a child runs targets it.
+- **Base SHA.** The full SHA printed after `BASE:`.
+- **Head.** The checked-out commit, or `"working tree"` when the checkout has staged or unstaged changes, which keeps the earlier behavior for a dirty checkout. `HEAD_COMMIT:` records the commit either way. Untracked files stay `UNTRACKED:` scope notes and are not manifest entries.
+- **Manifest.** One entry per changed path, joined from `STATUS:` and `COUNTS:` by path: the path, its status (`A`, `M`, `D`, `R`, or `T`), the rename source (for `R` only), and the added and deleted line counts. A binary path has no line counts and is recorded as binary. The manifest lists every changed path, so no diff is needed to know what changed.
+
+If the base cannot be resolved, the head cannot be resolved, or the manifest cannot be produced (a git error, or a status other than `A`, `M`, `D`, `R`, or `T`, such as an unmerged `U`), the scope is not pinned. End the run visibly incomplete before any dispatch: emit `Review failed. Reason: scope could not be pinned (<base unresolved | head unresolved | manifest unavailable>). Re-invoke from a checkout where the base and head resolve.` (headless: `Review failed (headless mode). Reason: scope could not be pinned (<...>). Re-invoke from a checkout where the base and head resolve.`), dispatch nothing, ask nothing, and never claim full coverage.
+
+The parent reads one path's diff the same way a child does (see [Diff Scope Rules](#diff-scope-rules)), and only for the paths that selection or verification turns on.
+
+**Untracked file handling:** Always inspect the `UNTRACKED:` list, even when the manifest is non-empty. Untracked files are outside review scope until staged. If the list is non-empty, tell the user which files are excluded. If any of them should be reviewed, stop and tell the user to `git add` them first and rerun. Only continue when the user is intentionally reviewing tracked changes only. In `mode:headless`, `mode:autofix`, or `mode:report-only`, do not stop to ask — proceed with tracked changes only and note the excluded untracked files in the Coverage section of the output.
 
 ### Stage 2: Intent discovery
 
@@ -386,7 +396,7 @@ If a plan is found, read its **Requirements Trace** (R1, R2, etc.) and **Impleme
 
 ### Stage 3: Select reviewers
 
-Read the diff and file list from Stage 1. Always select exactly the three always-on personas: `correctness`, `testing`, and `project-standards`. For each cross-cutting, stack-specific, and CE conditional in the persona catalog included below, decide whether the diff warrants it. This is agent judgment, not keyword matching. Intent, PR, and plan context may clarify whether a changed surface is a bug/regression, an agent-facing capability, or a risk domain, but they never select a reviewer without a corresponding changed repository surface.
+Read the pinned manifest from Stage 1, and read the per-path diff of each path that selection turns on. Always select exactly the three always-on personas: `correctness`, `testing`, and `project-standards`. For each cross-cutting, stack-specific, and CE conditional in the persona catalog included below, decide whether the diff warrants it. This is agent judgment, not keyword matching. Intent, PR, and plan context may clarify whether a changed surface is a bug/regression, an agent-facing capability, or a risk domain, but they never select a reviewer without a corresponding changed repository surface.
 
 - **`maintainability`** -- select when the diff materially adds or reshapes abstractions, raises cross-module coupling, adds state/control-flow complexity, changes naming or ownership structure, or performs a broad refactor. Dead-code removal alone does not select `maintainability`, and a deletion-only or docs-only change selects only the core three unless a semantic risk override fires.
 - **CE `agent-native-reviewer`** -- select for user- or agent-facing UI/CLI/tool/workflow capabilities or changed access paths where agent parity or discoverability is material.
@@ -396,7 +406,7 @@ Read the diff and file list from Stage 1. Always select exactly the three always
 
 **File-type awareness for conditional selection:** Instruction-prose files (Markdown skill definitions, JSON schemas, config files) are product code but do not benefit from runtime-focused reviewers. The adversarial reviewer's techniques (race conditions, cascade failures, abuse cases) target executable code behavior. Select it for >=50 added or changed lines of executable production code -- excluding tests, generated files, lockfiles, instruction/prose Markdown, JSON schemas, and config -- or regardless of file type when the diff touches auth, payments, data mutations, external APIs, or another explicitly high-risk domain; count only added and changed lines of executable production code toward the line-count threshold, and never count deleted lines. The high-risk-domain trigger is unchanged, so deleting auth or payments code still selects it.
 
-**Deletion-only and docs-only changes.** Classify the change from the changed paths and the diff alone. Never classify from the PR title, body, comments or commit messages: a PR that calls itself "docs only" or "dead code cleanup" is classified by its paths. Read each path's status from the diff headers (`deleted file mode`, `new file mode`, `old mode` and `new mode`, `rename from`, `Binary files`, `Subproject commit`), or from `git diff --name-status $BASE` when the headers do not settle it.
+**Deletion-only and docs-only changes.** Classify the change from the changed paths and the diff alone. Never classify from the PR title, body, comments or commit messages: a PR that calls itself "docs only" or "dead code cleanup" is classified by its paths. Read each path's status from the pinned manifest. The manifest shows no mode, symlink, submodule or binary change, so read that path's diff headers (`deleted file mode`, `new file mode`, `old mode` and `new mode`, `rename from`, `Binary files`, `Subproject commit`) whenever a manifest status of `M` or `T` could hide one.
 
 - A change is deletion-only when every changed path has status D, with no mode, symlink, submodule or file-type change. Lines removed from a file that still exists make that path M, so that change is not deletion-only.
 - A change is docs-only when every changed path is documentation prose that no agent or operator follows as an instruction. Skill and agent definitions, agent instruction files, workflow prompts and operational runbooks are behavior-bearing, so they are not docs-only. The test is whether an agent or operator would behave differently after the change.
@@ -492,17 +502,17 @@ Omit the `mode` parameter when dispatching sub-agents so the user's configured p
 Spawn each selected persona reviewer as a parallel sub-agent using the subagent template included below. Each persona sub-agent receives:
 
 1. Their persona file content (identity, failure modes, calibration, suppress conditions)
-2. Shared diff-scope rules from the diff-scope reference included below
+2. Shared diff-scope rules from the diff-scope reference included below, which say how to read one path of the pinned scope
 3. The JSON output contract from the reviewer return schema included below, with its populated example
 4. PR metadata: title, body, and URL when reviewing a PR (empty string otherwise). Passed in a `<pr-context>` block so reviewers can verify code against stated intent
-5. Review context: intent summary, file list, diff
+5. Review context: intent summary and the pinned scope (checkout path, base SHA, head, and manifest). The parent passes no inline diff, so a reviewer reads one path's diff from git against those values and never recomputes the scope
 6. Reviewer name for the returned `reviewer` field
 7. **Selected structured conditionals only:** the `selection_reason` and non-empty `selection_surface` from Stage 3, passed into the review context. Core personas receive empty values for both
 8. **For `project-standards` only:** the standards file path list from Stage 3b, wrapped in a `<standards-paths>` block appended to the review context
 
 Persona sub-agents are **read-only** with respect to the project: they review and return structured JSON. They do not edit project files, write artifacts, or propose refactors. The parent orchestrator owns all persistence.
 
-Read-only here means **non-mutating**, not "no shell access." Reviewer sub-agents may use non-mutating inspection commands when needed to gather evidence or verify scope, including read-oriented `git` / `gh` usage such as `git diff`, `git show`, `git blame`, `git log`, and `gh pr view`. They must not edit project files, change branches, commit, push, create PRs, or otherwise mutate the checkout or repository state. Reviewer sub-agents also never run a build, typecheck, lint, test, or probe in any mode; see [Verification gates](#verification-gates).
+Read-only here means **non-mutating**, not "no shell access." Reviewer sub-agents may use non-mutating inspection commands when needed to gather evidence, including read-oriented `git` / `gh` usage against the pinned scope: the diff of one pinned path, `git show <base_sha>:<path>` for old source, `git blame`, a log of one path, and `gh pr view`. A diff or log across the whole range to rebuild or widen the scope is not permitted. They must not edit project files, change branches, commit, push, create PRs, or otherwise mutate the checkout or repository state. Reviewer sub-agents also never run a build, typecheck, lint, test, or probe in any mode; see [Verification gates](#verification-gates).
 
 Each persona sub-agent returns one full JSON payload (all schema fields) to the parent:
 
@@ -536,7 +546,7 @@ Each persona sub-agent returns one full JSON payload (all schema fields) to the 
 
 Returning the detail tier inline increases parent context per persona. The previous compact/detail split kept synthesis context lean, so this is an intentional cost of deleting the sub-agent write path. Verify it against a real multi-persona run. If it materially degrades synthesis, use a second targeted request per persona and keep the write parent-side; never restore sub-agent disk access.
 
-**CE conditional agents** (agent-native-reviewer, learnings-researcher) are dispatched as standard Agent calls when their Stage 3 triggers apply, in parallel with the persona agents. Give them the same review context bundle the personas receive (entry mode, any PR metadata gathered in Stage 1, intent summary, review base branch name when known, `BASE:` marker, file list, diff, and `UNTRACKED:` scope notes) plus the selection reason and triggering surface. Do not invoke them with a generic "review this" prompt. Their output is unstructured and synthesized separately in Stage 6; they never receive a raw-return dispatch record.
+**CE conditional agents** (agent-native-reviewer, learnings-researcher) are dispatched as standard Agent calls when their Stage 3 triggers apply, in parallel with the persona agents. Give them the same review context bundle the personas receive (entry mode, any PR metadata gathered in Stage 1, intent summary, review base branch name when known, the pinned checkout path, base SHA, head, and manifest, and `UNTRACKED:` scope notes, with no inline diff) plus the selection reason and triggering surface. Do not invoke them with a generic "review this" prompt. Their output is unstructured and synthesized separately in Stage 6; they never receive a raw-return dispatch record.
 
 **CE conditional agents** (deployment-verification-agent) are also dispatched as standard Agent calls when applicable. Pass the same review context bundle plus the selection reason and triggering surface (for example, which migration files triggered the agent). Their output is unstructured and must be preserved for Stage 6 synthesis just like the other CE conditional agents.
 
@@ -597,7 +607,7 @@ A helper failure (`prepare` or `merge` exiting 1 or 2) is never permission to ha
 
 Dispatch validators for exactly the findings `merge`'s `validator_requests` names -- the P0/P1-or-`requires_verification` gating band is already computed; Stage 5b no longer identifies the gated set by hand.
 
-1. For each entry in `validator_requests`, spawn one validator subagent in parallel with the others in its batch, using the validator template at `references/validator-template.md`. Dispatch in bounded batches, sized to what the harness handles reliably. Each batch runs in parallel and finishes before the next starts. Look up that finding's full fields (title, why_it_matters, evidence, file, line, severity, autofix_class, owner, suggested_fix) from `merge`'s `merged_findings` by `finding_id`, and pass them along with the intent summary, file list, and full diff.
+1. For each entry in `validator_requests`, spawn one validator subagent in parallel with the others in its batch, using the validator template at `references/validator-template.md`. Dispatch in bounded batches, sized to what the harness handles reliably. Each batch runs in parallel and finishes before the next starts. Look up that finding's full fields (title, why_it_matters, evidence, file, line, severity, autofix_class, owner, suggested_fix) from `merge`'s `merged_findings` by `finding_id`, and pass them along with the intent summary and the same pinned checkout path, base SHA, head, and manifest the reviewers received. Validators receive the same pinned scope as the reviewers. The validator reads the cited path against that scope, so it verifies cited source against the same tree, and reads a deleted file's old source with `git show <base_sha>:<path>`. No inline diff is passed.
 2. Collect `{outcome: 'true'|'false'|'failed'|'unavailable', reason?}` from each validator, keyed by `finding_id`. `outcome: 'true'` needs no reason; the other three outcomes each require one. Every request needs a result: a subagent that returns nothing, or an answer that is not one of these outcomes, is recorded as `unavailable` with a reason.
 3. Carry every result forward as `validator_lifecycle_results` into `finalize` (Stage 6). Do not reconcile filtered findings, update ledger dispositions, or recompute the "Filtered (not validated)" group by hand -- `finalize` derives all of it from these results plus `merge`'s output.
 
@@ -608,6 +618,18 @@ Validators stay static in every mode: inspection only, with no approved command 
 Findings outside the gating band (no `validator_requests` entry) carry no `validated` annotation and appear in Stage 6 severity tables unchanged.
 
 ### Stage 6: Synthesize and present
+
+**Re-resolve the head.** Before `finalize`, and so before any report or fix, re-resolve the head. Substitute the pinned base SHA for `$BASE_SHA`:
+
+```
+HEAD_COMMIT=$(git rev-parse --verify "HEAD^{commit}" 2>/dev/null) || { echo "ERROR: head unresolved"; exit 1; }
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then HEAD_NOW="working tree"; else HEAD_NOW="$HEAD_COMMIT"; fi
+echo "HEAD:$HEAD_NOW" && echo "HEAD_COMMIT:$HEAD_COMMIT" && echo "COUNTS:" && git diff --numstat -M "$BASE_SHA"
+```
+
+Compare the output with the pinned `HEAD:`, `HEAD_COMMIT:`, and `COUNTS:`. The head moved when the head commit differs, when the head kind changed (a commit head that is now dirty, or a working-tree head that is now clean), or when the manifest line counts differ. A working tree whose manifest line counts changed during the review is stale even when the head commit did not move, because the code the reviewers read is no longer the code in the checkout. An unresolvable head or a failed re-check counts as moved.
+
+A moved head makes the result stale, with no clean verdict. A stale run applies no fixes and issues no verdict. Report the findings as observations about the pinned scope, say so in Coverage, and replace the Verdict with `Review stale. Reason: the head moved from <pinned head> to <current head> during the review, so no verdict is issued. Re-run the review.` In headless mode, set the envelope's `Verdict:` line to `Code review stale (headless mode). Reason: the head moved during the review, so no verdict is issued.` and still end with "Review complete". The parent's own fixes are not a moved head, because the re-check runs before any fix.
 
 Call `finalize` with `applied_fixes: []` to synthesize the run's report projection -- verdict, findings, coverage, disposition counts, and every queue (`fixer`, `residual`, `report_only`) -- from `merge`'s output, `prepare`'s output, the screen results, the dispatch records, the Stage 5b validator lifecycle results, and the Stage 2b plan assessment below. See [pipeline invocation: finalize](./references/pipeline-invocation.md#finalize) for the exact envelope. This first call's `report.queues` feeds the post-review action sets directly (see Step 1 under [After Review](#after-review)); a fix-applying mode calls `finalize` again after fixes land with the real `applied_fixes`, and only that second call is persisted.
 

@@ -597,9 +597,14 @@ describe('ce:review deletion-only and docs-only selection', () => {
     selectsOnlyCore(row.selected.replace(exclusion, ''))
   })
 
-  test('classification reads the manifest and diff, and the manifest source is stated', () => {
-    expect(STAGE3).toMatch(/diff headers/)
-    expect(STAGE3).toMatch(/git diff --name-status/)
+  test('classification reads the pinned manifest and the diff headers, and never an inline diff', () => {
+    for (const doc of [STAGE3, CATALOG_NORM]) {
+      expect(doc).toMatch(/status from the pinned manifest/)
+      expect(doc).toMatch(/diff headers/)
+      expect(doc).not.toMatch(/git diff --name-status/)
+    }
+    expect(STAGE3).toMatch(/per-path diff of each path that selection turns on/)
+    expect(STAGE3).not.toMatch(/Read the diff and file list from Stage 1/)
   })
 
   test('the pinned selection phrases survive the rewrite', () => {

@@ -18,7 +18,7 @@ You are a specialist code reviewer.
 </scope-rules>
 
 <bounded-investigation>
-The supplied diff is the primary source of truth. Use the supplied paths and line numbers, and read each unresolved surrounding range or symbol once. Re-read only when a concrete ambiguity remains or the file changed since the prior read. Stop and return a finding or verdict once the evidence is sufficient. If evidence cannot be obtained within this bounded pass, return an explicit blocker or residual risk instead of broadening the investigation indefinitely.
+The per-path diff of the pinned scope is the primary source of truth. Read one path's diff at a time from the pinned checkout, base SHA, and head given in the review context. Do not recompute the supplied review scope: never run a diff or log across the whole range to rebuild or widen it. Use the supplied paths and line numbers, and read each unresolved surrounding range or symbol once. Re-read only when a concrete ambiguity remains or the file changed since the prior read. Stop and return a finding or verdict once the evidence is sufficient. If evidence cannot be obtained within this bounded pass, return an explicit blocker or residual risk instead of broadening the investigation indefinitely.
 </bounded-investigation>
 
 <output-contract>
@@ -117,10 +117,16 @@ Selection reason: {selection_reason}
 
 Selection surface: {selection_surface}
 
-Changed files: {file_list}
+Pinned review scope. Do not recompute the supplied review scope, and do not widen it. No diff is inlined here: read one path's diff from git as the scope rules describe.
 
-Diff:
-{diff}
+Checkout: {checkout_path}
+
+Base SHA: {base_sha}
+
+Head: {head}
+
+Manifest (path, status, rename source, added lines, deleted lines):
+{manifest}
 </review-context>
 ```
 
@@ -133,8 +139,10 @@ Diff:
 | `{schema}` | `references/reviewer-return-schema.json` content | The reviewer-rooted JSON schema view reviewers must conform to. It is generated from the full findings schema and omits the parent-owned records |
 | `{intent_summary}` | Stage 2 output | 2-3 line description of what the change is trying to accomplish |
 | `{pr_metadata}` | Stage 1 output | PR title, body, and URL when reviewing a PR. Empty string when reviewing a branch or standalone checkout |
-| `{file_list}` | Stage 1 output | List of changed files from the scope step |
-| `{diff}` | Stage 1 output | The actual diff content to review |
+| `{checkout_path}` | Stage 1 pinned scope | The absolute path of the authoritative checkout. Every git command targets it |
+| `{base_sha}` | Stage 1 pinned scope | The full base SHA. Old source comes from this commit |
+| `{head}` | Stage 1 pinned scope | The checked-out commit SHA, or `working tree` when the checkout was dirty. It selects how a path's diff is read |
+| `{manifest}` | Stage 1 pinned scope | One entry per changed path: path, status (`A`, `M`, `D`, `R`, or `T`), rename source, and added and deleted line counts |
 | `{reviewer_name}` | Stage 3 output | Persona name used in the returned `reviewer` field |
 | `{selection_reason}` | Stage 3 output | One-line reason this conditional persona was selected. Empty for core personas, which have no selection condition |
 | `{selection_surface}` | Stage 3 output | Non-empty repository-relative paths/surfaces that triggered selection. Empty for core personas. These are bounded domain hints for the reviewer, not fields of the returned payload |
