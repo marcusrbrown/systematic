@@ -538,7 +538,7 @@ No committed docs page lists the mode tokens. The `ce:review` reference page on 
 
 ### Phase 2: PR 2, diff handoff
 
-- [ ] U7. One pinned diff scope for reviewers and validators
+- [x] U7. One pinned diff scope for reviewers and validators
 
 **Goal:** The parent pins the scope once, and every child reads that scope per path instead of recomputing it.
 
