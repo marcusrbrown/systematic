@@ -2,6 +2,8 @@ import path from 'node:path'
 import type { z } from 'zod'
 import {
   formatReviewArtifactIssuePath,
+  type ProjectedRejectionIssue,
+  projectRejectionIssues,
   type SchemaRejection,
   schemaRejection,
 } from './review-artifact-path.js'
@@ -29,7 +31,6 @@ import {
   ScreenOutputSchema,
   type ValidatorLifecycleResultsSchema,
 } from './review-pipeline-contract.js'
-import { validateReviewReturnValue } from './review-return-validator.js'
 
 /**
  * Normalizes a repo-relative path for grouping, sorting, and any later
@@ -49,9 +50,8 @@ export function normalizeRepoRelativePath(filePath: string): string {
  * structure. Never reads `process.env`, the filesystem, or the clock --
  * admission depends only on the payload itself.
  *
- * Reuses `validateReviewReturnValue` from `review-return-validator.ts` for
- * the underlying `SubAgentReturnSchema` structural check rather than
- * re-validating shape by hand.
+ * The structural check is `SubAgentReturnSchema` itself, so `screen` and the
+ * sibling `return` validator accept and reject exactly the same payloads.
  */
 
 export type ScreenOutput = ReturnType<typeof ScreenOutputSchema.parse>
@@ -174,53 +174,116 @@ function wholePayloadRejection(
 }
 
 /**
+ * Why `screen` rejected a return, as a fixed code. Every code but
+ * `schema_validation` names a failure that has no schema issue to point at.
+ */
+export type ScreenRejectionCode =
+  | 'schema_validation'
+  | 'malformed_json'
+  | 'identity_mismatch'
+  | 'input_oversized'
+  | 'input_invalid_utf8'
+
+/**
+ * A bounded, payload-safe account of a rejection, for the parent to quote back
+ * to the reviewer. A schema rejection reports the full issue count, up to
+ * eight `{path, code}` entries (an enum issue also lists the schema's accepted
+ * values), and how many entries were left out. Every other rejection is its
+ * fixed code and nothing else. No payload value, no unrecognized key name and
+ * no issue message ever reaches a report.
+ */
+export type ScreenRejectionReport =
+  | {
+      readonly code: 'schema_validation'
+      readonly issue_count: number
+      readonly issues: readonly ProjectedRejectionIssue[]
+      readonly omitted: number
+    }
+  | {
+      readonly code: Exclude<ScreenRejectionCode, 'schema_validation'>
+    }
+
+/** The admission result plus, on a rejection, the report that explains it. */
+export type ScreenAdmission =
+  | { readonly ok: true; readonly result: ScreenOutput }
+  | {
+      readonly ok: false
+      readonly result: ScreenOutput
+      readonly rejection: ScreenRejectionReport
+    }
+
+function rejected(
+  result: ScreenOutput,
+  rejection: ScreenRejectionReport,
+): ScreenAdmission {
+  return { ok: false, rejection, result }
+}
+
+/**
  * Admit one reviewer's raw return and bind it to the parent-expected
- * persona.
+ * persona, reporting why when it is rejected.
  *
  * Rejection is whole-payload only: a schema-invalid return, a reviewer
  * identity mismatch, or malformed JSON rejects everything. Findings that
  * pass structural validation are admitted with a stable
  * `<reviewer>#<original-index>` input ID derived from their position in the
  * original payload.
+ *
+ * The rejected `ScreenOutput` is the one `prepare` consumes. It carries a
+ * `rejected_summary` row only when the rejected findings can be counted.
  */
-export function screenReviewReturn(
+export function screenReviewReturnWithReport(
   input: ScreenReviewReturnInput,
-): ScreenOutput {
+): ScreenAdmission {
   const persona = input.expected_reviewer
   const harness = input.invoking_harness
 
   const parsed = parseRawReturn(input.raw_return)
   if (!parsed.ok) {
-    return wholePayloadRejection(
-      persona,
-      JSON_ROOT_PATH,
-      'malformed JSON',
-      undefined,
-      harness,
+    return rejected(
+      wholePayloadRejection(
+        persona,
+        JSON_ROOT_PATH,
+        'malformed JSON',
+        undefined,
+        harness,
+      ),
+      { code: 'malformed_json' },
     )
   }
 
-  const validation = validateReviewReturnValue(parsed.value)
-  if (!validation.ok) {
-    const fieldPath = validation.issues[0]?.path ?? JSON_ROOT_PATH
-    return wholePayloadRejection(
-      persona,
-      fieldPath,
-      'schema validation',
-      extractRejectedSeverities(parsed.value),
-      harness,
+  const validation = SubAgentReturnSchema.safeParse(parsed.value)
+  if (!validation.success) {
+    const { issues, total } = projectRejectionIssues(validation.error.issues)
+    return rejected(
+      wholePayloadRejection(
+        persona,
+        issues[0]?.path ?? JSON_ROOT_PATH,
+        'schema validation',
+        extractRejectedSeverities(parsed.value),
+        harness,
+      ),
+      {
+        code: 'schema_validation',
+        issue_count: total,
+        issues,
+        omitted: total - issues.length,
+      },
     )
   }
 
-  const raw = SubAgentReturnSchema.parse(parsed.value)
+  const raw = validation.data
 
   if (raw.reviewer !== persona) {
-    return wholePayloadRejection(
-      persona,
-      'reviewer',
-      'schema validation',
-      raw.findings.map((finding) => finding.severity),
-      harness,
+    return rejected(
+      wholePayloadRejection(
+        persona,
+        'reviewer',
+        'schema validation',
+        raw.findings.map((finding) => finding.severity),
+        harness,
+      ),
+      { code: 'identity_mismatch' },
     )
   }
 
@@ -234,13 +297,58 @@ export function screenReviewReturn(
 
   const dispatchOutcome = raw.findings.length === 0 ? 'empty' : 'findings'
 
-  return ScreenOutputSchema.parse({
-    admitted_findings: admittedFindings,
-    dispatch_outcome: dispatchOutcome,
-    residual_risks: raw.residual_risks,
-    testing_gaps: raw.testing_gaps,
-    harness,
-  })
+  return {
+    ok: true,
+    result: ScreenOutputSchema.parse({
+      admitted_findings: admittedFindings,
+      dispatch_outcome: dispatchOutcome,
+      residual_risks: raw.residual_risks,
+      testing_gaps: raw.testing_gaps,
+      harness,
+    }),
+  }
+}
+
+/**
+ * Admit one reviewer's raw return and bind it to the parent-expected
+ * persona. See {@link screenReviewReturnWithReport}; this returns the
+ * `ScreenOutput` alone.
+ */
+export function screenReviewReturn(
+  input: ScreenReviewReturnInput,
+): ScreenOutput {
+  return screenReviewReturnWithReport(input).result
+}
+
+/** Input to {@link rejectUnreadableScreenInput}. */
+export interface RejectUnreadableScreenInput {
+  readonly code: Extract<
+    ScreenRejectionCode,
+    'input_oversized' | 'input_invalid_utf8'
+  >
+  readonly expected_reviewer: string
+  readonly invoking_harness: z.infer<typeof HarnessSchema>
+}
+
+/**
+ * The rejection for stdin that never reached `screenReviewReturn` as text:
+ * over the byte limit or not valid UTF-8. Nothing was parsed, so the finding
+ * count is unknowable and the result carries no `rejected_summary` row.
+ */
+export function rejectUnreadableScreenInput(
+  input: RejectUnreadableScreenInput,
+): Extract<ScreenAdmission, { readonly ok: false }> {
+  return {
+    ok: false,
+    rejection: { code: input.code },
+    result: wholePayloadRejection(
+      input.expected_reviewer,
+      JSON_ROOT_PATH,
+      'schema validation',
+      undefined,
+      input.invoking_harness,
+    ),
+  }
 }
 
 // --- prepare phase ----------------------------------------------------------

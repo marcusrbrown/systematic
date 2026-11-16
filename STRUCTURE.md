@@ -101,7 +101,8 @@ subdirectory of core modules.
   `validateReviewReturnValue`)
 - `src/ce-review-validator.ts` — skill-local Node shim (`runCeReviewValidator`) dispatching six
   subcommands: `return`, `artifact`, `screen`, `prepare`, `merge`, `finalize`. `screen` takes
-  `--reviewer`/`--harness` flags plus a raw return on stdin (1 MiB cap); `prepare`, `merge`, and
+  `--reviewer`/`--harness` flags plus a raw return on stdin (1 MiB cap) and prints `{ screen,
+  rejection }` on stdout for every exit 1; `prepare`, `merge`, and
   `finalize` take no flags and share one strict-JSON stdin runner bounded by
   `AGGREGATE_STDIN_BYTE_CAP`; all six share one exit-code vocabulary (0 ok, 1 rejection/oversized/
   invalid UTF-8, 2 usage/TTY/read failure) and one exception boundary. `screen`/`prepare`/`merge`/
@@ -180,8 +181,9 @@ checks behind `bun run surfaces:drift`.
   `--check` for drift detection
 - `scripts/generate-config-schema.ts` — JSON Schema codegen + drift check
 - `scripts/generate-review-artifact-schema.ts` — regenerates
-  `skills/ce-review/references/review-summary-schema.json`, `findings-schema.json`, and
-  `review-pipeline-schema.json` from the Zod schemas in `src/lib/review-artifact-schema.ts` and
+  `skills/ce-review/references/review-summary-schema.json`, `findings-schema.json`,
+  `reviewer-return-schema.json` (the reviewer-rooted view), and `review-pipeline-schema.json`
+  from the Zod schemas in `src/lib/review-artifact-schema.ts` and
   `src/lib/review-pipeline-contract.ts`; pass `--check` for drift detection (`bun run review-schema:drift`)
 - `scripts/generate-ce-review-validator.ts` — bundles `src/ce-review-validator.ts` into the
   committed `skills/ce-review/scripts/validate-review.mjs`; pass `--check` for drift detection

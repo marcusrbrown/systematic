@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { z } from 'zod'
 
 import {
   CE_REVIEW_SCREEN_REJECTED_MESSAGE,
@@ -26,12 +27,25 @@ import {
 import { MAX_RUN_FINDINGS } from '../../src/lib/review-artifact-schema.js'
 import {
   applyReviewAdjudication,
+  type FinalizeReviewInput,
+  finalizeReview,
   type PrepareOutput,
+  prepareReviewCandidates,
+  type ScreenOutput,
   screenReviewReturn,
+  screenReviewReturnWithReport,
 } from '../../src/lib/review-pipeline.js'
-import { AGGREGATE_STDIN_BYTE_CAP } from '../../src/lib/review-pipeline-contract.js'
+import {
+  AGGREGATE_STDIN_BYTE_CAP,
+  ScreenOutputSchema,
+} from '../../src/lib/review-pipeline-contract.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
 import { buildScreenReturn, runPipeline } from './review-run-fixtures.js'
+import {
+  PROBE_REVIEWER,
+  probeStdin,
+  SCREEN_PROBES,
+} from './screen-rejection-probes.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const VALIDATOR_ENTRY = path.join(ROOT_DIR, 'src/ce-review-validator.ts')
@@ -295,6 +309,17 @@ const FINALIZE_SCHEMA_INVALID_INPUT = {
   },
 }
 
+const ScreenExit1Schema = z
+  .object({ rejection: z.unknown(), screen: ScreenOutputSchema })
+  .strict()
+
+/** Parses the one JSON object `screen` prints to stdout on an exit 1, and
+ * holds its `screen` member to the real screen-output contract. */
+function parseScreenExit1(stdout: string): z.infer<typeof ScreenExit1Schema> {
+  expect(stdout.trimEnd().split('\n')).toHaveLength(1)
+  return ScreenExit1Schema.parse(JSON.parse(stdout))
+}
+
 describe('screen: conforming input', () => {
   test('exits 0 with a parseable envelope and writes nothing to the cwd', () => {
     const cwd = makeCwd()
@@ -437,7 +462,9 @@ describe('screen: stdin bounds', () => {
     const result = runValidator(SCREEN_ARGS, { input: oversized })
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('1 MiB')
-    expect(result.stdout).toBe('')
+    expect(parseScreenExit1(result.stdout).rejection).toEqual({
+      code: 'input_oversized',
+    })
   })
 
   test('empty stdin exits 2 with the empty-stdin message, not a malformed-payload rejection', () => {
@@ -458,7 +485,9 @@ describe('screen: rejection outcomes', () => {
     const result = runValidator(SCREEN_ARGS, { input: '{ not json' })
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('screen rejected the reviewer return')
-    expect(result.stdout).toBe('')
+    expect(parseScreenExit1(result.stdout).rejection).toEqual({
+      code: 'malformed_json',
+    })
   })
 
   test('a reviewer identity mismatch exits 1', () => {
@@ -467,7 +496,295 @@ describe('screen: rejection outcomes', () => {
     })
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('field reviewer')
+    expect(parseScreenExit1(result.stdout).rejection).toEqual({
+      code: 'identity_mismatch',
+    })
+  })
+})
+
+describe('screen: exit 1 report', () => {
+  test('invalid UTF-8 exits 1 with a malformed result and its fixed code', () => {
+    const result = runValidator(SCREEN_ARGS, {
+      input: Buffer.from([0x7b, 0xff, 0xfe, 0x7d]),
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('not valid UTF-8')
+    const parsed = parseScreenExit1(result.stdout)
+    expect(parsed.rejection).toEqual({ code: 'input_invalid_utf8' })
+    expect(parsed.screen.dispatch_outcome).toBe('malformed')
+    expect(parsed.screen.harness).toBe('claude-code')
+    expect(parsed.screen.rejected_summary).toBeUndefined()
+  })
+
+  test('an oversized return carries a malformed result and no rejected-summary row', () => {
+    const result = runValidator(SCREEN_ARGS, {
+      input: Buffer.alloc(1024 * 1024 + 1, 0x20),
+    })
+
+    const parsed = parseScreenExit1(result.stdout)
+    expect(parsed.screen.dispatch_outcome).toBe('malformed')
+    expect(parsed.screen.admitted_findings).toEqual([])
+    expect(parsed.screen.rejected_summary).toBeUndefined()
+  })
+
+  test('empty and whitespace-only stdin stay exit 2 with nothing on stdout', () => {
+    for (const input of ['', '  \n\t ']) {
+      const result = runValidator(SCREEN_ARGS, { input })
+      expect(result.exitCode).toBe(2)
+      expect(result.stdout).toBe('')
+    }
+  })
+
+  test('a usage error stays exit 2 with nothing on stdout', () => {
+    const result = runValidator(['screen'], { input: '{ not json' })
+    expect(result.exitCode).toBe(2)
     expect(result.stdout).toBe('')
+  })
+
+  test('exit 0 output is the bare screen result, with no report', () => {
+    const result = runValidator(SCREEN_ARGS, {
+      input: JSON.stringify(VALID_RETURN),
+    })
+
+    expect(result.exitCode, result.stderr).toBe(0)
+    const parsed = JSON.parse(result.stdout) as Record<string, unknown>
+    expect(parsed.rejection).toBeUndefined()
+    expect(parsed.screen).toBeUndefined()
+    expect(parsed.dispatch_outcome).toBe('findings')
+  })
+
+  test('a rejected persisted reason keeps its path-only text', () => {
+    const result = runValidator(SCREEN_ARGS, {
+      input: JSON.stringify({
+        ...VALID_RETURN,
+        findings: [{ ...BASE_FINDING, severity: 'high', owner: 'author' }],
+      }),
+    })
+
+    expect(result.exitCode).toBe(1)
+    const parsed = parseScreenExit1(result.stdout)
+    expect(parsed.screen.rejected_summary?.reason).toBe(
+      'Rejected persona correctness return: field findings.0.severity failed schema validation.',
+    )
+    expect(result.stderr.trim()).toBe(
+      parsed.screen.rejected_summary?.reason ?? '',
+    )
+    expect(parsed.rejection).toEqual({
+      code: 'schema_validation',
+      issue_count: 2,
+      issues: [
+        {
+          allowed: ['P0', 'P1', 'P2', 'P3'],
+          code: 'invalid_value',
+          path: 'findings.0.severity',
+        },
+        {
+          allowed: ['review-fixer', 'downstream-resolver', 'human', 'release'],
+          code: 'invalid_value',
+          path: 'findings.0.owner',
+        },
+      ],
+      omitted: 0,
+    })
+  })
+
+  test('twelve faults report the full count, eight entries and the omitted four', () => {
+    const result = runValidator(SCREEN_ARGS, {
+      input: JSON.stringify({
+        ...VALID_RETURN,
+        findings: Array.from({ length: 12 }, () => ({
+          ...BASE_FINDING,
+          severity: 'high',
+        })),
+      }),
+    })
+
+    expect(result.exitCode).toBe(1)
+    const rejection = parseScreenExit1(result.stdout).rejection as {
+      readonly issue_count: number
+      readonly issues: readonly unknown[]
+      readonly omitted: number
+    }
+    expect(rejection.issue_count).toBe(12)
+    expect(rejection.issues).toHaveLength(8)
+    expect(rejection.omitted).toBe(4)
+  })
+
+  test('a planted key name or value never reaches stdout or stderr', () => {
+    const KEY = 'zz_planted_key_name_91f3'
+    const VALUE = 'zz_planted_payload_value_77ab'
+    const inputs = [
+      JSON.stringify({ ...VALID_RETURN, [KEY]: VALUE }),
+      JSON.stringify({ ...VALID_RETURN, findings: [], [KEY]: VALUE }),
+      JSON.stringify({
+        ...VALID_RETURN,
+        findings: [{ ...BASE_FINDING, owner: VALUE, [KEY]: VALUE }],
+      }),
+      JSON.stringify({ ...VALID_RETURN, reviewer: VALUE }),
+      JSON.stringify({ [KEY]: VALUE, findings: VALUE }),
+      `{ "${KEY}": "${VALUE}"`,
+      Buffer.concat([Buffer.from(`{"${KEY}":"${VALUE}"`), Buffer.from([0xff])]),
+    ]
+
+    for (const input of inputs) {
+      const result = runValidator(SCREEN_ARGS, { input })
+      expect(result.exitCode).toBe(1)
+      for (const stream of [result.stdout, result.stderr]) {
+        expect(stream).not.toContain(KEY)
+        expect(stream).not.toContain(VALUE)
+      }
+    }
+  })
+
+  describe('probe table', () => {
+    test.each(SCREEN_PROBES.map((probe) => [probe.name, probe] as const))(
+      '%s matches the in-process admission',
+      (_name, probe) => {
+        const admission = screenReviewReturnWithReport({
+          expected_reviewer: PROBE_REVIEWER,
+          invoking_harness: 'claude-code',
+          raw_return: probe.input,
+        })
+        const result = runValidator(SCREEN_ARGS, { input: probeStdin(probe) })
+
+        if (admission.ok) {
+          expect(result.exitCode, result.stderr).toBe(0)
+          expect(result.stdout.trimEnd()).toBe(JSON.stringify(admission.result))
+          return
+        }
+        expect(result.exitCode).toBe(1)
+        expect(parseScreenExit1(result.stdout)).toEqual({
+          rejection: admission.rejection,
+          screen: admission.result,
+        })
+        expect(result.stderr.trim()).toBe(
+          admission.result.rejected_summary?.reason ??
+            CE_REVIEW_SCREEN_REJECTED_MESSAGE,
+        )
+      },
+    )
+  })
+})
+
+describe('screen: exit 1 stdout through prepare and finalize', () => {
+  const DISPATCHES: {
+    persona: string
+    dispatch_outcome: 'malformed'
+    selection_surface?: string[]
+  }[] = [
+    { persona: 'correctness', dispatch_outcome: 'malformed' },
+    {
+      persona: 'security',
+      dispatch_outcome: 'malformed',
+      selection_surface: ['src/auth.ts'],
+    },
+  ]
+
+  function screenResultFor(reviewer: string, input: string) {
+    const result = runValidator(
+      ['screen', '--reviewer', reviewer, '--harness', 'opencode'],
+      { input },
+    )
+    expect(result.exitCode).toBe(1)
+    return { reviewer, result: parseScreenExit1(result.stdout).screen }
+  }
+
+  function finalizeInput(
+    screenResults: { reviewer: string; result: ScreenOutput }[],
+  ): FinalizeReviewInput {
+    const prepared = prepareReviewCandidates({
+      raw_input: {
+        screen_results: screenResults,
+        selected_dispatches: DISPATCHES,
+      },
+    })
+    if (!prepared.ok) throw new Error('prepare rejected the screen results')
+    const merged = applyReviewAdjudication({
+      prepared: prepared.value,
+      decisions: [],
+    })
+    if (!merged.ok) throw new Error('merge rejected the adjudication')
+    return {
+      merge: merged.value,
+      prepared: prepared.value,
+      screen_results: screenResults,
+      dispatch_records: DISPATCHES,
+      validator_lifecycle_results: [],
+      plan_assessment: { verdict: 'All requirements met.', results: [] },
+      parent_run_metadata: {
+        run_id: 'run-reject',
+        mode: 'interactive',
+        harness: 'opencode',
+        branch: 'main',
+        head_sha: 'a'.repeat(40),
+        selected_dispatches: DISPATCHES,
+        timestamps: {
+          started_at: '2026-01-01T00:00:00.000Z',
+          completed_at: '2026-01-01T00:05:00.000Z',
+        },
+        validation: { status: 'not_attempted', reason: 'no autofix applied' },
+        applied_fixes: [],
+      },
+    }
+  }
+
+  test('the envelope screen result is a malformed persona entry, and only a row yields a rejection_reason', () => {
+    const withRow = screenResultFor(
+      'correctness',
+      JSON.stringify({
+        ...VALID_RETURN,
+        findings: [{ ...BASE_FINDING, severity: 'high' }],
+      }),
+    )
+    const withoutRow = screenResultFor('security', '{ not json')
+    expect(withRow.result.rejected_summary).toBeDefined()
+    expect(withoutRow.result.rejected_summary).toBeUndefined()
+
+    const finalized = finalizeReview(finalizeInput([withRow, withoutRow]))
+    expect(finalized.ok).toBe(true)
+    if (!finalized.ok || finalized.value.kind !== 'writing') return
+
+    const byPersona = new Map(
+      finalized.value.artifact.dispatches.map((dispatch) => [
+        dispatch.persona,
+        dispatch,
+      ]),
+    )
+    expect(byPersona.get('correctness')?.dispatch_outcome).toBe('malformed')
+    expect(byPersona.get('correctness')?.rejection_reason).toBe(
+      'Rejected persona correctness return: field findings.0.severity failed schema validation.',
+    )
+    expect(byPersona.get('security')?.dispatch_outcome).toBe('malformed')
+    expect(byPersona.get('security')?.rejection_reason).toBeUndefined()
+  })
+
+  test('an oversized return enters prepare as a malformed persona with no reason', () => {
+    const oversized = runValidator(
+      ['screen', '--reviewer', 'security', '--harness', 'opencode'],
+      { input: Buffer.alloc(1024 * 1024 + 1, 0x20) },
+    )
+    expect(oversized.exitCode).toBe(1)
+    const entry = {
+      reviewer: 'security',
+      result: parseScreenExit1(oversized.stdout).screen,
+    }
+    const withRow = screenResultFor(
+      'correctness',
+      JSON.stringify({
+        ...VALID_RETURN,
+        findings: [{ ...BASE_FINDING, severity: 'high' }],
+      }),
+    )
+
+    const finalized = finalizeReview(finalizeInput([withRow, entry]))
+    expect(finalized.ok).toBe(true)
+    if (!finalized.ok || finalized.value.kind !== 'writing') return
+    const security = finalized.value.artifact.dispatches.find(
+      (dispatch) => dispatch.persona === 'security',
+    )
+    expect(security?.dispatch_outcome).toBe('malformed')
+    expect(security?.rejection_reason).toBeUndefined()
   })
 })
 

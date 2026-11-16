@@ -364,6 +364,7 @@
         "skills/ce-review/references/review-output-template.md",
         "skills/ce-review/references/review-pipeline-schema.json",
         "skills/ce-review/references/review-summary-schema.json",
+        "skills/ce-review/references/reviewer-return-schema.json",
         "skills/ce-review/references/subagent-template.md",
         "skills/ce-review/references/synthesis-artifact-contract.md",
         "skills/ce-review/references/validator-template.md",

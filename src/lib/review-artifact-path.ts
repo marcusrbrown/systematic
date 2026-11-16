@@ -34,6 +34,9 @@ export interface ProjectedIssue {
 export interface ProjectableIssue {
   readonly path: readonly PropertyKey[]
   readonly code: string
+  /** The schema's own accepted values on an `invalid_value` issue. Read only
+   * by {@link projectRejectionIssues}. */
+  readonly values?: readonly unknown[]
 }
 
 export interface ProjectedIssues {
@@ -57,6 +60,55 @@ export function projectZodIssues(
       code: issue.code,
     })),
     total: issues.length,
+  }
+}
+
+/** A projected issue for a rejection report: the safe path and code, plus the
+ * schema's accepted values when the issue is a closed-set (enum) violation. */
+export interface ProjectedRejectionIssue extends ProjectedIssue {
+  readonly allowed?: readonly string[]
+}
+
+/** The accepted values of an enum issue, as the authored schema lists them.
+ * Only an `invalid_value` issue carries `values`, and they come from the
+ * schema, never from the payload. Anything that is not a string is dropped. */
+function allowedValuesOf(
+  issue: ProjectableIssue,
+): readonly string[] | undefined {
+  if (issue.code !== 'invalid_value' || issue.values === undefined) {
+    return undefined
+  }
+  const allowed = issue.values.filter(
+    (value): value is string => typeof value === 'string',
+  )
+  return allowed.length > 0 ? allowed : undefined
+}
+
+export interface ProjectedRejectionIssues {
+  readonly issues: readonly ProjectedRejectionIssue[]
+  /** The full issue count, even when {@link ProjectedRejectionIssues.issues}
+   * is capped. */
+  readonly total: number
+}
+
+/**
+ * {@link projectZodIssues} for a rejection report: the same capped
+ * `{path, code}` entries and full count, with the authored allowed values
+ * added to each enum issue. No issue message, payload value or unrecognized
+ * key name is read.
+ */
+export function projectRejectionIssues(
+  issues: readonly ProjectableIssue[],
+  max: number = MAX_PROJECTED_ISSUE_LINES,
+): ProjectedRejectionIssues {
+  const projected = projectZodIssues(issues, max)
+  return {
+    issues: projected.issues.map((entry, index) => {
+      const source = issues[index]
+      const allowed = source === undefined ? undefined : allowedValuesOf(source)
+      return allowed === undefined ? entry : { ...entry, allowed }
+    }),
+    total: projected.total,
   }
 }
 

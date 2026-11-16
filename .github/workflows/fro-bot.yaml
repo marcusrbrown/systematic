@@ -658,6 +658,7 @@ env:
       `registry/registry.jsonc`, `skills/agent-browser/SKILL.md`,
       `skills/ce-review/references/review-summary-schema.json`,
       `skills/ce-review/references/findings-schema.json`,
+      `skills/ce-review/references/reviewer-return-schema.json`,
       `skills/ce-review/references/review-pipeline-schema.json`,
       `skills/ce-review/scripts/validate-review.mjs`,
       `skills/ce-connect/scripts/connect.mjs`,

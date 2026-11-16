@@ -24,6 +24,7 @@ Return ONLY valid JSON matching this schema. No prose, no markdown, no explanati
 Rules:
 - You are a leaf validator inside an already-running review workflow. Do not invoke systematic skills or agents. Perform your analysis directly and return the JSON verdict only.
 - You are operationally read-only. You may use non-mutating inspection tools (file reads, glob, grep, git log, git diff, git show, git blame, gh pr view) to examine the code. Do not edit project files, change branches, commit, push, create PRs, or otherwise mutate the checkout or repository state.
+- You are static. Never run a build, typecheck, or lint at any scope, and never run a test or a probe, including `bun test`, `bun run typecheck`, `bunx tsc`, any alias or wrapper of them, or a named test file whose runner expands to a suite. CI owns those gates. You are given no approved command: decide from the code as written, and when it cannot settle the question, follow the conservative rule below.
 - Answer the three validation questions below. Set `outcome: "true"` only when all three answers are YES. Set `outcome: "false"` when any answer is NO.
 - A `false` verdict needs a `reason` of one sentence. State the specific code evidence that drove your verdict (file name, function name, or line reference when relevant). Do not repeat the finding title verbatim. A `true` verdict carries no reason.
 - Return `failed` with a reason when your analysis could not be completed, and `unavailable` with a reason when the code or tools you need could not be reached. Never guess a verdict to avoid either.
@@ -92,6 +93,7 @@ Diff:
 
 - Dispatch one validator subagent per gated finding. Run them in bounded batches, sized to what the harness handles reliably: the validators of a batch run in parallel, and a batch finishes before the next starts.
 - Pass the full diff and file list so the validator can inspect surrounding context, not just the cited line.
+- Validators stay static in every mode. Do not pass an approved command or ask a validator to run one; a probe is a parent decision and never a validator task.
 - The validator returns `{outcome, reason?}`. Record it as that finding's lifecycle result, keyed by `finding_id`, and carry it into `finalize` as `validator_lifecycle_results`.
 - **Never drop a finding based on the validator verdict.** A finding with `outcome: "false"` moves to the "Filtered (not validated)" presentation group in Stage 6. It is never removed from the report.
 - If a validator subagent fails, times out, or returns nothing, record `failed` or `unavailable` with a reason. The finding stays actionable and unvalidated, and `finalize` records a lifecycle failure that marks the run degraded. Report that validator in the Coverage section. Do not treat the finding as validated.
