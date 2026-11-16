@@ -22,7 +22,7 @@ Selected on every review regardless of diff content. These three are the only re
 
 ## Conditional (9 personas)
 
-Spawned only when the orchestrator identifies a relevant surface in the diff. The orchestrator reads the full diff and reasons about selection -- this is agent judgment, not keyword matching. Record `selection_reason` and a non-empty `selection_surface` for each selected conditional persona.
+Spawned only when the orchestrator identifies a relevant surface in the diff. The orchestrator reads the pinned manifest and the per-path diff of the paths selection turns on, and reasons about selection -- this is agent judgment, not keyword matching. Record `selection_reason` and a non-empty `selection_surface` for each selected conditional persona.
 
 | Persona | Agent | Select when diff touches... |
 |---------|-------|---------------------------|
@@ -66,7 +66,7 @@ These CE-native agents provide specialized analysis beyond what the persona agen
 
 ## Deletion-only and docs-only changes
 
-Classify the change from the changed paths and the diff alone. Never classify from the PR title, body, comments or commit messages: a PR that calls itself "docs only" or "dead code cleanup" is classified by its paths. Read each path's status from the diff headers (`deleted file mode`, `new file mode`, `old mode` and `new mode`, `rename from`, `Binary files`, `Subproject commit`), or from `git diff --name-status $BASE` when the headers do not settle it.
+Classify the change from the changed paths and the diff alone. Never classify from the PR title, body, comments or commit messages: a PR that calls itself "docs only" or "dead code cleanup" is classified by its paths. Read each path's status from the pinned manifest. The manifest shows no mode, symlink, submodule or binary change, so read that path's diff headers (`deleted file mode`, `new file mode`, `old mode` and `new mode`, `rename from`, `Binary files`, `Subproject commit`) whenever a manifest status of `M` or `T` could hide one.
 
 - A change is deletion-only when every changed path has status D, with no mode, symlink, submodule or file-type change. Lines removed from a file that still exists make that path M, so that change is not deletion-only.
 - A change is docs-only when every changed path is documentation prose that no agent or operator follows as an instruction. Skill and agent definitions, agent instruction files, workflow prompts and operational runbooks are behavior-bearing, so they are not docs-only. The test is whether an agent or operator would behave differently after the change.

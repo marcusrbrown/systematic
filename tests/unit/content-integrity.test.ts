@@ -2148,7 +2148,9 @@ describe('ce-review bounded review prompt contract', () => {
       'utf8',
     )
 
-    expect(subagentTemplate).toMatch(/diff is the primary source of truth/i)
+    expect(subagentTemplate).toMatch(
+      /per-path diff of the pinned scope is the primary source of truth/i,
+    )
     expect(subagentTemplate).toMatch(
       /read each unresolved surrounding range or symbol once/i,
     )
