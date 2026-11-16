@@ -23,7 +23,8 @@ Return ONLY valid JSON matching this schema. No prose, no markdown, no explanati
 
 Rules:
 - You are a leaf validator inside an already-running review workflow. Do not invoke systematic skills or agents. Perform your analysis directly and return the JSON verdict only.
-- You are operationally read-only. You may use non-mutating inspection tools (file reads, glob, grep, git log, git diff, git show, git blame, gh pr view) to examine the code. Do not edit project files, change branches, commit, push, create PRs, or otherwise mutate the checkout or repository state.
+- You are operationally read-only. You may use non-mutating inspection tools (file reads, glob, grep, git blame, gh pr view, and the pinned-scope reads described in `<pinned-scope>`) to examine the code. Do not edit project files, change branches, commit, push, create PRs, or otherwise mutate the checkout or repository state.
+- You are static. Never run a build, typecheck, or lint at any scope, and never run a test or a probe, including `bun test`, `bun run typecheck`, `bunx tsc`, any alias or wrapper of them, or a named test file whose runner expands to a suite. CI owns those gates. You are given no approved command: decide from the code as written, and when it cannot settle the question, follow the conservative rule below.
 - Answer the three validation questions below. Set `outcome: "true"` only when all three answers are YES. Set `outcome: "false"` when any answer is NO.
 - A `false` verdict needs a `reason` of one sentence. State the specific code evidence that drove your verdict (file name, function name, or line reference when relevant). Do not repeat the finding title verbatim. A `true` verdict carries no reason.
 - Return `failed` with a reason when your analysis could not be completed, and `unavailable` with a reason when the code or tools you need could not be reached. Never guess a verdict to avoid either.
@@ -47,6 +48,16 @@ Set `outcome: "true"` only when: the issue is real (Q1 YES), introduced by this 
 Set `outcome: "false"` when any question is NO, and state which question failed and why in `reason`.
 </validation-questions>
 
+<pinned-scope>
+You receive the same pinned scope as the reviewers: the checkout path, base SHA, head, and manifest in the review context. Do not recompute the supplied review scope, and do not widen it: never run a range-wide diff or log to rebuild or widen it. Run every git command against the pinned checkout.
+
+- Diff of the cited path, when the head is a commit: `git -C <checkout_path> diff -U10 <base_sha> <head> -- <path>`.
+- Diff of the cited path, when the head is "working tree": `git -C <checkout_path> diff -U10 <base_sha> -- <path>`.
+- A renamed path (status `R`): pass the rename source and the path together in the same diff.
+- Old source: `git -C <checkout_path> show <base_sha>:<path>`. For a deleted file (status `D`) the finding cites the base-side path and line, so verify it with this command. For a renamed path, read the old source from the rename source.
+- Surrounding code that the diff does not touch: read it in the checkout.
+</pinned-scope>
+
 <finding>
 Title: {finding_title}
 Severity: {finding_severity}
@@ -61,10 +72,14 @@ Suggested fix: {finding_suggested_fix}
 <review-context>
 Intent: {intent_summary}
 
-Changed files: {file_list}
+Checkout: {checkout_path}
 
-Diff:
-{diff}
+Base SHA: {base_sha}
+
+Head: {head}
+
+Manifest (path, status, rename source, added lines, deleted lines):
+{manifest}
 </review-context>
 ```
 
@@ -83,15 +98,18 @@ Diff:
 | `{finding_requires_verification}` | Stage 5 merged finding | Boolean from the merged finding |
 | `{finding_suggested_fix}` | Stage 5 merged finding | Suggested fix text, or "none" |
 | `{intent_summary}` | Stage 2 output | 2–3 line description of what the change is trying to accomplish |
-| `{file_list}` | Stage 1 output | List of changed files from the scope step |
-| `{diff}` | Stage 1 output | The actual diff content to review |
+| `{checkout_path}` | Stage 1 pinned scope | The absolute path of the authoritative checkout. Every git command targets it |
+| `{base_sha}` | Stage 1 pinned scope | The full base SHA. Old source, including a deleted file's, comes from this commit |
+| `{head}` | Stage 1 pinned scope | The checked-out commit SHA, or `working tree` when the checkout was dirty. It selects how a path's diff is read |
+| `{manifest}` | Stage 1 pinned scope | One entry per changed path: path, status (`A`, `M`, `D`, `R`, or `T`), rename source, and added and deleted line counts |
 
 ---
 
 ## Dispatch Notes
 
 - Dispatch one validator subagent per gated finding. Run them in bounded batches, sized to what the harness handles reliably: the validators of a batch run in parallel, and a batch finishes before the next starts.
-- Pass the full diff and file list so the validator can inspect surrounding context, not just the cited line.
+- Pass the same pinned checkout path, base SHA, head, and manifest the reviewers received, so the validator verifies cited source against the same tree. Pass no inline diff: the validator reads the cited path's diff from git and can inspect surrounding context in the checkout, not just the cited line.
+- Validators stay static in every mode. Do not pass an approved command or ask a validator to run one; a probe is a parent decision and never a validator task.
 - The validator returns `{outcome, reason?}`. Record it as that finding's lifecycle result, keyed by `finding_id`, and carry it into `finalize` as `validator_lifecycle_results`.
 - **Never drop a finding based on the validator verdict.** A finding with `outcome: "false"` moves to the "Filtered (not validated)" presentation group in Stage 6. It is never removed from the report.
 - If a validator subagent fails, times out, or returns nothing, record `failed` or `unavailable` with a reason. The finding stays actionable and unvalidated, and `finalize` records a lifecycle failure that marks the run degraded. Report that validator in the Coverage section. Do not treat the finding as validated.

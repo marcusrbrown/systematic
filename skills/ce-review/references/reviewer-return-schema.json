@@ -1,0 +1,198 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Code Review Reviewer Return",
+  "description": "The payload a code review sub-agent returns to the parent: exactly the subAgentReturn shape. Parent-owned fields are not part of it.",
+  "$ref": "#/definitions/subAgentReturn",
+  "definitions": {
+    "subAgentFinding": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S",
+          "description": "Short, specific issue title. 10 words or fewer."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["P0", "P1", "P2", "P3"],
+          "description": "Issue severity level"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "allOf": [
+            {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            {
+              "type": "string",
+              "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+            }
+          ],
+          "description": "Relative file path from repository root; absolute POSIX, drive-letter, and UNC paths are rejected"
+        },
+        "line": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Primary line number of the issue"
+        },
+        "why_it_matters": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "\\S",
+          "description": "Non-empty impact and failure mode -- not 'what is wrong' but 'what breaks'"
+        },
+        "autofix_class": {
+          "type": "string",
+          "enum": ["safe_auto", "gated_auto", "manual", "advisory"],
+          "description": "Reviewer's conservative recommendation for how this issue should be handled after synthesis"
+        },
+        "owner": {
+          "type": "string",
+          "enum": ["review-fixer", "downstream-resolver", "human", "release"],
+          "description": "Who should own the next action for this finding after synthesis"
+        },
+        "requires_verification": {
+          "type": "boolean",
+          "description": "Whether any fix for this finding must be re-verified with targeted tests or a follow-up review pass"
+        },
+        "suggested_fix": {
+          "description": "Concrete minimal fix. Omit or null if no good fix is obvious -- a bad suggestion is worse than none.",
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Reviewer confidence in this finding, calibrated per persona"
+        },
+        "evidence": {
+          "minItems": 1,
+          "maxItems": 5,
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "allOf": [
+                  {
+                    "type": "string",
+                    "pattern": "\\S"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+                  }
+                ],
+                "description": "Bounded code-grounded evidence; absolute POSIX, drive-letter, and UNC paths are rejected"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "overflow": {
+                    "type": "boolean",
+                    "const": true,
+                    "description": "Explicit marker that the complete evidence did not fit in one bounded entry"
+                  },
+                  "excerpt": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "allOf": [
+                      {
+                        "type": "string",
+                        "pattern": "\\S"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+                      }
+                    ],
+                    "description": "Bounded excerpt retained when evidence must be shortened"
+                  }
+                },
+                "required": ["overflow", "excerpt"],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "description": "Code-grounded evidence. At least 1 and at most 5 bounded entries; split evidence across entries or use an explicit overflow marker rather than silently truncating it."
+        },
+        "pre_existing": {
+          "type": "boolean",
+          "description": "True if this issue exists in unchanged code unrelated to the current diff"
+        }
+      },
+      "required": [
+        "title",
+        "severity",
+        "file",
+        "line",
+        "why_it_matters",
+        "autofix_class",
+        "owner",
+        "requires_verification",
+        "confidence",
+        "evidence",
+        "pre_existing"
+      ],
+      "additionalProperties": false
+    },
+    "subAgentReturn": {
+      "type": "object",
+      "properties": {
+        "reviewer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "\\S",
+          "description": "Persona name that produced this output (e.g., 'correctness', 'security')"
+        },
+        "findings": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/subAgentFinding"
+          },
+          "description": "List of code review findings. Empty array if no issues found."
+        },
+        "residual_risks": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "description": "Risks the reviewer noticed but could not confirm as findings"
+        },
+        "testing_gaps": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "description": "Missing test coverage the reviewer identified"
+        }
+      },
+      "required": ["reviewer", "findings", "residual_risks", "testing_gaps"],
+      "additionalProperties": false
+    }
+  }
+}
