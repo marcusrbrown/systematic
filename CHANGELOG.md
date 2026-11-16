@@ -4,6 +4,29 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.34.0](https://github.com/marcusrbrown/systematic/compare/v3.33.2...v3.34.0) (2026-11-16)
+
+### Features
+
+* **ce-review:** pin the review scope once and have every reviewer read its own paths ([#1424](https://github.com/marcusrbrown/systematic/issues/1424)) ([530622b](https://github.com/marcusrbrown/systematic/commit/530622bcd90c7fd4614c135e63e772ae5931a262))
+* **ce-review:** review unattended pull requests read-only, leave gates to CI, and re-ask instead of repairing ([#1422](https://github.com/marcusrbrown/systematic/issues/1422)) ([5e88e51](https://github.com/marcusrbrown/systematic/commit/5e88e51d8e6faa5c5461c819669fd6dbbe0c171d))
+
+### Continuous Integration
+
+* **deps:** update Systematic to v3.33.2 ([#1409](https://github.com/marcusrbrown/systematic/issues/1409)) ([f93529c](https://github.com/marcusrbrown/systematic/commit/f93529c5c8f87e649187716db952a1723ba585a8))
+* **fro-bot:** let PR reviews use ce:review and leave the CI gates to CI ([#1417](https://github.com/marcusrbrown/systematic/issues/1417)) ([2c04a87](https://github.com/marcusrbrown/systematic/commit/2c04a8758c157736147d59d3599958689245ba88))
+* run Fro Bot with isolate-agent ([#1420](https://github.com/marcusrbrown/systematic/issues/1420)) ([88b4119](https://github.com/marcusrbrown/systematic/commit/88b4119112a01874ce052c4dc5ac5757c53c5c2e))
+
+### Miscellaneous Chores
+
+* **deps:** update dependency @biomejs/biome to v2.6.7 ([#1411](https://github.com/marcusrbrown/systematic/issues/1411)) ([ca74f66](https://github.com/marcusrbrown/systematic/commit/ca74f6651b4040881feeb9cba8aebaca865a2426))
+* **deps:** update fro-bot/agent to v0.142.0 ([#1410](https://github.com/marcusrbrown/systematic/issues/1410)) ([069d444](https://github.com/marcusrbrown/systematic/commit/069d4440f87879a912c6b47ac8a88e547f3942ba))
+* **deps:** update fro-bot/agent to v0.143.0 ([#1412](https://github.com/marcusrbrown/systematic/issues/1412)) ([0fde4a0](https://github.com/marcusrbrown/systematic/commit/0fde4a0296251cfe6ea59e26e5d6a57934278ce6))
+* **deps:** update fro-bot/agent to v0.144.0 ([#1414](https://github.com/marcusrbrown/systematic/issues/1414)) ([ed37af2](https://github.com/marcusrbrown/systematic/commit/ed37af27e4997cd88cf3fbbebbd053cab2f23e73))
+* **deps:** update fro-bot/agent to v0.144.1 ([#1415](https://github.com/marcusrbrown/systematic/issues/1415)) ([3bf4485](https://github.com/marcusrbrown/systematic/commit/3bf4485391c7522590f9b4302f7f38318845535d))
+* **deps:** update fro-bot/agent to v0.144.2 ([#1418](https://github.com/marcusrbrown/systematic/issues/1418)) ([55e9794](https://github.com/marcusrbrown/systematic/commit/55e9794cafc0fd5b448729ff35cc0d8ee5b7c975))
+* **dev:** update dependency typebox to v1.4.7 ([#1419](https://github.com/marcusrbrown/systematic/issues/1419)) ([6132c28](https://github.com/marcusrbrown/systematic/commit/6132c2850a4d0e46c95cd131cfe428f4e0820904))
+
 ## [3.33.2](https://github.com/marcusrbrown/systematic/compare/v3.33.1...v3.33.2) (2026-11-14)
 
 ### Bug Fixes
