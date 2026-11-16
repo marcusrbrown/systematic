@@ -1,7 +1,7 @@
 ---
 title: An artifact contract with no validated write path has no conforming producers
 date: 2026-08-23
-last_updated: 2026-08-24
+last_updated: 2026-11-16
 category: best-practices
 module: ce-review
 problem_type: best_practice
@@ -76,9 +76,9 @@ have produced the thing you are counting.
 
 The issue assumed producer/consumer version skew. Tracing the dispatch path showed it
 was unreachable in the ordinary case: the parent inlines
-`skills/ce-review/references/findings-schema.json` into every persona prompt through
-`{schema}` in `skills/ce-review/references/subagent-template.md`, then validates the
-return against that same bundled file. Producer and consumer are the same version by
+`skills/ce-review/references/reviewer-return-schema.json` into every persona prompt through
+`{schema}` in `skills/ce-review/references/subagent-template.md`. That file is a view of the findings schema, generated from the Zod source the packaged validator parses with and rooted at the reviewer payload ([why the root matters](../logic-errors/reviewer-return-schema-root-required-parent-only-fields-2026-11-16.md)); the parent then screens the return with that validator.
+Producer and consumer are the same version by
 construction within a run.
 
 The reachable failure was a model ignoring the contract — which a version field cannot

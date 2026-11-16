@@ -5,12 +5,20 @@
 # Usage:
 #   run-arm.sh <baseline|treatment> <model> <prompt-file> <out-dir>
 #
-# Isolation follows the "minimum that matters" recipe
-# (docs/solutions/best-practices/reliable-cli-integration-testing-2026-04-26.md):
-#   - OPENCODE_CONFIG_DIR=<empty temp>  skips the user's ~/.config/opencode
+# Isolation is the minimum that keeps OpenCode's own auth and model catalog
+# working (see .agents/skills/running-with-without-evals/SKILL.md):
+#   - XDG_CONFIG_HOME=<empty temp>  drops OpenCode's global opencode.json and MCP servers
+#   - OPENCODE_CONFIG_DIR=<empty temp>  adds an empty custom config directory
 #   - OPENCODE_CONFIG_CONTENT controls the plugin array per arm
 #   - paid model (free models rate-limit and masquerade as failures)
 #   - --format json captures the raw event stream
+#
+# NOT isolated: Systematic reads <homedir>/.config/opencode (HOME), not
+# XDG_CONFIG_HOME (src/lib/search-user-config.ts:872-883). The treatment arm
+# therefore loads the real ~/.config/opencode/systematic.jsonc, including any
+# agents.<name>.model overlay, so subagents can run on other models than -m.
+# The baseline arm loads no Systematic. Check child-session models in the
+# transcript. A private HOME removes the overlay but flattens per-agent routing.
 #
 # baseline arm:  --pure + {"plugin":[]}            → Systematic MUST be absent
 # treatment arm: {"plugin":["file://dist/index.js"]} → Systematic MUST be present
@@ -31,13 +39,14 @@ DIST_PLUGIN="$REPO_ROOT/dist/index.js"
 mkdir -p "$OUT_DIR"
 CONFIG_DIR="$(mktemp -d)"
 PROJECT_DIR="$(mktemp -d)"     # fresh empty workspace, same shape for both arms
-# Vanilla isolation: redirect ONLY XDG_CONFIG_HOME so the user's global
+# Redirect ONLY XDG_CONFIG_HOME so OpenCode's global
 # ~/.config/opencode/opencode.json (which defines MCP servers like context7,
-# tavily, etc.) does NOT leak into either arm. We deliberately do NOT redirect
+# tavily, etc.) does NOT leak into either arm. This does not hide Systematic's
+# own user config (see the header). We deliberately do NOT redirect
 # XDG_DATA_HOME (holds auth.json — needed to authenticate the paid model) or
 # XDG_CACHE_HOME (holds the models.dev catalog — needed to resolve openai/gpt-5.5).
 # Redirecting those breaks provider/model resolution (ProviderModelNotFoundError).
-# Both arms get the same vanilla config; treatment adds Systematic via the plugin array.
+# Both arms get the same OpenCode config; treatment adds Systematic via the plugin array.
 XDG_CONFIG="$(mktemp -d)"
 trap 'rm -rf "$CONFIG_DIR" "$PROJECT_DIR" "$XDG_CONFIG"' EXIT
 
