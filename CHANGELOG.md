@@ -4,6 +4,30 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.35.0](https://github.com/marcusrbrown/systematic/compare/v3.34.0...v3.35.0) (2026-11-17)
+
+### Features
+
+* use the metacogs counterfactual and synthesis skills at ce:plan and ce:review decision points ([#1430](https://github.com/marcusrbrown/systematic/issues/1430)) ([c997dff](https://github.com/marcusrbrown/systematic/commit/c997dff1a24e4d0cf26f6160a6b699b93354e6c5))
+
+### Documentation
+
+* **solutions:** record what reviewing unattended PRs, wiring companion skills and evaluating workflows taught ([#1432](https://github.com/marcusrbrown/systematic/issues/1432)) ([c5a2ba6](https://github.com/marcusrbrown/systematic/commit/c5a2ba68d6a4160a717127cd9f34cae7d68989f1))
+
+### Tests
+
+* **eval:** keep the user's Systematic config out of with/without eval arms ([#1433](https://github.com/marcusrbrown/systematic/issues/1433)) ([1b51c5e](https://github.com/marcusrbrown/systematic/commit/1b51c5e5ba1d15028a2634fb1d6bb4c5d2bec07c))
+
+### Continuous Integration
+
+* **deps:** update Systematic to v3.34.0 ([#1425](https://github.com/marcusrbrown/systematic/issues/1425)) ([2ed22fb](https://github.com/marcusrbrown/systematic/commit/2ed22fb554a8f59ee37f0de4950f07c4a429fad2))
+* **release-notes:** give the narrating agent a scratch directory it can write under isolation ([#1426](https://github.com/marcusrbrown/systematic/issues/1426)) ([95fcd14](https://github.com/marcusrbrown/systematic/commit/95fcd14df2c9975aa1263fe49782a90e5480c1af))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.144.4 ([#1421](https://github.com/marcusrbrown/systematic/issues/1421)) ([6271c55](https://github.com/marcusrbrown/systematic/commit/6271c556adf16648a128df612bdc3368ad8d2bdb))
+* **deps:** update fro-bot/agent to v0.144.5 ([#1434](https://github.com/marcusrbrown/systematic/issues/1434)) ([9da41df](https://github.com/marcusrbrown/systematic/commit/9da41dfc90d92cf9a44766559416bbaf223cd5bb))
+
 ## [3.34.0](https://github.com/marcusrbrown/systematic/compare/v3.33.2...v3.34.0) (2026-11-16)
 
 ### Features
