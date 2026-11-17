@@ -52,6 +52,7 @@ import {
   evaluateDelegatedSearchProof,
   hasResearcherSystemMarker,
   lastUserTextOf,
+  PARENT_FINAL_MARKER,
   plantDelegatedExternalFixture,
   plantDelegatedSearchFixture,
   messageText as proofMessageText,
@@ -809,10 +810,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           sessionID: session.id,
           text: `${PARENT_DIRECTIVE} Dispatch the learnings researcher to find the zebra flake solution.`,
         })
-        await host.client.session.wait({ sessionID: session.id })
-        finalAnswer = lastAssistantText(
-          await host.client.session.context({ sessionID: session.id }),
-        )
+        finalAnswer = await awaitParentFinalAnswer(host.client, session.id)
       } finally {
         model.stop()
         await host.server.stop()
@@ -840,6 +838,34 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
         )
         .join('')
         .trim()
+    }
+
+    /**
+     * The parent's final answer once the child has reported back.
+     *
+     * Since 2.3.0 the `subagent` tool returns a handle at once and the child's
+     * answer arrives later as a `<subagent>` message that starts a new parent
+     * turn (anomalyco/opencode#63382). `session.wait` returns at the first
+     * idle, which is before that turn. So wait for the scripted final marker,
+     * up to a deadline. On a host that answers inline the marker is there on
+     * the first look; a run that never reaches it returns what the session
+     * holds, and the proof names the failure.
+     */
+    async function awaitParentFinalAnswer(
+      client: AgentHost['client'],
+      sessionID: string,
+      { deadlineMs = 20_000 }: { deadlineMs?: number } = {},
+    ): Promise<string | undefined> {
+      const deadline = Date.now() + deadlineMs
+      for (;;) {
+        await client.session.wait({ sessionID })
+        const answer = lastAssistantText(
+          await client.session.context({ sessionID }),
+        )
+        if (answer?.includes(PARENT_FINAL_MARKER) === true) return answer
+        if (Date.now() >= deadline) return answer
+        await Bun.sleep(100)
+      }
     }
 
     test(
@@ -1159,10 +1185,15 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
               ? `${CHILD_PROMPT_MARK} Read the probe note and report its marker.`
               : `${PARENT_DIRECTIVE} Dispatch the researcher to read the probe note.`,
         })
-        await host.client.session.wait({ sessionID: session.id })
-        finalAnswer = lastAssistantText(
-          await host.client.session.context({ sessionID: session.id }),
-        )
+        if (options.mode === 'direct') {
+          // A direct session has no parent, so no final marker to wait for.
+          await host.client.session.wait({ sessionID: session.id })
+          finalAnswer = lastAssistantText(
+            await host.client.session.context({ sessionID: session.id }),
+          )
+        } else {
+          finalAnswer = await awaitParentFinalAnswer(host.client, session.id)
+        }
       } finally {
         model.stop()
         fetchCounter.stop()

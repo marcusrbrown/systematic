@@ -22,12 +22,12 @@ A real-host test starts an OpenCode v2 server with the packaged Systematic plugi
 
 ## Symptoms
 
-- The three failing tests all list agents through the helper `listAgents` right after the host starts (`tests/integration/opencode-v2.test.ts:514`, `tests/integration/opencode-v2.test.ts:543` and `tests/integration/opencode-v2.test.ts:663`, each a `listAgents` call).
+- The three failing tests all list agents through the helper `listAgents` right after the host starts (`tests/integration/opencode-v2.test.ts:515`, `tests/integration/opencode-v2.test.ts:544` and `tests/integration/opencode-v2.test.ts:664`, each a `listAgents` call).
 - Nothing in `src/` calls `agent.list`, so the plugin was not at fault and #1395 changed only the test helper.
 
 ## Solution
 
-The `listAgents` helper calls `provider.list` for the project location first, then `agent.list` (`tests/integration/opencode-v2.test.ts:496-506`, `listAgents`):
+The `listAgents` helper calls `provider.list` for the project location first, then `agent.list` (`tests/integration/opencode-v2.test.ts:497-507`, `listAgents`):
 
 ```ts
 const location = { directory: fixture.projectDir }

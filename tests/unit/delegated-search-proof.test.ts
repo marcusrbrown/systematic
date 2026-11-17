@@ -15,7 +15,9 @@ import {
   EXTERNAL_DELEGATED_SEARCH_MODE,
   evaluateDelegatedSearchProof,
   hasResearcherSystemMarker,
+  isSubagentLaunch,
   PARENT_FINAL_MARKER,
+  parentResultTextOf,
   plantDelegatedExternalFixture,
   plantDelegatedSearchFixture,
   researcherSystemMarker,
@@ -86,6 +88,34 @@ function parentFinal(toolText: string): ChatRequest {
       { role: 'tool', content: toolText },
     ],
     ['task', SEARCH_TOOL],
+  )
+}
+
+// What OpenCode v2 2.3.0 and later do: the `subagent` tool returns this at once
+// (anomalyco/opencode#63382), and the child's answer comes back later as a
+// `<subagent>` user message that wakes the parent.
+const LAUNCH_HANDLE =
+  'The subagent is working in the background (sessionID: ses_child). You will receive a <subagent> message when it goes idle, and again after each later round of work.'
+
+function subagentReport(body: string, state = 'completed'): string {
+  return `<subagent sessionID="ses_child" state="${state}" description="Search past solutions">\n${body}\n</subagent>`
+}
+
+function parentLaunched(): ChatRequest {
+  return parentFinal(LAUNCH_HANDLE)
+}
+
+function parentReported(reportBody: string): ChatRequest {
+  return request(
+    [
+      { role: 'system', content: 'You are the host.' },
+      { role: 'user', content: 'dispatch' },
+      { role: 'assistant', content: '' },
+      { role: 'tool', content: LAUNCH_HANDLE },
+      { role: 'assistant', content: 'PARENT-WAITING' },
+      { role: 'user', content: subagentReport(reportBody) },
+    ],
+    ['subagent', SEARCH_TOOL],
   )
 }
 
@@ -383,6 +413,41 @@ describe('evaluateDelegatedSearchProof', () => {
     expect(verdict).toMatchObject({ ok: false, code: 'no-parent-final' })
   })
 
+  test('a parent whose last request is a background child report carrying the paths passes', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      parentRequests: [
+        parentFirst(),
+        parentLaunched(),
+        parentReported(`CHILD-FOUND ${BOTH_PATHS}`),
+      ],
+    })
+    expect(verdict).toEqual({ ok: true })
+  })
+
+  test('a background child report that lacks the path fails', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      parentRequests: [
+        parentFirst(),
+        parentLaunched(),
+        parentReported('CHILD-FOUND NO-PATH'),
+      ],
+    })
+    expect(verdict).toMatchObject({
+      ok: false,
+      code: 'parent-answer-missing-path',
+    })
+  })
+
+  test('a parent whose last request still holds only the background launch never saw the result', () => {
+    const verdict = evaluateDelegatedSearchProof({
+      ...passing(),
+      parentRequests: [parentFirst(), parentLaunched()],
+    })
+    expect(verdict).toMatchObject({ ok: false, code: 'no-parent-final' })
+  })
+
   test('more requests than the cap fail before anything else is read', () => {
     const verdict = evaluateDelegatedSearchProof({
       ...passing(),
@@ -504,6 +569,27 @@ describe('createDelegatedSearchScript', () => {
     const s = script()
     s.respond(parentFirst())
     expect(s.respond(parentFirst())).toEqual({ text: 'PARENT-UNEXPECTED-TURN' })
+  })
+
+  test('a background launch is answered with a wait, and the later child report with the final answer', () => {
+    const s = script()
+    s.respond(parentFirst())
+    s.respond(childFirst())
+    s.respond(childNext(FOUND_MESSAGE))
+
+    const waiting = s.respond(parentLaunched())
+    expect(waiting).toEqual({ text: 'PARENT-WAITING' })
+    expect(JSON.stringify(waiting)).not.toContain(PARENT_FINAL_MARKER)
+
+    expect(s.respond(parentReported(`CHILD-FOUND ${BOTH_PATHS}`))).toEqual({
+      text: `${PARENT_FINAL_MARKER} ${BOTH_PATHS}`,
+    })
+    expect(
+      evaluateDelegatedSearchProof({
+        ...s.observation(),
+        parentAnswer: `${PARENT_FINAL_MARKER} ${BOTH_PATHS}`,
+      }),
+    ).toEqual({ ok: true })
   })
 
   test('requests past the cap get a terminal text and the proof fails with the cap', () => {
@@ -837,5 +923,40 @@ describe('request readers and fixture', () => {
       'utf8',
     )
     expect(brainstorm).toContain('status: abandoned')
+  })
+})
+
+describe('background subagent readers', () => {
+  test('a launch handle as the last message is a launch; an inline result is not', () => {
+    expect(isSubagentLaunch(parentLaunched())).toBe(true)
+    expect(isSubagentLaunch(parentFinal(`CHILD-FOUND ${BOTH_PATHS}`))).toBe(
+      false,
+    )
+    expect(isSubagentLaunch(parentFirst())).toBe(false)
+  })
+
+  test('the parent result is the last tool message, or the report that woke the parent', () => {
+    expect(parentResultTextOf(parentFinal('inline result'))).toBe(
+      'inline result',
+    )
+    expect(parentResultTextOf(parentReported('CHILD-FOUND x'))).toContain(
+      'CHILD-FOUND x',
+    )
+    // The launch handle still sits earlier in the history; it is not the result.
+    expect(parentResultTextOf(parentReported('CHILD-FOUND x'))).not.toContain(
+      'working in the background',
+    )
+    expect(parentResultTextOf(parentFirst())).toBeUndefined()
+  })
+
+  test('a user message that only mentions <subagent> is not a report', () => {
+    const chatter = request(
+      [
+        { role: 'system', content: 'host' },
+        { role: 'user', content: 'tell me about the <subagent> tool' },
+      ],
+      ['subagent'],
+    )
+    expect(parentResultTextOf(chatter)).toBeUndefined()
   })
 })

@@ -239,6 +239,70 @@ describe('evaluateConnectIsolationProof', () => {
   })
 })
 
+describe('a parent whose child runs in the background (OpenCode v2 2.3.0 and later)', () => {
+  const LAUNCH_HANDLE =
+    'The subagent is working in the background (sessionID: ses_child). You will receive a <subagent> message when it goes idle.'
+  const report = (body: string) => ({
+    role: 'user',
+    content: `<subagent sessionID="ses_child" state="completed" description="Read the probe note">\n${body}\n</subagent>`,
+  })
+  const parentOffer = [{ function: { name: 'subagent' } }]
+
+  function scriptFor() {
+    return createConnectIsolationScript({
+      layout: connectIsolationLayout('/fixture/project'),
+      hostTools: HOST_TOOLS,
+      fetchUrl: 'http://127.0.0.1:9/probe',
+      dispatch: { tool: 'subagent', arguments: { prompt: 'CHILD-PROMPT' } },
+      isChildRequest: (request) =>
+        JSON.stringify(request.messages).includes('CHILD-PROMPT') &&
+        !JSON.stringify(request.messages).includes('PARENT-DIRECTIVE'),
+    })
+  }
+
+  const launched: ChatRequest = {
+    tools: parentOffer,
+    messages: [
+      { role: 'user', content: 'PARENT-DIRECTIVE start' },
+      toolMessage(LAUNCH_HANDLE),
+    ],
+  }
+  const reported: ChatRequest = {
+    tools: parentOffer,
+    messages: [
+      { role: 'user', content: 'PARENT-DIRECTIVE start' },
+      toolMessage(LAUNCH_HANDLE),
+      { role: 'assistant', content: 'PARENT-WAITING' },
+      report(`CHILD-FINAL ${CONNECT_PROBE_MARKER}`),
+    ],
+  }
+
+  test('the launch handle gets a wait, and the report gets the final answer with the marker', () => {
+    const script = scriptFor()
+    const waiting = script.respond(launched)
+    expect(waiting).toEqual({ text: 'PARENT-WAITING' })
+    expect(script.respond(reported)).toEqual({
+      text: `PARENT-FINAL ${CONNECT_PROBE_MARKER}`,
+    })
+  })
+
+  test('a parent whose last request is the report passes; one that stopped at the launch fails', () => {
+    const healthy = healthyObservation()
+    expect(
+      evaluateConnectIsolationProof({
+        ...healthy,
+        parentRequests: [launched, reported],
+      }),
+    ).toEqual({ ok: true })
+    expect(
+      evaluateConnectIsolationProof({
+        ...healthy,
+        parentRequests: [launched],
+      }),
+    ).toMatchObject({ ok: false, code: 'no-parent-final' })
+  })
+})
+
 describe('createConnectIsolationScript', () => {
   const layout = connectIsolationLayout('/fixture/project')
 
