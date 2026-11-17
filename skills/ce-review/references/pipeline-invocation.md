@@ -197,17 +197,25 @@ missing row is not an error and is never a reason to build one.
 ### Re-ask after a screen rejection
 
 A persona gets at most 2 returns and 2 screens. After the first exit 1, the
-parent may resume the same reviewer session once. It sends the `rejection`
-report exactly as printed, the existing return contract, and a request for a
-complete corrected payload under the same reviewer name, then screens the new
-return with a fresh heredoc and a fresh delimiter. A second exit 1 is final.
+parent may resume the same reviewer session once, through the continuation
+call named by the active harness profile (its *Dispatch results and
+continuation* section) with the id recorded at dispatch. It sends the
+`rejection` report exactly as printed, the existing return contract, and a
+request for a complete corrected payload under the same reviewer name. Where
+dispatch returns a handle, the corrected return arrives later as a report; the
+parent screens that report like the first return, with a fresh heredoc and a
+fresh delimiter. A report that is not final is not a return, so wait for the
+final one. A second exit 1 is final.
 
 - The parent never edits, trims or re-serializes a rejected payload, never
   dispatches a correction, repair or replacement agent, and never reads the
   helper source or bundle.
-- If the harness cannot continue that session, the persona is `malformed` from
-  its first `screen` result, Coverage says "continuation unavailable", and no
-  new session is opened.
+- Continuation is unavailable only when the active harness profile names no
+  continuation call or no id was recorded for that persona; it is never
+  inferred from the environment, so make the call. When it is unavailable, the
+  harness cannot continue that session, the persona is `malformed` from its
+  first `screen` result, Coverage says "continuation unavailable", and no new
+  session is opened.
 - The byte-identical retry of an exit 2 launch failure re-runs the same bytes.
   It is not a re-ask and does not count toward the cap.
 - One persona has one terminal result. A corrected return supersedes the

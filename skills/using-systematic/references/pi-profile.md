@@ -4,7 +4,7 @@ Evidence registry: see [`HARNESSES.md`](../../../HARNESSES.md).
 
 | Capability | Mechanism | Status | Fallback |
 |---|---|---|---|
-| Subagent delegation | Bounded built-in delegate via `systematic_delegate({agent, task})`; optional mature delegation via [pi-subagents](https://github.com/tintinweb/pi-subagents): installed package personas, opt-in export for overlays | built-in: degraded (sequential only); pi-subagents path: outside Systematic's bounded-delegate guarantees | Dispatch sequentially in dependency order or do the work inline |
+| Subagent delegation | Bounded built-in delegate via `systematic_delegate({agent, task})`, with no continuation; optional mature delegation via [pi-subagents](https://github.com/tintinweb/pi-subagents): installed package personas, opt-in export for overlays, `Agent` with `resume` continues a child | built-in: degraded (sequential only); pi-subagents path: outside Systematic's bounded-delegate guarantees | Dispatch sequentially in dependency order or do the work inline |
 | Blocking user interaction | No native blocking tool | degraded | Present numbered options in chat and wait |
 | Task tracking | No native task-tracking mechanism | unavailable | Maintain a visible task list in responses |
 | Skill loading | `systematic_skill` tool or Pi-native skill activation | supported | Read the skill instructions listed by the active harness |
@@ -24,6 +24,10 @@ systematic_delegate({
 `systematic_delegate` takes the bare name; the pi-subagents `Agent` tool takes `systematic-<name>`.
 
 `systematic_delegate` is sequential, capped at 20 turns, depth-1, and spawns its child with `noExtensions: true`. The `noExtensions` guarantee bounds `systematic_delegate`'s own recursion — it does not bound end-to-end delegation depth across a combined pi-subagents + Systematic path.
+
+### Dispatch results and continuation
+
+`systematic_delegate` runs the child to completion, returns its answer in the call result and disposes the child's session, so `systematic_delegate` has no continuation. Continuation exists only on the pi-subagents path: call `Agent` with `resume` set to the agent id from the launch result, and the follow-up as `prompt`. It runs in the background by default and reports later by notification; `run_in_background: false` blocks and returns the result inline.
 
 ### Optional: pi-subagents delegation
 

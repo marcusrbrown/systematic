@@ -2,7 +2,7 @@
 
 | Capability | Mechanism | Status | Fallback |
 |---|---|---|---|
-| Subagent delegation | Name-based subagent dispatch; plugin agents ship in `agents/`; `context: fork` for skill-scoped forks | supported | Dispatch in the foreground, serially or in small batches |
+| Subagent delegation | Name-based subagent dispatch; plugin agents ship in `agents/`; `context: fork` for skill-scoped forks; `SendMessage` continues a subagent by agent id | supported | Dispatch in the foreground, serially or in small batches |
 | Blocking user interaction | `AskUserQuestion` tool | supported | Present numbered options in chat and wait |
 | Task tracking | `TaskCreate` / `TaskGet` / `TaskList` / `TaskUpdate` (`TodoWrite` is deprecated and disabled by default) | supported | Maintain a visible task list in responses |
 | Skill loading | Native Skill tool with `SKILL.md` discovery (`~/.claude/skills/`, `.claude/skills/`, plugin `skills/`); Systematic ships no `systematic_skill` tool on Claude Code | supported | Read the skill instructions listed by the active harness |
@@ -17,6 +17,10 @@ Behavioral enforcement on Claude Code rides a plugin output style (force-for-plu
 ```text
 Use the systematic-implementer subagent to implement the auth module and return the changed files.
 ```
+
+### Dispatch results and continuation
+
+Each subagent call starts a new instance, and the agent id comes with the dispatch result. Record it at dispatch, against the task it was given. Continue that subagent with `SendMessage` with `to` set to that agent id and the follow-up as the message: a finished subagent resumes in the background, and its reply arrives later as a report. The built-in Explore and Plan agents are one-shot and return no agent id, so they cannot be continued. Dispatching the same subagent by name again starts a new one, not a continuation.
 
 ### Blocking user interaction
 

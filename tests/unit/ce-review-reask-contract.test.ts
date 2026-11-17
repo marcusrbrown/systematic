@@ -55,6 +55,8 @@ const SKILL_SCREEN = normalize(
 const PIPELINE_REASK = normalize(
   sectionByHeading(PIPELINE, '### Re-ask after a screen rejection'),
 )
+const SKILL_SPAWNING = normalize(sectionByHeading(SKILL, '#### Spawning'))
+const PROFILE_SECTION = 'Dispatch results and continuation'
 const PIPELINE_NEVER_BYPASS = normalize(
   sectionByHeading(PIPELINE, '## Never-bypass'),
 )
@@ -174,6 +176,70 @@ describe('re-ask policy text', () => {
     },
   )
 
+  test('Spawning records each persona child id from the launch result', () => {
+    expect(SKILL_SPAWNING).toMatch(
+      /Record each persona's child session or task id from the launch result/,
+    )
+    expect(SKILL_SPAWNING).toMatch(/re-ask needs it/)
+  })
+
+  test.each([
+    ['SKILL.md', SKILL_REASK],
+    ['pipeline-invocation.md', PIPELINE_REASK],
+  ])(
+    '%s continues the recorded id through the profile continuation call',
+    (_name, text) => {
+      expect(text).toMatch(/id recorded at dispatch/)
+      expect(text).toMatch(
+        /continuation call named by the active harness profile/,
+      )
+      expect(text).toContain(PROFILE_SECTION)
+    },
+  )
+
+  test.each([
+    ['SKILL.md', SKILL_REASK],
+    ['pipeline-invocation.md', PIPELINE_REASK],
+  ])(
+    '%s screens a continued return that arrives as a later report',
+    (_name, text) => {
+      expect(text).toMatch(
+        /corrected return arrives (?:later )?as a (?:later )?report/,
+      )
+      expect(text).toMatch(/screens? (?:that|the) report like the first/)
+      expect(text).toMatch(/fresh heredoc and a fresh delimiter/)
+      expect(text).toMatch(/report that is not final is not a return/)
+    },
+  )
+
+  test.each([
+    ['SKILL.md', SKILL_REASK],
+    ['pipeline-invocation.md', PIPELINE_REASK],
+  ])(
+    '%s calls continuation unavailable only without a call or a recorded id',
+    (_name, text) => {
+      expect(text).toMatch(
+        /only when the active harness profile names no continuation call or no id was recorded/i,
+      )
+      expect(text).toMatch(/never inferred from the environment/)
+    },
+  )
+
+  test.each([
+    ['SKILL.md', SKILL_REASK],
+    ['pipeline-invocation.md', PIPELINE_REASK],
+  ])(
+    '%s keeps harness syntax in the profiles and bans a fresh dispatch',
+    (_name, text) => {
+      expect(text).not.toMatch(
+        /sessionID|task_id|SendMessage|systematic_delegate/,
+      )
+      expect(text).toMatch(
+        /never dispatches a correction, repair or replacement/,
+      )
+    },
+  )
+
   test('Stage 4 exit 1 points at the rejection report, not a "bounded validator diagnostic"', () => {
     expect(SKILL_SCREEN).not.toMatch(/bounded validator diagnostic/)
     expect(SKILL_SCREEN).toMatch(
@@ -238,6 +304,62 @@ describe('re-ask policy text', () => {
     expect(PIPELINE_NEVER_BYPASS).toMatch(
       /re-runs the same bytes, so it is never a re-ask and never counts toward a reviewer's re-ask limit/,
     )
+  })
+})
+
+// --- harness profiles: the one home of dispatch and continuation facts -------
+
+const PROFILE_DIR = 'skills/using-systematic/references'
+
+function profileSection(file: string): string {
+  return normalize(
+    sectionByHeading(read(`${PROFILE_DIR}/${file}`), `### ${PROFILE_SECTION}`),
+  )
+}
+
+describe('harness profiles carry the dispatch and continuation facts', () => {
+  test.each([
+    'opencode-v2-profile.md',
+    'opencode-profile.md',
+    'pi-profile.md',
+    'claude-code-profile.md',
+  ])('%s has a non-empty continuation section', (file) => {
+    expect(profileSection(file).length).toBeGreaterThan(0)
+  })
+
+  test('OpenCode v2 continues a running or finished child with subagent and sessionID', () => {
+    const text = profileSection('opencode-v2-profile.md')
+    expect(text).toMatch(/`subagent` returns immediately with a handle/)
+    expect(text).toMatch(/Record the `sessionID`/)
+    expect(text).toMatch(/<subagent sessionID="…" state="…">`? message/)
+    expect(text).toMatch(/`state="running"`[^.]*is not final/)
+    expect(text).toMatch(
+      /follow up a running or finished child.*`subagent` again with its `sessionID`/,
+    )
+    expect(text).toMatch(/`agent`.*`description` and `prompt`/)
+    expect(text).toMatch(/2\.3\.0 always returns a handle/)
+  })
+
+  test('OpenCode v1 continues a child with task and task_id', () => {
+    const text = profileSection('opencode-profile.md')
+    expect(text).toMatch(/`<task id="…" state="…">` block/)
+    expect(text).toMatch(/Record that `id`/)
+    expect(text).toMatch(/`task` again with it as `task_id`/)
+    expect(text).toMatch(/`state="running"`[^.]*is not final/)
+  })
+
+  test('Pi has no continuation for the built-in delegate and resumes through pi-subagents', () => {
+    const text = profileSection('pi-profile.md')
+    expect(text).toMatch(/`systematic_delegate` has no continuation/)
+    expect(text).toMatch(/`Agent` with `resume`/)
+    expect(text).toMatch(/agent id/)
+  })
+
+  test('Claude Code resumes a finished subagent with SendMessage and its agent id', () => {
+    const text = profileSection('claude-code-profile.md')
+    expect(text).toMatch(/`SendMessage` with `to` set to that agent id/)
+    expect(text).toMatch(/Explore and Plan[^.]*return no agent id/)
+    expect(text).toMatch(/starts a new one, not a continuation/)
   })
 })
 
