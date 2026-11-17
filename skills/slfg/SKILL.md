@@ -22,10 +22,10 @@ Swarm-enabled LFG. Run these steps in order, parallelizing where indicated. Do n
 
 After work completes, launch steps 5 and 6 as **parallel swarm agents** (both only need code to be written):
 
-5. `/ce:review mode:report-only` — spawn as background Task agent
-6. `/systematic:test-browser` — spawn as background Task agent
+5. `/ce:review mode:report-only` — spawn as a parallel Task agent
+6. `/systematic:test-browser` — spawn as a parallel Task agent
 
-Wait for both to complete before continuing.
+Wait for both final reports before continuing. A launch handle is not a report: do not re-dispatch while a report is owed (see the active harness profile's *Dispatch results and continuation* section).
 
 ## Autofix Phase
 
