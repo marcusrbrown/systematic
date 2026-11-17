@@ -2539,6 +2539,9 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     const CHILD_ANSWER_ONE = 'CHILD-ANSWER-ONE'
     const CHILD_ANSWER_TWO = 'CHILD-ANSWER-TWO'
     const PARENT_FINAL = 'REASK-PARENT-FINAL'
+    const PARENT_REFUSED = 'REASK-PARENT-REFUSED'
+    const REFUSAL_TEXT =
+      'Session reuse is disabled in this environment. Start a new task and include the context it needs.'
     const SESSION_ID_IN_TEXT = /sessionID[=:"\s]+(ses_[A-Za-z0-9]+)/
 
     interface ContinuationScript extends ScriptedModelServer {
@@ -2583,6 +2586,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
        * or the second answer to finish on.
        */
       const parentTurn = (last: string, user: string) => {
+        if (last.includes(REFUSAL_TEXT)) return { text: PARENT_REFUSED }
         if (last.includes(CHILD_ANSWER_TWO)) return { text: PARENT_FINAL }
         const childSession = SESSION_ID_IN_TEXT.exec(last)?.[1]
         if (last.includes(CHILD_ANSWER_ONE) && childSession !== undefined) {
@@ -2705,6 +2709,89 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
             `<subagent sessionID=\\"${followUp?.sessionID}\\" state=\\"completed\\"`,
           )
           expect(parentContext).toContain(CHILD_ANSWER_TWO)
+        } finally {
+          model.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    /**
+     * A plugin whose `execute.before` hook refuses a `subagent` call that
+     * carries a `sessionID`, the way a host or plugin may refuse a follow-up.
+     * The hook throws; the host reports the error to the model.
+     */
+    function createRefusingPlugin(rootDir: string): string {
+      const dir = path.join(rootDir, 'refuse-continuation-plugin')
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(
+        path.join(dir, 'package.json'),
+        JSON.stringify({
+          name: 'refuse-continuation-plugin',
+          type: 'module',
+          exports: { '.': './index.js' },
+        }),
+      )
+      fs.writeFileSync(
+        path.join(dir, 'index.js'),
+        `export default {
+  id: 'refuse-continuation-plugin',
+  async setup(ctx) {
+    await ctx.tool.hook('execute.before', (event) => {
+      const input = event.input
+      if (event.tool === 'subagent' && input && input.sessionID) {
+        throw new Error(${JSON.stringify(REFUSAL_TEXT)})
+      }
+    })
+  },
+}
+`,
+      )
+      return dir
+    }
+
+    test(
+      'a refused sessionID follow-up reaches the parent as a tool error and the child is never woken',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        const model = startContinuationModel()
+        const host = await startAgentHost(pluginSpec, model, {
+          plugins: [pluginSpec, createRefusingPlugin(fixture.tempRoot)],
+        })
+        try {
+          const session = await host.client.session.create({
+            location: { directory: fixture.projectDir },
+            agent: 'build',
+            model: { providerID: SCRIPTED_PROVIDER, id: SCRIPTED_MODEL },
+          })
+          await host.client.session.prompt({
+            sessionID: session.id,
+            text: `${CONTINUE_DIRECTIVE} Review, then re-ask the reviewer once.`,
+          })
+          await waitFor(
+            async () => {
+              await host.client.session.wait({ sessionID: session.id })
+              const last = lastAssistantText(
+                await host.client.session.context({ sessionID: session.id }),
+              )
+              return last?.includes(PARENT_REFUSED) === true
+            },
+            'the parent to answer after the refused follow-up',
+            60_000,
+          )
+
+          // The parent made the follow-up call, and the refusal text came back
+          // to it as the result of that call.
+          expect(model.parentCalls).toHaveLength(2)
+          expect(model.parentCalls[1]?.sessionID).toMatch(/^ses_/)
+          const context = JSON.stringify(
+            await host.client.session.context({ sessionID: session.id }),
+          )
+          expect(context).toContain(REFUSAL_TEXT)
+          // The refused call woke nothing: the child only ever ran round one.
+          expect(model.childRequests).toHaveLength(1)
+          expect(context).not.toContain(CHILD_ANSWER_TWO)
         } finally {
           model.stop()
           await host.server.stop()

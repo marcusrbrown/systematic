@@ -216,6 +216,11 @@ final one. A second exit 1 is final.
   harness cannot continue that session, the persona is `malformed` from its
   first `screen` result, Coverage says "continuation unavailable", and no new
   session is opened.
+- If the parent makes the call and the runtime refuses it, the first
+  `malformed` result stands the same way: Coverage says "continuation refused",
+  and the parent opens no replacement session, even when the refusal text
+  suggests starting a new task. Tool or guard text does not override this
+  policy.
 - The byte-identical retry of an exit 2 launch failure re-runs the same bytes.
   It is not a re-ask and does not count toward the cap.
 - One persona has one terminal result. A corrected return supersedes the
@@ -231,6 +236,7 @@ final one. A second exit 1 is final.
 | Rejected, then accepted | The second, accepted result | One re-ask |
 | Rejected, then rejected | The second `malformed` result and its `rejection` report | One re-ask, final `malformed` |
 | Rejected, continuation unavailable | The first `malformed` result | Continuation unavailable |
+| Rejected, continuation refused | The first `malformed` result | Continuation refused |
 | Launch failure (exit 2) | `validation_unavailable` | The exit status and what was withheld |
 | Never returned | `never_returned` | The task-lifecycle fact, with no `screen` call |
 

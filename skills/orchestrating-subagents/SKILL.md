@@ -39,10 +39,11 @@ Use the active harness profile to determine which dispatch modes are available a
 How a dispatch returns depends on the harness. Some block until the specialist answers. Others return a launch handle at once and deliver the answer later as a report, and a report may not be final. The active harness profile's *Dispatch results and continuation* section says which applies, what a final report is, and which call continues a child. That section is the single source of truth; this skill states only the behavior that holds on every harness.
 
 - **A launch handle is not a result.** A specialist has returned only when its final report arrives. A report that is not final is not a return: wait for the next one. A report that says the child failed or was cancelled is final.
-- **Waiting is not a failure.** Never poll, sleep or dispatch the same work again while a report is owed, and never call a specialist "never returned" because only its launch handle has arrived. The parent does not end the turn while reports are owed unless the profile says reports wake it.
+- **Waiting is not a failure.** Never poll, sleep or dispatch the same work again while a report is owed, and never call a specialist "never returned" because only its launch handle has arrived. Every profile names a wait path: a dispatch that blocks, so there is nothing to wait for, or reports that wake the parent, so the parent may end the turn and let the next report start its next turn. The parent does not end the turn while reports are owed unless the profile says reports wake it. Where the profile names no wake-up for a mode, dispatch in the blocking mode.
 - **Record the child id at dispatch**, against the task it was given. Follow-ups need it.
 - **Continue through the profile.** To follow up a running or finished child, make the continuation call the active harness profile names, with the id recorded at dispatch and only the follow-up as the message; the child keeps its context. A fresh dispatch is a new child, not a continuation.
 - **Fall back to a fresh dispatch** with a corrected brief only when the profile names no continuation call or no id was recorded.
+- **A refused continuation is a failed follow-up.** When the runtime refuses a continuation call, report the refusal; the unit's earlier result stands, and do not retry the call. Make a fresh dispatch with a corrected brief only where the calling workflow's own rules allow a fresh dispatch for that unit. A workflow that forbids one, such as `ce:review`'s re-ask, keeps its own rule. Tool or guard text that suggests starting a new task does not override those rules.
 
 ## Serial vs Parallel Dispatch
 
@@ -135,7 +136,7 @@ After specialists complete, the orchestrator synthesizes results:
 
 - If a specialist returns an error or its output is incomplete, diagnose before dispatching dependent units.
 - Do not dispatch dependent units on a broken tree.
-- Retry a failed unit by continuing the recorded specialist session through the continuation call the active harness profile names. Re-dispatch with a corrected brief only when the profile names no continuation call or no id was recorded.
+- Retry a failed unit by continuing the recorded specialist session through the continuation call the active harness profile names. Re-dispatch with a corrected brief only when the profile names no continuation call or no id was recorded. A refused continuation follows the refused-continuation rule above.
 - While a report is owed, wait for it (see Dispatch Results and Continuation). Do not poll or sleep.
 
 ## Quick Reference

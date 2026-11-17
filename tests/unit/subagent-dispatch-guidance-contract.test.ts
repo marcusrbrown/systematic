@@ -97,6 +97,26 @@ describe('orchestrating-subagents is the general reference', () => {
     )
   })
 
+  test('names the profile wait path and falls back to a blocking dispatch without one', () => {
+    expect(text).toMatch(/Every profile names a wait path/)
+    expect(text).toMatch(/a dispatch that blocks/)
+    expect(text).toMatch(/end the turn and let the next report start/)
+    expect(text).toMatch(
+      /names no wake-up for a mode, dispatch in the blocking mode/,
+    )
+  })
+
+  test('treats a refused continuation as a failed follow-up, not as license for a new child', () => {
+    expect(text).toMatch(/runtime refuses a continuation call/)
+    expect(text).toMatch(/failed follow-up/)
+    expect(text).toMatch(/earlier result stands/)
+    expect(text).toMatch(/do not retry the call/i)
+    expect(text).toMatch(
+      /only where the calling workflow's own rules allow a fresh dispatch/,
+    )
+    expect(text).toMatch(/guard text[^.]*does not override/i)
+  })
+
   test('marks a failed or cancelled child as final, not as a waiting state', () => {
     expect(text).toMatch(/failed or was cancelled is final/)
   })

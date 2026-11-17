@@ -229,6 +229,25 @@ describe('re-ask policy text', () => {
     ['SKILL.md', SKILL_REASK],
     ['pipeline-invocation.md', PIPELINE_REASK],
   ])(
+    '%s keeps the first malformed result when the runtime refuses the continuation',
+    (_name, text) => {
+      expect(text).toMatch(/the runtime refuses (?:it|the continuation call)/)
+      expect(text).toMatch(/Coverage says "continuation refused"/)
+      expect(text).toMatch(/opens no replacement session/)
+      expect(text).toMatch(
+        /even when the refusal text suggests starting a new task/,
+      )
+      expect(text).toMatch(/tool or guard text does not override/i)
+      expect(text).toMatch(
+        /Rejected, continuation refused \| The first `malformed` result \| Continuation refused/,
+      )
+    },
+  )
+
+  test.each([
+    ['SKILL.md', SKILL_REASK],
+    ['pipeline-invocation.md', PIPELINE_REASK],
+  ])(
     '%s keeps harness syntax in the profiles and bans a fresh dispatch',
     (_name, text) => {
       expect(text).not.toMatch(
@@ -338,6 +357,54 @@ describe('harness profiles carry the dispatch and continuation facts', () => {
     )
     expect(text).toMatch(/`agent`.*`description` and `prompt`/)
     expect(text).toMatch(/2\.3\.0 always returns a handle/)
+  })
+
+  test('OpenCode v2 says a refused sessionID follow-up is final and names no deployment', () => {
+    const text = profileSection('opencode-v2-profile.md')
+    expect(text).toMatch(/host or plugin may refuse a `sessionID` follow-up/)
+    expect(text).toMatch(/The refusal is final/)
+    expect(text).toMatch(/not a reason to dispatch a new child/)
+    expect(text).not.toMatch(/fro[- ]?bot/i)
+  })
+
+  test.each([
+    'opencode-v2-profile.md',
+    'opencode-profile.md',
+    'pi-profile.md',
+    'claude-code-profile.md',
+  ])('%s names a permitted wait path', (file) => {
+    const text = profileSection(file)
+    expect(text).toMatch(/\*\*Wait path\.\*\*/)
+    expect(text).toMatch(/blocks until|may end its turn/)
+  })
+
+  test('OpenCode v2 reports wake the parent from 2.3.0; before that a foreground dispatch blocks', () => {
+    const text = profileSection('opencode-v2-profile.md')
+    expect(text).toMatch(/report wakes the parent/)
+    expect(text).toMatch(/may end its turn/)
+    expect(text).toMatch(/before 2\.3\.0[^.]*foreground dispatch blocks until/i)
+  })
+
+  test('OpenCode v1 blocks by default and wakes the parent only for the flagged background mode', () => {
+    const text = profileSection('opencode-profile.md')
+    expect(text).toMatch(/foreground `task` \(the default\) blocks until/)
+    expect(text).toMatch(/experimental background-subagents flag/)
+    expect(text).toMatch(/starts a new parent turn/)
+    expect(text).toMatch(/dispatch in the foreground/)
+  })
+
+  test('Pi blocks for the built-in delegate and wakes an idle parent for pi-subagents', () => {
+    const text = profileSection('pi-profile.md')
+    expect(text).toMatch(/`systematic_delegate` is foreground/)
+    expect(text).toMatch(/idle parent[^.]*new turn/)
+    expect(text).toMatch(/`run_in_background: false` blocks/)
+  })
+
+  test('Claude Code wakes the parent from a completion notification', () => {
+    const text = profileSection('claude-code-profile.md')
+    expect(text).toMatch(/starts in the background/)
+    expect(text).toMatch(/completion notification in a later turn/)
+    expect(text).toMatch(/may end its turn/)
   })
 
   test('OpenCode v1 continues a child with task and task_id', () => {

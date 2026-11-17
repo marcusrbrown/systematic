@@ -27,15 +27,15 @@ systematic_delegate({
 
 ### Dispatch results and continuation
 
-`systematic_delegate` runs the child to completion, returns its answer in the call result and disposes the child's session, so `systematic_delegate` has no continuation. Continuation exists only on the pi-subagents path: call `Agent` with `resume` set to the agent id from the launch result, and the follow-up as `prompt`. It runs in the background by default and reports later by notification; `run_in_background: false` blocks and returns the result inline.
+`systematic_delegate` runs the child to completion, returns its answer in the call result and disposes the child's session, so `systematic_delegate` has no continuation. On the pi-subagents path, `Agent` returns an agent id at once; continue a child by calling `Agent` with `resume` set to that id and the follow-up as `prompt`.
+
+**Wait path.** `systematic_delegate` is foreground: it blocks until the child answers, so there is nothing to wait for. A pi-subagents `Agent` call runs in the background by default, and its completion notification reaches an idle parent as a new turn, so the parent may end its turn; `run_in_background: false` blocks and returns the result inline instead. Both modes apply to `resume`.
 
 ### Optional: pi-subagents delegation
 
 [pi-subagents](https://github.com/tintinweb/pi-subagents) (parallel/multi-model delegation) 0.22 or newer loads 29 curated personas from the installed package as `systematic-<name>` agent types with plain defaults; a project-scope install only after the project is trusted, and its first session may omit them from the `Agent` description, though dispatch works. Any other type falls back to `general-purpose` with an "Unknown agent type" note: the persona did not run. Export is needed only to apply `systematic.json` overlays; a local file outranks the packaged one. Nothing is written at extension load.
 
 `disabled_agents` and `agents.<name>.disable` do not reach packaged personas. Turn one off with `/agents → Disable`, or all with `packageAgents: false` in `subagents.json`.
-
-The `Agent` tool runs in the background by default. Pass `run_in_background: false` to wait for the result.
 
 Tested against pi-subagents 0.22.0 on Pi 1.3.0. Versions outside the tested range are unsupported but nonfatal.
 

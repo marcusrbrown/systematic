@@ -52,7 +52,10 @@ From 2.3.0, `subagent` returns immediately with a handle, not the child's answer
 
 - `state="completed"` ends that round of work. `error` and `cancelled` are final failures. `state="running"` means the child went idle with background work still going: it is not final, so wait for the next `<subagent>` message.
 - To follow up a running or finished child, call `subagent` again with its `sessionID`, plus `agent` (the specialist it was dispatched as), `description` and `prompt` (the follow-up only; the child keeps its context). The call returns a handle again and the reply arrives as another `<subagent>` message. The `sessionID` must name a child of the current session.
+- A host or plugin may refuse a `sessionID` follow-up with an error. The refusal is final: do not retry the call, and error text that suggests starting a new task is not a reason to dispatch a new child. The calling workflow's own rules say what a refused follow-up costs.
 - Before 2.3.0, a foreground dispatch returned the `<subagent sessionID="…" state="completed">` block inline, `background: true` returned a handle, and a follow-up behaved the same way. 2.3.0 always returns a handle and has no `background` input.
+
+**Wait path.** From 2.3.0 a report wakes the parent: after a dispatch the parent may end its turn, and each `<subagent>` message starts a new parent turn. Before 2.3.0 a foreground dispatch blocks until the child answers, so there is nothing to wait for.
 
 ### Blocking user interaction
 

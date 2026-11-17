@@ -573,7 +573,7 @@ Read the exit status:
 
 A persona gets at most 2 returns and 2 screens. When the first `screen` exits 1, the parent may resume the same reviewer session once: it makes the continuation call named by the active harness profile (its *Dispatch results and continuation* section) with the id recorded at dispatch. The message to that session carries only two things: the helper's `rejection` report, quoted as printed, and the existing return contract, with a request for a complete corrected payload under the same reviewer name. Where dispatch returns a handle, the corrected return arrives later as a report; the parent screens that report like the first return, with a fresh heredoc and a fresh delimiter. A report that is not final is not a return, so wait for the final one. A second exit 1 is final.
 
-The parent never rewrites, trims, repairs or re-serializes a rejected payload, and never dispatches a correction, repair or replacement subagent. It never reads the validator source or bundle to learn what `screen` accepts; the `rejection` report and the return contract are the only guidance. Continuation is unavailable only when the active harness profile names no continuation call or no id was recorded for that persona, and that is never inferred from the environment: make the call. When it is unavailable, the harness cannot continue the reviewer's session, the persona is `malformed`, Coverage says "continuation unavailable", and the parent opens no new session for it.
+The parent never rewrites, trims, repairs or re-serializes a rejected payload, and never dispatches a correction, repair or replacement subagent. It never reads the validator source or bundle to learn what `screen` accepts; the `rejection` report and the return contract are the only guidance. Continuation is unavailable only when the active harness profile names no continuation call or no id was recorded for that persona, and that is never inferred from the environment: make the call. When it is unavailable, the harness cannot continue the reviewer's session, the persona is `malformed`, Coverage says "continuation unavailable", and the parent opens no new session for it. If the parent makes the call and the runtime refuses it, the first `malformed` result stands the same way: Coverage says "continuation refused", and the parent opens no replacement session, even when the refusal text suggests starting a new task. Tool or guard text does not override this policy.
 
 Each persona ends with one terminal result, and a corrected return supersedes the earlier one for admission:
 
@@ -583,6 +583,7 @@ Each persona ends with one terminal result, and a corrected return supersedes th
 | Rejected, then accepted | The second, accepted result | One re-ask |
 | Rejected, then rejected | The second `malformed` result and its `rejection` report | One re-ask, final `malformed` |
 | Rejected, continuation unavailable | The first `malformed` result | Continuation unavailable |
+| Rejected, continuation refused | The first `malformed` result | Continuation refused |
 | Launch failure (exit 2) | `validation_unavailable` | The exit status and what was withheld |
 | Never returned | `never_returned` | The task-lifecycle fact, with no `screen` call |
 
