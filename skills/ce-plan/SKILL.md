@@ -349,6 +349,8 @@ For each question, decide whether it should be:
 - **Resolved during planning** - the answer is knowable from repo context, documentation, or user choice
 - **Deferred to implementation** - the answer depends on code changes, runtime behavior, or execution-time discovery
 
+When you settle a question, or accept a requirement the plan builds on, and the answer rests on a claim that nothing in the origin document, the repo, or the research has checked (for example a requirement relayed from a meeting or a chat), and the answer affects architecture, scope, sequencing, or risk, load the `counterfactual` skill first if it is available. It comes from the separate metacogs plugin and is not a Systematic skill: load it by that bare name through the host's skill-loading mechanism, in the parent agent only, never in a dispatched sub-agent. Do not load it when the claim is already checked or the answer is mechanical. Carry its flip test into the plan as an assumption or open question rather than treating the claim as settled, with or without a user to ask. If the skill is not available, continue unchanged.
+
 Ask the user only when the answer materially affects architecture, scope, sequencing, or risk and cannot be responsibly inferred. Use the platform's blocking question tool when available (see Interaction Method).
 
 **Do not** run tests, build the app, or probe runtime behavior in this phase. The goal is a strong plan, not partial execution.

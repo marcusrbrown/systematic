@@ -194,6 +194,8 @@ If agent outputs conflict:
 - Prefer official framework documentation over secondary best-practice summaries when the conflict is about library behavior
 - If a real tradeoff remains, record it explicitly in the plan
 
+The metacogs skills `synthesis` and `counterfactual`, if you load them for such a conflict, come from a separate plugin and are not Systematic skills. Load them by their bare names through the host's skill-loading mechanism, in the parent agent only. If they are not available, continue unchanged.
+
 ## 5.3.6b Interactive Finding Review (Interactive Mode Only)
 
 Skip this step in auto mode — proceed directly to 5.3.7.
