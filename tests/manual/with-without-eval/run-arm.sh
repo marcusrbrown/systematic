@@ -133,26 +133,9 @@ else
   if [ "$SYS_HITS" -gt 0 ]; then echo "✓ treatment loaded Systematic ($SYS_HITS systematic_skill hits)"; else echo "⚠ treatment shows no systematic_skill — verify plugin load"; fi
 fi
 
-# Effective routing: model of every child (task) session, one line each as
-# "<provider>/<model>\t<subagent_type>\t<child session id>". The file exists
-# even when the run spawned no children (empty file = no subagents ran).
-MODELS="$OUT_DIR/$ARM.models.txt"
-if ! jq -rR 'fromjson?
-  | select(.part.tool == "task" and (.part.state.metadata.model // null) != null)
-  | .part.state
-  | [(.metadata.model.providerID + "/" + .metadata.model.modelID),
-     (.input.subagent_type // "-"),
-     (.metadata.sessionId // "-")]
-  | @tsv' "$JSONL" >"$MODELS.raw"; then
-  echo "ERROR: model extraction failed; $MODELS not written"
-  rm -f "$MODELS.raw" "$MODELS"
-  exit 5
-fi
-sort -u "$MODELS.raw" >"$MODELS"
-rm -f "$MODELS.raw"
-echo "child models ($(wc -l <"$MODELS" | tr -d ' ') sessions) → $MODELS"
-
 # CLIProxy route: the key must not appear in any file under the output dir.
+# This runs before model extraction, so every run that wrote output is scanned.
+MODELS="$OUT_DIR/$ARM.models.txt"
 if [ -n "${CLIPROXY_API_KEY:-}" ]; then
   NEEDLE="$PRIVATE_HOME/needle"
   ( umask 077; printf %s "$CLIPROXY_API_KEY" >"$NEEDLE" )
@@ -174,5 +157,23 @@ if [ -n "${CLIPROXY_API_KEY:-}" ]; then
     exit 4
   fi
 fi
+
+# Effective routing: model of every child (task) session, one line each as
+# "<provider>/<model>\t<subagent_type>\t<child session id>". The file exists
+# even when the run spawned no children (empty file = no subagents ran).
+if ! jq -rR 'fromjson?
+  | select(.part.tool == "task" and (.part.state.metadata.model // null) != null)
+  | .part.state
+  | [(.metadata.model.providerID + "/" + .metadata.model.modelID),
+     (.input.subagent_type // "-"),
+     (.metadata.sessionId // "-")]
+  | @tsv' "$JSONL" >"$MODELS.raw"; then
+  echo "ERROR: model extraction failed; $MODELS not written"
+  rm -f "$MODELS.raw" "$MODELS"
+  exit 5
+fi
+sort -u "$MODELS.raw" >"$MODELS"
+rm -f "$MODELS.raw"
+echo "child models ($(wc -l <"$MODELS" | tr -d ' ') sessions) → $MODELS"
 
 exit "$RC"
