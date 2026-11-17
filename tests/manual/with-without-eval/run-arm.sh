@@ -46,6 +46,7 @@ DIST_PLUGIN="$REPO_ROOT/dist/index.js"
 
 [ -f "$DIST_PLUGIN" ] || { echo "ERROR: $DIST_PLUGIN missing — run 'bun run build'"; exit 1; }
 [ -f "$PROMPT_FILE" ] || { echo "ERROR: prompt file $PROMPT_FILE missing"; exit 1; }
+command -v jq >/dev/null || { echo "ERROR: jq is required (model extraction, CLIProxy config)"; exit 1; }
 
 mkdir -p "$OUT_DIR"
 CONFIG_DIR="$(mktemp -d)"
@@ -136,20 +137,36 @@ fi
 # "<provider>/<model>\t<subagent_type>\t<child session id>". The file exists
 # even when the run spawned no children (empty file = no subagents ran).
 MODELS="$OUT_DIR/$ARM.models.txt"
-jq -rR 'fromjson?
+if ! jq -rR 'fromjson?
   | select(.part.tool == "task" and (.part.state.metadata.model // null) != null)
   | .part.state
   | [(.metadata.model.providerID + "/" + .metadata.model.modelID),
      (.input.subagent_type // "-"),
      (.metadata.sessionId // "-")]
-  | @tsv' "$JSONL" | sort -u >"$MODELS" || true
+  | @tsv' "$JSONL" >"$MODELS.raw"; then
+  echo "ERROR: model extraction failed; $MODELS not written"
+  rm -f "$MODELS.raw" "$MODELS"
+  exit 5
+fi
+sort -u "$MODELS.raw" >"$MODELS"
+rm -f "$MODELS.raw"
 echo "child models ($(wc -l <"$MODELS" | tr -d ' ') sessions) → $MODELS"
 
 # CLIProxy route: the key must not appear in any file under the output dir.
 if [ -n "${CLIPROXY_API_KEY:-}" ]; then
   NEEDLE="$PRIVATE_HOME/needle"
   ( umask 077; printf %s "$CLIPROXY_API_KEY" >"$NEEDLE" )
-  KEY_LEAK_FILES="$({ grep -rlF -f "$NEEDLE" "$OUT_DIR" 2>/dev/null || true; } | wc -l | tr -d ' ')"
+  # grep exits 0 on a match, 1 on none, >1 when the scan itself failed.
+  set +e
+  LEAKS="$(grep -rlF -f "$NEEDLE" "$OUT_DIR")"
+  SCAN_RC=$?
+  set -e
+  if [ "$SCAN_RC" -gt 1 ]; then
+    echo "ERROR: key scan of $OUT_DIR failed (grep exit $SCAN_RC); deleting this arm's output"
+    rm -f "$JSONL" "$LOG" "$MODELS"
+    exit 4
+  fi
+  KEY_LEAK_FILES="$(printf '%s' "$LEAKS" | grep -c . || true)"
   echo "key_leak_files=$KEY_LEAK_FILES"
   if [ "$KEY_LEAK_FILES" -ne 0 ]; then
     echo "ERROR: the CLIProxy key appears in $KEY_LEAK_FILES file(s) under $OUT_DIR; deleting this arm's output"
