@@ -48,6 +48,10 @@ inputs:
     description: Run the agent as its own user in a read-only view of the runner, true or false.
     required: false
     default: "false"
+  agent-state-home:
+    description: With isolate-agent, a directory in the checkout to use as the agent's XDG_STATE_HOME. Empty keeps the agent's own.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -69,6 +73,7 @@ runs:
         trusted-head-sha: ${{ inputs.trusted-head-sha }}
         brokered-push-extra-paths: ${{ inputs.brokered-push-extra-paths }}
         isolate-agent: ${{ inputs.isolate-agent }}
+        agent-state-home: ${{ inputs.agent-state-home }}
         # The action's own runtime is unbounded; each caller bounds the step or
         # the job instead.
         timeout: 0
