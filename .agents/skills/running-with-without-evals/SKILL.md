@@ -36,12 +36,13 @@ The reusable harness lives at `tests/manual/with-without-eval/run-arm.sh`. Reuse
 
 ## Isolation recipe (the part that bites)
 
-Redirect **only `XDG_CONFIG_HOME`** to drop OpenCode's own global config (`opencode.json`) and its MCP servers for a vanilla baseline. Do **NOT** redirect `XDG_DATA_HOME` (holds `auth.json` — the paid model won't authenticate) or `XDG_CACHE_HOME` (holds the model catalog — `ProviderModelNotFoundError`). `OPENCODE_CONFIG_DIR=<empty temp>` adds an empty custom config directory, and `OPENCODE_CONFIG_CONTENT` sets the per-arm plugin array. This is the minimum isolation that works for OpenCode itself — heavier isolation breaks auth and model resolution.
+`run-arm.sh` runs both arms under a **private temp `HOME`** (with `XDG_CONFIG_HOME` inside it). Systematic reads its config through `HOME`, not `XDG_CONFIG_HOME`: `<homedir>/.config/opencode` (`os.homedir()`) plus the `OPENCODE_CONFIG_DIR` directory (`src/lib/search-user-config.ts:872-883`, called from `src/lib/config.ts:3519`). Redirecting only `XDG_CONFIG_HOME` would leave the user's `systematic.jsonc`, including any `agents.<name>.model` overlay, in the treatment arm. The private `HOME` also drops OpenCode's global `opencode.json`, its MCP servers and the `~/.agents` and `~/.claude` skill dirs from both arms.
 
-**What this recipe does not isolate.** Systematic reads its config through `HOME`, not `XDG_CONFIG_HOME`: `<homedir>/.config/opencode` (`os.homedir()`) plus the `OPENCODE_CONFIG_DIR` directory (`src/lib/search-user-config.ts:872-883`, called from `src/lib/config.ts:3519`). The treatment arm therefore loads the user's real `systematic.jsonc`, including any `agents.<name>.model` overlay, and subagents can run on models other than the one you passed with `-m`. The baseline arm is unaffected: `--pure` with an empty plugin array never loads Systematic. Check the model of every child session in the transcript before you read a result, then pick one:
+The script pins `XDG_DATA_HOME` (holds `auth.json`, or the paid model won't authenticate) and `XDG_CACHE_HOME` (holds the model catalog, or `ProviderModelNotFoundError`) to the real paths and reads `auth.json` in place. `OPENCODE_CONFIG_CONTENT` sets the per-arm plugin array.
 
-- **Keep the owner's config.** The arm runs the owner's real per-agent routing, which is the system people use. Report the child models. `run-arm.sh` does this today.
-- **Use a private `HOME`.** The overlay is gone, and so is the routing: every subagent runs the arm model. State in the result that routing was flattened. Set `XDG_DATA_HOME` and `XDG_CACHE_HOME` to the real directories, because a new `HOME` moves their defaults. A credential copied into a private data directory stays readable by the same user at any file mode, so use a scoped key, not a copy of the owner's `auth.json`.
+**The trade-off.** A private `HOME` flattens the owner's per-agent routing: every subagent runs the arm model. The script writes `<out-dir>/<arm>.models.txt` with the model of every child session, so state in the result which models ran and that routing was flattened. An eval that must run the owner's real routing needs a different harness.
+
+**Auth.** The script loads no auth plugins, so OAuth-only providers (for example `anthropic`) do not resolve from `auth.json`. Check with `opencode models <provider>` before a paid run. For those, export `CLIPROXY_API_KEY` to opt in to the CLIProxy route: both arms point the `anthropic` and `openai` providers at `https://cliproxy.fro.bot/v1` (model ids stay `anthropic/claude-sonnet-5-5`), the key lives only in a mode-0600 `auth.json` in a private data dir deleted on exit, and the script fails the run if `<out-dir>` contains the key (`key_leak_files`). Paid calls use only the routes the owner has approved. This is configuration isolation, not a sandbox: agent shell commands run as the same user and can read that `auth.json` or reach the network, and the scan catches only the literal key. Use a key scoped to evals.
 
 Read [An eval of a multi-agent workflow must run the real system](../../../docs/solutions/best-practices/an-eval-of-a-multi-agent-workflow-must-run-the-real-system-2026-11-16.md) before you evaluate a workflow that dispatches subagents.
 
@@ -70,7 +71,7 @@ Set the attempt time limit from observed wall times before the run, because a li
 | Mistake | Fix |
 |---|---|
 | Empty workspace for a task that assumes existing code | Seed the workspace; verify the model has files to modify |
-| Redirecting all XDG dirs for "clean" isolation | Only `XDG_CONFIG_HOME`; the others hold auth + model catalog |
+| Redirecting all XDG dirs for "clean" isolation | Private `HOME` + `XDG_CONFIG_HOME`; pin `XDG_DATA_HOME`/`XDG_CACHE_HOME` to the real paths (auth + model catalog) |
 | Free model "returns nothing" | It's a rate limit, not a harness bug — use a paid model |
 | `grep -c` in the verdict aborts the script under `set -e` on a zero (clean baseline) match | Guard the grep (`|| true`); exit on the run's real code |
 | Omitting the prompt-parity control | A skeptic will assume the gain is just "you told it to review" |
