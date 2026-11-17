@@ -48,12 +48,16 @@ inputs:
     description: Run the agent as its own user in a read-only view of the runner, true or false.
     required: false
     default: "false"
+  agent-state-home:
+    description: With isolate-agent, a directory in the checkout to use as the agent's XDG_STATE_HOME. Empty keeps the agent's own.
+    required: false
+    default: ""
 
 runs:
   using: composite
   steps:
     - name: Run the agent
-      uses: fro-bot/agent@f334bf906ae54773868484fd7f78969a34da062a # v0.144.5
+      uses: fro-bot/agent@f49a72e96e1d891c61cecd02a768d626817a7831 # v0.145.1
       env:
         OPENCODE_PROMPT_ARTIFACT: "true"
       with:
@@ -69,6 +73,7 @@ runs:
         trusted-head-sha: ${{ inputs.trusted-head-sha }}
         brokered-push-extra-paths: ${{ inputs.brokered-push-extra-paths }}
         isolate-agent: ${{ inputs.isolate-agent }}
+        agent-state-home: ${{ inputs.agent-state-home }}
         # The action's own runtime is unbounded; each caller bounds the step or
         # the job instead.
         timeout: 0

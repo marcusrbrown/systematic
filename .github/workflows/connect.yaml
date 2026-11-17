@@ -497,6 +497,9 @@ jobs:
           output-mode: working-dir
           # A repeat run is never suppressed.
           dedup-window: "0"
+          isolate-agent: "true"
+          # The helper's run record and ledger live in the connect layout, not the agent's own home.
+          agent-state-home: ${{ github.workspace }}/connect/state
           # A fixed prompt: there is no change, issue or comment to route.
           prompt: |
             This is an unattended scheduled run with no change, issue or
