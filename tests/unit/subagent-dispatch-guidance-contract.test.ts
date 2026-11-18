@@ -175,3 +175,49 @@ describe('skill-specific collect behavior', () => {
     expect(text).toMatch(/Wait for both final reports before continuing/)
   })
 })
+
+/**
+ * Permission-mode overrides are a Claude Code dispatch parameter. The skills
+ * stay harness-neutral: they say not to override permissions, and the Claude
+ * Code profile owns the parameter name and the value to avoid.
+ */
+describe('skills carry no harness-specific permission-mode syntax', () => {
+  const PERMISSION_MODE_SYNTAX =
+    /`mode` parameter|mode parameter|mode: ?\\?"auto/i
+  const PROFILE_DIR = 'skills/using-systematic/references'
+
+  function skillMarkdownFiles(dir: string): string[] {
+    return fs
+      .readdirSync(path.join(REPO_ROOT, dir), { withFileTypes: true })
+      .flatMap((entry) => {
+        const relative = `${dir}/${entry.name}`
+        if (entry.isDirectory()) return skillMarkdownFiles(relative)
+        return entry.name.endsWith('.md') ? [relative] : []
+      })
+  }
+
+  const SKILL_FILES = skillMarkdownFiles('skills').filter(
+    (file) => !file.startsWith(`${PROFILE_DIR}/`),
+  )
+
+  test('the file scan covers the skills', () => {
+    expect(SKILL_FILES).toContain('skills/ce-work/SKILL.md')
+    expect(SKILL_FILES.length).toBeGreaterThan(50)
+  })
+
+  test.each(SKILL_FILES)('%s names no permission-mode parameter', (file) => {
+    expect(read(file)).not.toMatch(PERMISSION_MODE_SYNTAX)
+  })
+
+  test('ce-work still tells the orchestrator not to override permissions', () => {
+    expect(normalize(read('skills/ce-work/SKILL.md'))).toMatch(
+      /without a permission-mode override[^.]*user's configured permission settings apply/,
+    )
+  })
+
+  test('the Claude Code profile owns the parameter rule', () => {
+    const text = normalize(read(`${PROFILE_DIR}/claude-code-profile.md`))
+    expect(text).toMatch(/Omit the `mode` parameter/)
+    expect(text).toMatch(/Do not pass `mode: "auto"`/)
+  })
+})

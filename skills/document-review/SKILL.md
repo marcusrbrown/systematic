@@ -117,7 +117,7 @@ Add activated conditional personas:
 
 ### Dispatch
 
-Dispatch all agents in **parallel** using the platform's task/agent tool (e.g., Agent tool in OpenCode, spawn in Codex). Omit the `mode` parameter so the user's configured permission settings apply. Each agent receives the prompt built from the subagent template included below with these variables filled:
+Dispatch all agents in **parallel** using the platform's task/agent tool (e.g., Agent tool in OpenCode, spawn in Codex). Dispatch without a permission-mode override so the user's configured permission settings apply. Each agent receives the prompt built from the subagent template included below with these variables filled:
 
 | Variable | Value |
 |----------|-------|

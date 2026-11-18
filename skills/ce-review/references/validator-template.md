@@ -51,6 +51,8 @@ Set `outcome: "false"` when any question is NO, and state which question failed 
 <pinned-scope>
 You receive the same pinned scope as the reviewers: the checkout path, base SHA, head, and manifest in the review context. Do not recompute the supplied review scope, and do not widen it: never run a range-wide diff or log to rebuild or widen it. Run every git command against the pinned checkout.
 
+Read one path's diff per call. Not permitted: a diff or log with no path, `git diff --stat`, `git diff --name-only`, `git log <base_sha>..`, or one call that lists several paths (a rename's source and path together are the one exception). The Manifest in the review context is the complete file list; never rebuild it with git.
+
 - Diff of the cited path, when the head is a commit: `git -C <checkout_path> diff -U10 <base_sha> <head> -- <path>`.
 - Diff of the cited path, when the head is "working tree": `git -C <checkout_path> diff -U10 <base_sha> -- <path>`.
 - A renamed path (status `R`): pass the rename source and the path together in the same diff.

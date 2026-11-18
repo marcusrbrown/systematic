@@ -728,12 +728,12 @@ describe('getBootstrapContent', () => {
 })
 
 describe('harness profile size budget', () => {
-  test('keeps both inlined profiles below the compact bootstrap budget', () => {
+  test('keeps every inlined OpenCode and Pi profile below the compact bootstrap budget', () => {
     const profilesDir = path.resolve(
       process.cwd(),
       'skills/using-systematic/references',
     )
-    const sizes = ['opencode', 'pi'].map((name) => {
+    const sizes = ['opencode', 'opencode-v2', 'pi'].map((name) => {
       const contents = fs.readFileSync(
         path.join(profilesDir, `${name}-profile.md`),
         'utf8',
@@ -744,7 +744,8 @@ describe('harness profile size budget', () => {
     // Keep each profile compact so every session gets capability routing
     // without making the bootstrap disproportionately large. The ceiling rose
     // from 4000 to 5000 characters when each profile gained its dispatch and
-    // continuation section, the one place the orchestrating skills cite.
+    // continuation section, the one place the orchestrating skills cite. The
+    // OpenCode v2 profile is budgeted too: it is injected into every v2 session.
     for (const { name, size } of sizes) {
       expect(size, `${name} profile size`).toBeLessThan(5000)
     }
