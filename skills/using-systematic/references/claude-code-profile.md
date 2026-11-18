@@ -18,6 +18,8 @@ Behavioral enforcement on Claude Code rides a plugin output style (force-for-plu
 Use the systematic-implementer subagent to implement the auth module and return the changed files.
 ```
 
+Omit the `mode` parameter when dispatching subagents so the user's configured permission settings apply. Do not pass `mode: "auto"`: it overrides user-level settings like `bypassPermissions`.
+
 ### Dispatch results and continuation
 
 Each subagent call starts a new instance, and the agent id comes with the dispatch result. Record it at dispatch, against the task it was given. Continue that subagent with `SendMessage` with `to` set to that agent id and the follow-up as the message: a finished subagent resumes in the background, and its reply arrives later as a report. The built-in Explore and Plan agents are one-shot and return no agent id, so they cannot be continued. Dispatching the same subagent by name again starts a new one, not a continuation.

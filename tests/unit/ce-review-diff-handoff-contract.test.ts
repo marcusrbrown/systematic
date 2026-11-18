@@ -286,6 +286,47 @@ const CE_AGENTS = normalize(
   ),
 )
 
+/**
+ * The validator template names the same per-path read as the reviewer template
+ * and bans the same range-wide forms, in its own `<pinned-scope>` block, so a
+ * validator that never sees the diff-scope reference still gets the bans.
+ */
+const VALIDATOR_PINNED_SCOPE = normalize(
+  VALIDATOR_TEMPLATE.slice(
+    VALIDATOR_TEMPLATE.indexOf('<pinned-scope>'),
+    VALIDATOR_TEMPLATE.indexOf('</pinned-scope>'),
+  ),
+)
+
+describe('ce:review pinned scope: the validator template bans range-wide git reads', () => {
+  const VALIDATOR_BAN_PINS: readonly (readonly [string, RegExp])[] = [
+    ['one path per call', /read one path's diff per call/i],
+    ['the not-permitted list opens', /not permitted:/i],
+    ['a diff or log with no path', /a diff or log with no path/i],
+    ['git diff --stat', /`git diff --stat`/],
+    ['git diff --name-only', /`git diff --name-only`/],
+    ['git log <base>..', /`git log <base_sha>\.\.`/],
+    ['several paths in one call', /one call that lists several paths/i],
+    [
+      'the rename source and path are the one multi-path exception',
+      /rename's source and path together[^.]*exception/i,
+    ],
+    [
+      'the manifest is the complete file list',
+      /the manifest in the review context is the complete file list/i,
+    ],
+    ['never rebuild the file list with git', /never rebuild it with git/i],
+  ]
+  test('the pinned-scope block exists', () => {
+    expect(VALIDATOR_PINNED_SCOPE.length).toBeGreaterThan(0)
+  })
+  for (const [name, pattern] of VALIDATOR_BAN_PINS) {
+    test(`the validator pinned scope states: ${name}`, () => {
+      expect(VALIDATOR_PINNED_SCOPE).toMatch(pattern)
+    })
+  }
+})
+
 describe('ce:review pinned scope: the per-path rule survives the parent’s prompt assembly', () => {
   test('the rule stays in the template body when the scope-rules slot is dropped', () => {
     expect(BOUNDED.length).toBeGreaterThan(0)

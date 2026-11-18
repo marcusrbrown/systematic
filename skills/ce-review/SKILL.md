@@ -502,7 +502,7 @@ Capture the actual invoking harness once in the parent (`opencode`, `pi`, or `cl
 
 #### Spawning
 
-Omit the `mode` parameter when dispatching sub-agents so the user's configured permission settings apply. Do not pass `mode: "auto"`.
+Dispatch sub-agents without a permission-mode override so the user's configured permission settings apply.
 
 Spawn each selected persona reviewer as a parallel sub-agent using the subagent template included below. Each persona sub-agent receives:
 
