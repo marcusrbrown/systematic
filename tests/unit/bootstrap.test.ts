@@ -741,10 +741,12 @@ describe('harness profile size budget', () => {
       return { name, size: contents.length }
     })
 
-    // Keep each profile under ~600 tokens so every session gets capability
-    // routing without making the bootstrap disproportionately large.
+    // Keep each profile compact so every session gets capability routing
+    // without making the bootstrap disproportionately large. The ceiling rose
+    // from 4000 to 5000 characters when each profile gained its dispatch and
+    // continuation section, the one place the orchestrating skills cite.
     for (const { name, size } of sizes) {
-      expect(size, `${name} profile size`).toBeLessThan(4000)
+      expect(size, `${name} profile size`).toBeLessThan(5000)
     }
   })
 })

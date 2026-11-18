@@ -154,7 +154,7 @@ This is the explicit "not this" list:
 ## Examples
 
 Correct fix — fake-call syntax neutralized, qualified ID preserved
-(`skills/ce-plan/SKILL.md:228-232, 297-301, 324-329`):
+(`skills/ce-plan/SKILL.md:228-232, 299-303, 326-331`):
 
 ```diff
 - - task systematic:research:repo-research-analyst(Scope: technology, architecture, patterns. {planning context summary})

@@ -382,6 +382,7 @@ const SHARED_REQUIRED_INPUTS = [
 const SHARED_OPTIONAL_DEFAULTS: Readonly<Record<string, string>> = {
   'brokered-push-extra-paths': '',
   'dedup-window': '600000',
+  'agent-state-home': '',
   'isolate-agent': 'false',
   'output-mode': '',
   'response-mode': 'github',
@@ -508,6 +509,9 @@ describe('the shared fro-bot agent action', () => {
       'output-mode': 'working-dir',
       // A repeat run is never suppressed.
       'dedup-window': '0',
+      'isolate-agent': 'true',
+      // The helper's run record and ledger live in the connect layout.
+      'agent-state-home': '${{ github.workspace }}/connect/state',
     })
     expect(connectStep()).not.toHaveProperty('env')
   })

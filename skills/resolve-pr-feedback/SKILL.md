@@ -195,11 +195,13 @@ Verdict meanings:
 
 **Sequential fallback**: Platforms that do not support parallel dispatch should run agents sequentially. Dispatch cluster units first (they are higher-leverage), then individual items.
 
+**Collecting results**: an agent has completed only when its final report arrives; a launch handle is not a result. The active harness profile's *Dispatch results and continuation* section defines the final report. Wait for every report in a batch before the next batch or step 6, and never dispatch the same unit again while its report is owed.
+
 Fixes can occasionally expand beyond their referenced file (e.g., renaming a method updates callers elsewhere). This is rare but can cause parallel agents to collide. The verification step (step 8) catches this -- if re-fetching shows unresolved threads or if the commit reveals inconsistent changes, re-run the affected agents sequentially.
 
 ### 6. Commit and Push
 
-After all agents complete, check whether any files were actually changed. If all verdicts are `replied`, `not-addressing`, or `needs-human` (no code changes), skip this step entirely and proceed to step 7.
+After every agent's final report has arrived, check whether any files were actually changed. If all verdicts are `replied`, `not-addressing`, or `needs-human` (no code changes), skip this step entirely and proceed to step 7.
 
 If there are file changes:
 
@@ -372,7 +374,7 @@ This fetches thread IDs and their first comment IDs (minimal fields, no bodies) 
 
 ### 2. Fix, Reply, Resolve
 
-Spawn a single `systematic:workflow:pr-comment-resolver` agent for the thread. Then follow the same commit -> push -> reply -> resolve flow as Full Mode steps 6-7.
+Spawn a single `systematic:workflow:pr-comment-resolver` agent for the thread and wait for its final report. Then follow the same commit -> push -> reply -> resolve flow as Full Mode steps 6-7.
 
 ---
 

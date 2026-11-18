@@ -98,7 +98,7 @@ Use reasonable interpretation rather than formal parsing.
 
 Before generating ideas, gather codebase context.
 
-Run agents in parallel in the **foreground** (do not use background dispatch — the results are needed before proceeding):
+Run agents in parallel and wait for every final report before you proceed, because the results are needed first. An agent has returned only when its final report arrives; a launch handle is not a result (see the active harness profile's *Dispatch results and continuation* section), and waiting is not a reason to dispatch it again:
 
 1. **Quick context scan** — dispatch `systematic:research:repo-research-analyst` with this prompt:
 
@@ -153,7 +153,7 @@ Assign each sub-agent a different ideation frame as a **starting bias, not a con
 
 Ask each sub-agent to return a compact structure per idea: title, summary, why_it_matters, evidence/grounding hooks, optional boldness or focus_fit signal.
 
-After all sub-agents return:
+After every ideation sub-agent's final report has arrived (same rule as Phase 1):
 1. Merge and dedupe into one master candidate list.
 2. Synthesize cross-cutting combinations -- scan for ideas from different frames that combine into something stronger (expect 3-5 additions at most).
 3. If a focus was provided, weight the merged list toward it without excluding stronger adjacent ideas.

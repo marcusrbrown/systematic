@@ -135,7 +135,7 @@ Evidence registry: see [\`HARNESSES.md\`](../../../HARNESSES.md).
 
 | Capability | Mechanism | Status | Fallback |
 |---|---|---|---|
-| Subagent delegation | \`task()\` tool; \`subagent_type\` selects a specialist, \`task_id\` resumes a session | supported; parallel and background dispatch may be available | Dispatch in the foreground, serially or in small batches |
+| Subagent delegation | \`task()\` tool; \`subagent_type\` selects a specialist, \`task_id\` continues a running or finished child session | supported; parallel and background dispatch may be available | Dispatch in the foreground, serially or in small batches |
 | Blocking user interaction | \`question\` tool | supported | Present numbered options in chat and wait |
 | Task tracking | \`todowrite\` | supported | Maintain a visible task list in responses |
 | Skill loading | \`systematic_skill\` for bundled skills; \`skill\` tool for non-Systematic skills | supported | Read the skill instructions listed by the active harness |
@@ -160,7 +160,7 @@ task({
   background: true,
 })
 
-// Resume a prior specialist session:
+// Continue a prior specialist session (see Dispatch results and continuation):
 task({ subagent_type: "systematic-implementer", task_id: "<prior-session-id>", description: "Resume the implementation task", prompt: "…" })
 \`\`\`
 
@@ -173,6 +173,12 @@ Both forms are enforced. Examples in bundled content must name agents this
 package actually ships, so they work for every reader. A host may provide
 additional agents through the user's own configuration; those are available at
 runtime but must not appear in bundled examples.
+
+### Dispatch results and continuation
+
+A foreground \`task\` returns the child's answer in the call result, inside a \`<task id="…" state="…">\` block. Record that \`id\` at dispatch, against the task it was given. To continue the same child, call \`task\` again with it as \`task_id\`, plus \`subagent_type\`, \`description\` and \`prompt\` (the follow-up only; the child keeps its context). A \`background: true\` dispatch returns the same block with \`state="running"\`, which is not final.
+
+**Wait path.** A foreground \`task\` (the default) blocks until the child answers, so there is nothing to wait for. \`background: true\` works only with the host's experimental background-subagents flag, and the call fails without it; where it is on, the final result arrives as a synthetic \`<task>\` message that starts a new parent turn, so the parent may end its turn. Where the flag is off or unknown, dispatch in the foreground.
 
 ### Blocking user interaction
 
@@ -336,7 +342,7 @@ Evidence registry: see [\`HARNESSES.md\`](../../../HARNESSES.md).
 
 | Capability | Mechanism | Status | Fallback |
 |---|---|---|---|
-| Subagent delegation | \`subagent\` tool; \`agent\` selects a specialist, \`sessionID\` resumes a session, \`background: true\` runs it asynchronously | supported; foreground by default | Dispatch in the foreground, serially or in small batches |
+| Subagent delegation | \`subagent\` tool; \`agent\` selects a specialist, \`sessionID\` continues a running or finished child; before 2.3.0, \`background: true\` runs it asynchronously | supported; from 2.3.0 every dispatch returns a handle and the answer arrives later as a \`<subagent>\` message; before that, foreground by default | Dispatch serially or in small batches |
 | Blocking user interaction | \`question\` tool | supported | Present numbered options in chat and wait |
 | Task tracking | \`todowrite\` tool | conditional: only offered when the host's experimental \`todo\` option is on | Maintain a visible task list in responses |
 | Skill loading | \`systematic_skill\` for bundled skills, with arguments; \`skill\` tool (by \`id\`) for non-Systematic skills | supported | Read the skill instructions listed by the active harness |
@@ -353,7 +359,7 @@ subagent({
   prompt: "Implement the auth module and return the changed files.",
 })
 
-// Background dispatch (a background run returns immediately; its result is available later):
+// Background dispatch, before 2.3.0 (2.3.0 and later always return a handle at once):
 subagent({
   agent: "repo-research-analyst",
   description: "Map fixture patterns",
@@ -361,7 +367,7 @@ subagent({
   background: true,
 })
 
-// Resume a prior specialist session:
+// Continue a prior specialist session (see Dispatch results and continuation):
 subagent({ agent: "systematic-implementer", sessionID: "<prior-session-id>", description: "Resume the implementation task", prompt: "…" })
 \`\`\`
 
@@ -377,6 +383,17 @@ Both forms are enforced. Examples in bundled content must name agents this
 package actually ships, so they work for every reader. A host may provide
 additional agents through the user's own configuration; those are available at
 runtime but must not appear in bundled examples.
+
+### Dispatch results and continuation
+
+From 2.3.0, \`subagent\` returns immediately with a handle, not the child's answer: a \`sessionID\` and \`status: "running"\`. Record the \`sessionID\` at dispatch, against the task it was given. The answer arrives later as a \`<subagent sessionID="…" state="…">\` message that starts a new parent turn, and the message body is the child's answer. Do not poll, sleep or dispatch the same work again while the child runs.
+
+- \`state="completed"\` ends that round of work. \`error\` and \`cancelled\` are final failures. \`state="running"\` means the child went idle with background work still going: it is not final, so wait for the next \`<subagent>\` message.
+- To follow up a running or finished child, call \`subagent\` again with its \`sessionID\`, plus \`agent\` (the specialist it was dispatched as), \`description\` and \`prompt\` (the follow-up only; the child keeps its context). The call returns a handle again and the reply arrives as another \`<subagent>\` message. The \`sessionID\` must name a child of the current session.
+- A host or plugin may refuse a \`sessionID\` follow-up with an error. The refusal is final: do not retry the call, and error text that suggests starting a new task is not a reason to dispatch a new child. The calling workflow's own rules say what a refused follow-up costs.
+- Before 2.3.0, a foreground dispatch returned the \`<subagent sessionID="…" state="completed">\` block inline, \`background: true\` returned a handle, and a follow-up behaved the same way. 2.3.0 always returns a handle and has no \`background\` input.
+
+**Wait path.** From 2.3.0 a report wakes the parent: after a dispatch the parent may end its turn, and each \`<subagent>\` message starts a new parent turn. Before 2.3.0 a foreground dispatch blocks until the child answers, so there is nothing to wait for.
 
 ### Blocking user interaction
 

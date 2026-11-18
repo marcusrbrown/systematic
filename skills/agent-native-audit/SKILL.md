@@ -35,7 +35,7 @@ Select option 7 (action parity) to load the full reference material.
 
 ### Step 2: Launch Parallel Sub-Agents
 
-Launch 8 parallel sub-agents using the bundled `systematic:research:repo-research-analyst` agent, one for each principle. Each agent should:
+Launch 8 parallel sub-agents using the bundled `systematic:research:repo-research-analyst` agent, one for each principle. A sub-agent has completed only when its final report arrives (see the active harness profile's *Dispatch results and continuation* section): wait for all 8 reports before scoring, and never dispatch the same principle again while its report is owed. Each agent should:
 
 1. Enumerate ALL instances in the codebase (user actions, tools, contexts, data stores, etc.)
 2. Check compliance against the principle

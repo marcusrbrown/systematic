@@ -30,11 +30,11 @@ After the base resolves, the parent pins the scope: the checkout path, the base 
 - **Head is `working tree` when the checkout is dirty**, and the commit otherwise. The commit is recorded either way (`skills/ce-review/SKILL.md:337`, `HEAD_PIN`).
 - **Checkout path.** Every child runs `git -C <checkout_path>` against it, so a reviewer launched from another directory still reads the intended tree.
 - **Manifest.** The path, status (`A`, `M`, `D`, `R`, `T`), rename source and line counts. It names every changed path, so no diff is needed to know what changed.
-- **Children read one path at a time.** `git -C <checkout_path> diff -U10 <base_sha> <head> -- <path>` reads a diff and `git -C <checkout_path> show <base_sha>:<path>` reads old source. A range-wide diff or log is not permitted (`skills/ce-review/references/diff-scope.md:7-17`). Finding validators receive the same pin, so a validator checks a cited path against the same tree (`skills/ce-review/SKILL.md:617`).
+- **Children read one path at a time.** `git -C <checkout_path> diff -U10 <base_sha> <head> -- <path>` reads a diff and `git -C <checkout_path> show <base_sha>:<path>` reads old source. A range-wide diff or log is not permitted (`skills/ce-review/references/diff-scope.md:7-17`). Finding validators receive the same pin, so a validator checks a cited path against the same tree (`skills/ce-review/SKILL.md:618`).
 
 ### Fingerprint the content, not the counts
 
-The pin prints `FINGERPRINT`, the output of `git diff --binary --no-ext-diff --no-textconv <base_sha> | git hash-object --stdin` (`skills/ce-review/SKILL.md:340`). Stage 6 recomputes it before `finalize` and compares it with the pinned value, along with the head commit and the head kind (`skills/ce-review/SKILL.md:629-638`).
+The pin prints `FINGERPRINT`, the output of `git diff --binary --no-ext-diff --no-textconv <base_sha> | git hash-object --stdin` (`skills/ce-review/SKILL.md:340`). Stage 6 recomputes it before `finalize` and compares it with the pinned value, along with the head commit and the head kind (`skills/ce-review/SKILL.md:630-639`).
 
 Line counts and the head commit pass after some edits. Tests pin three cases, each with the head commit, the dirty state and the line counts unchanged: a same-count edit to an already-edited line, a binary file replaced by other bytes of the same size, and a mode change (`tests/unit/ce-review-diff-handoff-contract.test.ts:764-826`).
 
@@ -48,7 +48,7 @@ If the base, the head or the manifest cannot be produced, the scope is not pinne
 
 ### Make a stale result terminal
 
-A moved head is one terminal path, not a banner on a normal report. A stale run does not call `finalize`, applies no fix, writes no `review-summary.json` and no todo files, asks no question, and renders no findings or verdict. It prints the stale reason with the pinned and current head, and says what was withheld (`skills/ce-review/SKILL.md:640-647`). The re-check runs before any fix, so the parent's own fixes are not a moved head. A display-only flag would leave later stages free to persist an artifact and a verdict for code that no longer exists.
+A moved head is one terminal path, not a banner on a normal report. A stale run does not call `finalize`, applies no fix, writes no `review-summary.json` and no todo files, asks no question, and renders no findings or verdict. It prints the stale reason with the pinned and current head, and says what was withheld (`skills/ce-review/SKILL.md:641-648`). The re-check runs before any fix, so the parent's own fixes are not a moved head. A display-only flag would leave later stages free to persist an artifact and a verdict for code that no longer exists.
 
 ## Related
 

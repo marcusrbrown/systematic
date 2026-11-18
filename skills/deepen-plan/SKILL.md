@@ -280,7 +280,7 @@ If artifact-backed mode is not clearly warranted, stay in direct mode.
 
 ### Phase 4: Run Targeted Research and Review
 
-Launch the selected agents in parallel using the execution mode chosen in Step 3.3. If the current platform does not support parallel dispatch, run them sequentially instead.
+Launch the selected agents in parallel using the execution mode chosen in Step 3.3. If the current platform does not support parallel dispatch, run them sequentially instead. An agent has returned only when its final report arrives (see the active harness profile's *Dispatch results and continuation* section): wait for every report before synthesizing, and do not dispatch the same research again while one is owed.
 
 Prefer local repo and institutional evidence first. Use external research only when the gap cannot be closed responsibly from repo context or already-cited sources.
 
