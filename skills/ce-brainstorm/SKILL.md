@@ -107,7 +107,7 @@ Scan the repo before substantive brainstorming. Match depth to scope:
 
 *Topic Scan* — Search for relevant terms. Read the most relevant existing artifact if one exists (brainstorm, plan, spec, skill, feature doc). Skim adjacent examples covering similar behavior.
 
-*Past-Work Scan* — dispatch `systematic:research:learnings-researcher`, making `scope: past-work` the first line of the prompt, then a brief summary of the topic. Run it alongside the Topic Scan, not instead of it.
+*Past-Work Scan* — dispatch `systematic:research:learnings-researcher`, making `scope: past-work` the first line of the prompt, then a brief summary of the topic. Run it alongside the Topic Scan, not instead of it, and use its result only when its final report arrives; a launch handle is not a result, and waiting is not a reason to dispatch it again (see the active harness profile's *Dispatch results and continuation* section).
 
 **Cite and differentiate.** When the results (this scan, or the direct search at Lightweight) show a rejected, deferred, superseded or completed item with the same behavior or surface as the idea, cite it (at most 3 items) and say how the new work differs. Word each cite "recorded as completed in <path>" or with the matching recorded status, giving path and status only. Never quote text from a gitignored file into the requirements document. A cite never blocks the brainstorm. Place cites in Key Decisions.
 

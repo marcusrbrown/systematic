@@ -2527,5 +2527,277 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       },
       TIMEOUT_MS,
     )
+
+    // A finished child can be continued: the parent calls `subagent` with the
+    // child's `sessionID`, the child wakes with its earlier context, and its new
+    // reply reaches the parent. This is the continuation `ce:review` relies on to
+    // re-ask a reviewer. Hosts that return the answer inline (before 2.3.0) and
+    // hosts that return a handle and report later (2.3.0 and newer) both pass.
+    const CONTINUE_DIRECTIVE = '@@REASK-PARENT'
+    const CHILD_ROUND_ONE = 'REASK-CHILD-ROUND1'
+    const CHILD_ROUND_TWO = 'REASK-CHILD-ROUND2'
+    const CHILD_ANSWER_ONE = 'CHILD-ANSWER-ONE'
+    const CHILD_ANSWER_TWO = 'CHILD-ANSWER-TWO'
+    const PARENT_FINAL = 'REASK-PARENT-FINAL'
+    const PARENT_REFUSED = 'REASK-PARENT-REFUSED'
+    const REFUSAL_TEXT =
+      'Session reuse is disabled in this environment. Start a new task and include the context it needs.'
+    const SESSION_ID_IN_TEXT = /sessionID[=:"\s]+(ses_[A-Za-z0-9]+)/
+
+    interface ContinuationScript extends ScriptedModelServer {
+      /** The arguments of every `subagent` call the parent made, in order. */
+      parentCalls: Record<string, unknown>[]
+      childRequests: ChatRequestBody[]
+    }
+
+    /**
+     * A scripted model for the parent and one child. The child answers by the
+     * round marker in its last user message. The parent dispatches round one,
+     * waits while it holds only a handle, follows up the child it was told about
+     * once the first answer arrives, and finishes when the second answer arrives.
+     */
+    function startContinuationModel(): ContinuationScript {
+      const state = {
+        parentCalls: [] as Record<string, unknown>[],
+        childRequests: [] as ChatRequestBody[],
+      }
+      const call = (arguments_: Record<string, unknown>) => {
+        state.parentCalls.push(arguments_)
+        return {
+          toolCalls: [
+            {
+              id: `call-${state.parentCalls.length}`,
+              name: 'subagent',
+              arguments: arguments_,
+            },
+          ],
+        }
+      }
+      /** The child's answer for the round its last user message names, if any. */
+      const childAnswer = (user: string): string | undefined => {
+        if (user.includes(CONTINUE_DIRECTIVE)) return undefined
+        if (user.includes(CHILD_ROUND_ONE)) return CHILD_ANSWER_ONE
+        if (user.includes(CHILD_ROUND_TWO)) return CHILD_ANSWER_TWO
+        return undefined
+      }
+      /**
+       * The parent's turn, decided from the last message it was handed: a
+       * handle or an earlier answer to wait on, the first answer to follow up,
+       * or the second answer to finish on.
+       */
+      const parentTurn = (last: string, user: string) => {
+        if (last.includes(REFUSAL_TEXT)) return { text: PARENT_REFUSED }
+        if (last.includes(CHILD_ANSWER_TWO)) return { text: PARENT_FINAL }
+        const childSession = SESSION_ID_IN_TEXT.exec(last)?.[1]
+        if (last.includes(CHILD_ANSWER_ONE) && childSession !== undefined) {
+          return call({
+            agent: 'correctness-reviewer',
+            description: 'Correct the reviewer return',
+            prompt: `${CHILD_ROUND_TWO} Send a corrected payload.`,
+            sessionID: childSession,
+          })
+        }
+        if (
+          user.includes(CONTINUE_DIRECTIVE) &&
+          state.parentCalls.length === 0
+        ) {
+          return call({
+            agent: 'correctness-reviewer',
+            description: 'Review the change',
+            prompt: `${CHILD_ROUND_ONE} Return the reviewer payload.`,
+          })
+        }
+        return { text: 'WAITING' }
+      }
+      const respond = (body: ChatRequestBody) => {
+        if (!Array.isArray(body.tools) || body.tools.length === 0) {
+          return { text: 'Scripted title' }
+        }
+        const user = lastUserText(body)
+        const answer = childAnswer(user)
+        if (answer !== undefined) {
+          state.childRequests.push(body)
+          return { text: answer }
+        }
+        return parentTurn(messageText(body.messages?.at(-1)), user)
+      }
+      const server = Bun.serve({
+        port: 0,
+        async fetch(request) {
+          if (
+            request.method !== 'POST' ||
+            !request.url.endsWith('/chat/completions')
+          ) {
+            return new Response('not found', { status: 404 })
+          }
+          const body = (await request.json()) as ChatRequestBody
+          const chunks = scriptedResponseChunks(
+            respond(body),
+            'v2-continuation-response',
+            Math.floor(Date.now() / 1000),
+          )
+          const payload = [
+            ...chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`),
+            'data: [DONE]\n\n',
+          ].join('')
+          return new Response(payload, {
+            headers: { 'Content-Type': 'text/event-stream' },
+          })
+        },
+      })
+      return {
+        url: `http://localhost:${server.port}/v1`,
+        stop: () => server.stop(true),
+        ...state,
+      }
+    }
+
+    test(
+      'a parent that calls subagent with a finished child sessionID wakes that child and gets its new reply',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        const model = startContinuationModel()
+        const host = await startAgentHost(pluginSpec, model)
+        try {
+          const session = await host.client.session.create({
+            location: { directory: fixture.projectDir },
+            agent: 'build',
+            model: { providerID: SCRIPTED_PROVIDER, id: SCRIPTED_MODEL },
+          })
+          await host.client.session.prompt({
+            sessionID: session.id,
+            text: `${CONTINUE_DIRECTIVE} Review, then re-ask the reviewer once.`,
+          })
+          // Hosts that report later go idle with only a handle in hand, so
+          // `session.wait` is not the finish line; the parent's final marker is.
+          const parentText = async () =>
+            lastAssistantText(
+              await host.client.session.context({ sessionID: session.id }),
+            )
+          await waitFor(
+            async () => {
+              await host.client.session.wait({ sessionID: session.id })
+              return (await parentText())?.includes(PARENT_FINAL) === true
+            },
+            'the parent to finish after the continued child replied',
+            60_000,
+          )
+
+          // The parent followed up the child the first dispatch named.
+          expect(model.parentCalls).toHaveLength(2)
+          const [dispatch, followUp] = model.parentCalls
+          expect(dispatch?.sessionID).toBeUndefined()
+          expect(followUp?.sessionID).toMatch(/^ses_/)
+
+          // The child woke with its earlier context: round two's request still
+          // carries round one's prompt and the child's own first answer.
+          expect(model.childRequests).toHaveLength(2)
+          const roundTwo = model.childRequests[1]
+          const history = (roundTwo?.messages ?? [])
+            .map((message) => messageText(message))
+            .join('\n')
+          expect(history).toContain(CHILD_ROUND_ONE)
+          expect(history).toContain(CHILD_ANSWER_ONE)
+          expect(lastUserText(roundTwo ?? {})).toContain(CHILD_ROUND_TWO)
+
+          // Its new reply reached the parent as a `<subagent>` block from the
+          // same child session.
+          const parentContext = JSON.stringify(
+            await host.client.session.context({ sessionID: session.id }),
+          )
+          expect(parentContext).toContain(
+            `<subagent sessionID=\\"${followUp?.sessionID}\\" state=\\"completed\\"`,
+          )
+          expect(parentContext).toContain(CHILD_ANSWER_TWO)
+        } finally {
+          model.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    /**
+     * A plugin whose `execute.before` hook refuses a `subagent` call that
+     * carries a `sessionID`, the way a host or plugin may refuse a follow-up.
+     * The hook throws; the host reports the error to the model.
+     */
+    function createRefusingPlugin(rootDir: string): string {
+      const dir = path.join(rootDir, 'refuse-continuation-plugin')
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(
+        path.join(dir, 'package.json'),
+        JSON.stringify({
+          name: 'refuse-continuation-plugin',
+          type: 'module',
+          exports: { '.': './index.js' },
+        }),
+      )
+      fs.writeFileSync(
+        path.join(dir, 'index.js'),
+        `export default {
+  id: 'refuse-continuation-plugin',
+  async setup(ctx) {
+    await ctx.tool.hook('execute.before', (event) => {
+      const input = event.input
+      if (event.tool === 'subagent' && input && input.sessionID) {
+        throw new Error(${JSON.stringify(REFUSAL_TEXT)})
+      }
+    })
+  },
+}
+`,
+      )
+      return dir
+    }
+
+    test(
+      'a refused sessionID follow-up reaches the parent as a tool error and the child is never woken',
+      async () => {
+        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        const model = startContinuationModel()
+        const host = await startAgentHost(pluginSpec, model, {
+          plugins: [pluginSpec, createRefusingPlugin(fixture.tempRoot)],
+        })
+        try {
+          const session = await host.client.session.create({
+            location: { directory: fixture.projectDir },
+            agent: 'build',
+            model: { providerID: SCRIPTED_PROVIDER, id: SCRIPTED_MODEL },
+          })
+          await host.client.session.prompt({
+            sessionID: session.id,
+            text: `${CONTINUE_DIRECTIVE} Review, then re-ask the reviewer once.`,
+          })
+          await waitFor(
+            async () => {
+              await host.client.session.wait({ sessionID: session.id })
+              const last = lastAssistantText(
+                await host.client.session.context({ sessionID: session.id }),
+              )
+              return last?.includes(PARENT_REFUSED) === true
+            },
+            'the parent to answer after the refused follow-up',
+            60_000,
+          )
+
+          // The parent made the follow-up call, and the refusal text came back
+          // to it as the result of that call.
+          expect(model.parentCalls).toHaveLength(2)
+          expect(model.parentCalls[1]?.sessionID).toMatch(/^ses_/)
+          const context = JSON.stringify(
+            await host.client.session.context({ sessionID: session.id }),
+          )
+          expect(context).toContain(REFUSAL_TEXT)
+          // The refused call woke nothing: the child only ever ran round one.
+          expect(model.childRequests).toHaveLength(1)
+          expect(context).not.toContain(CHILD_ANSWER_TWO)
+        } finally {
+          model.stop()
+          await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
   },
 )

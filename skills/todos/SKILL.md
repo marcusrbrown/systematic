@@ -202,7 +202,7 @@ Create a task list grouped by type (e.g., `todowrite` in OpenCode, `update_plan`
 
 ### 3. Implement (PARALLEL)
 
-Spawn a `systematic:workflow:pr-comment-resolver` agent per item. Prefer parallel; fall back to sequential respecting dependency order.
+Spawn a `systematic:workflow:pr-comment-resolver` agent per item. Prefer parallel; fall back to sequential respecting dependency order. An agent has returned only when its final report arrives (see the active harness profile's *Dispatch results and continuation* section): wait for every report before committing, and never dispatch the same item again while its report is owed.
 
 **Batching:** 1-4 items: direct parallel returns. 5+ items: batches of 4, each returning only a short status summary (todo handled, files changed, tests run/skipped, blockers).
 

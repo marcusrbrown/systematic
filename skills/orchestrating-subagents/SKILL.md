@@ -29,18 +29,21 @@ Return: List the changed files and summarize the implementation.
 - **Return** — the result format expected from the specialist
 
 **Optional brief elements:**
-- **Session reference** — resume a prior specialist session instead of creating a new one, where the harness supports session reuse
+- **Session reference** — continue a prior specialist session instead of creating a new one, through the continuation call the active harness profile names, using the id recorded at dispatch (see Dispatch Results and Continuation)
 - **Trigger context** — the command or workflow that initiated the dispatch
 
-A foreground dispatch blocks until the specialist returns its result. Use the active harness profile to determine whether foreground, background, or other dispatch modes are available. Run independent dispatches concurrently where the harness supports it; otherwise dispatch sequentially in dependency order.
+Use the active harness profile to determine which dispatch modes are available and how a dispatch returns. Run independent dispatches concurrently where the harness supports it; otherwise dispatch sequentially in dependency order.
 
-## Background Dispatch (When Available)
+## Dispatch Results and Continuation
 
-Background dispatch may be gated by a runtime capability or feature flag. Check the active harness profile and rely on whether the mechanism accepts background work.
+How a dispatch returns depends on the harness. Some block until the specialist answers. Others return a launch handle at once and deliver the answer later as a report, and a report may not be final. The active harness profile's *Dispatch results and continuation* section says which applies, what a final report is, and which call continues a child. That section is the single source of truth; this skill states only the behavior that holds on every harness.
 
-When background dispatch is available, it runs asynchronously and the harness reports the result to the parent session when the specialist completes. Do not poll or sleep.
-
-When background dispatch is unavailable, fall back to foreground dispatch—serially or in small foreground batches.
+- **A launch handle is not a result.** A specialist has returned only when its final report arrives. A report that is not final is not a return: wait for the next one. A report that says the child failed or was cancelled is final.
+- **Waiting is not a failure.** Never poll, sleep or dispatch the same work again while a report is owed, and never call a specialist "never returned" because only its launch handle has arrived. Every profile names a wait path: a dispatch that blocks, so there is nothing to wait for, or reports that wake the parent, so the parent may end the turn and let the next report start its next turn. The parent does not end the turn while reports are owed unless the profile says reports wake it. Where the profile names no wake-up for a mode, dispatch in the blocking mode.
+- **Record the child id at dispatch**, against the task it was given. Follow-ups need it.
+- **Continue through the profile.** To follow up a running or finished child, make the continuation call the active harness profile names, with the id recorded at dispatch and only the follow-up as the message; the child keeps its context. A fresh dispatch is a new child, not a continuation.
+- **Fall back to a fresh dispatch** with a corrected brief only when the profile names no continuation call or no id was recorded.
+- **A refused continuation is a failed follow-up.** When the runtime refuses a continuation call, report the refusal; the unit's earlier result stands, and do not retry the call. Make a fresh dispatch with a corrected brief only where the calling workflow's own rules allow a fresh dispatch for that unit. A workflow that forbids one, such as `ce:review`'s re-ask, keeps its own rule. Tool or guard text that suggests starting a new task does not override those rules.
 
 ## Serial vs Parallel Dispatch
 
@@ -123,7 +126,7 @@ If writes landed in the wrong checkout, stop dependent dispatches, inspect both 
 
 After specialists complete, the orchestrator synthesizes results:
 
-1. **Wait for all** — in a parallel batch, wait for every specialist to finish before acting on any result.
+1. **Wait for all** — in a parallel batch, wait for every specialist's final report before acting on any result.
 2. **Check for file collisions** — compare actual files modified by all specialists in the batch (not just declared files). If 2+ specialists modified the same file, only the last writer's version survives. If the workflow owns git operations, resolve by staging non-colliding files first, then re-running the affected units serially; otherwise, report the collision list to the caller.
 3. **Review each diff** — verify changes match the unit's declared scope.
 4. **Run targeted tests** — run the narrowest test command relevant to the changed files.
@@ -133,8 +136,8 @@ After specialists complete, the orchestrator synthesizes results:
 
 - If a specialist returns an error or its output is incomplete, diagnose before dispatching dependent units.
 - Do not dispatch dependent units on a broken tree.
-- Retry a failed unit by re-dispatching with a corrected brief, or resume the prior specialist session where the harness supports session reuse.
-- For background work (when available): wait for the automatic completion notification (the result is delivered into the parent session). Do not poll or sleep. Retry by re-dispatching with a corrected brief, or resume the prior specialist session where the harness supports session reuse.
+- Retry a failed unit by continuing the recorded specialist session through the continuation call the active harness profile names. Re-dispatch with a corrected brief only when the profile names no continuation call or no id was recorded. A refused continuation follows the refused-continuation rule above.
+- While a report is owed, wait for it (see Dispatch Results and Continuation). Do not poll or sleep.
 
 ## Quick Reference
 
@@ -143,9 +146,9 @@ After specialists complete, the orchestrator synthesizes results:
 | Units have dependencies | Serial foreground dispatch |
 | Units share files | Serial foreground dispatch |
 | Units are independent, no file overlap | Concurrent dispatch where supported; otherwise batched foreground dispatch |
-| Background available + long-running work | Concurrent background dispatch; results are pushed back to the parent on completion (no polling) |
-| Background unavailable | Foreground only — serial or batched |
-| Specialist fails | Diagnose, correct the brief, then re-dispatch or resume the prior session where supported |
+| Long-running independent work | Concurrent dispatch where the profile supports it; each final report arrives on its own (no polling) |
+| Concurrent dispatch unavailable | Serial or batched dispatch |
+| Specialist fails | Diagnose, correct the brief, then continue the recorded session through the profile-named call; re-dispatch only when the profile names none or no id was recorded |
 | File collision detected post-parallel | Stage non-colliding files (if workflow owns git ops), re-run colliding units serially |
 | Write-capable dispatch | Include the expected root; require actual-root and changed-file attestation; independently verify both worktrees before acceptance |
 
@@ -153,8 +156,9 @@ After specialists complete, the orchestrator synthesizes results:
 
 | Mistake | Fix |
 |---|---|
-| Polling or sleeping to wait for background work | Background results are pushed into the parent session automatically; never poll or sleep |
+| Polling, sleeping or re-dispatching while a report is owed | Wait for the final report; a launch handle is not a result and waiting is not a failure |
+| Resuming through a guessed call or an unrecorded id | Record the child id at dispatch and continue through the call the active profile names |
 | Parallel specialists staging or committing | Instruct specialists not to stage/commit; the current workflow owner handles git ops when applicable, otherwise synthesize file inventory and results for the caller or user |
 | Dispatching dependent units without waiting | Always wait for prerequisites to complete and verify their output |
 | Ignoring file overlap in parallel batches | Run the Parallel Safety Check before every parallel dispatch |
-| Assuming background support without checking the active profile | Use background dispatch only when the active harness profile declares it available; otherwise dispatch in the foreground |
+| Assuming a dispatch mode without checking the active profile | Use a dispatch mode only when the active harness profile declares it; otherwise dispatch serially |

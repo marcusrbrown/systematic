@@ -230,6 +230,8 @@ Run these agents in parallel:
 - Dispatch `systematic:research:repo-research-analyst` — scope: technology, architecture, patterns, prior-art; pass the planning context summary to the technology, architecture, and patterns scopes. For the prior-art scope, pass only the independently stated concern — its trigger, effect, state, and integration boundary — plus the classified plan depth, rather than the planning context summary or proposed solution. Skip the prior-art scope for explicitly non-software planning and mechanical work that changes no behavior; make that exemption decision here at dispatch.
 - Dispatch `systematic:research:learnings-researcher` — make `scope: past-work` the first line of the prompt. When Phase 0 chose an origin document, make `exclude: <origin path>` the second line so the researcher does not rediscover it; otherwise omit that line. Then pass the planning context summary.
 
+An agent has returned only when its final report arrives. The active harness profile's *Dispatch results and continuation* section defines it; a launch handle is not a result. Wait for every report without dispatching the same work again, and apply this rule to every dispatch in Phase 1.
+
 Collect:
 - Technology stack and versions (used in section 1.2 to make sharper external research decisions)
 - Architectural patterns and conventions to follow
