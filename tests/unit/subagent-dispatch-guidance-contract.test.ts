@@ -17,7 +17,7 @@ import path from 'node:path'
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 const PROFILE_SECTION = 'Dispatch results and continuation'
 const HARNESS_SYNTAX =
-  /sessionID|task_id|SendMessage|systematic_delegate|run_in_background|<subagent/
+  /sessionID|task_id|SendMessage|systematic_delegate|run_in_background|<subagent|subagent_type|\btask\(/
 
 function read(relativePath: string): string {
   return fs.readFileSync(path.join(REPO_ROOT, relativePath), 'utf8')
@@ -107,10 +107,10 @@ describe('orchestrating-subagents is the general reference', () => {
   })
 
   test('treats a refused continuation as a failed follow-up, not as license for a new child', () => {
-    expect(text).toMatch(/runtime refuses a continuation call/)
+    expect(text).toMatch(
+      /runtime refuses a continuation call, report the refusal; the unit's earlier result stands, and do not retry the call\./,
+    )
     expect(text).toMatch(/failed follow-up/)
-    expect(text).toMatch(/earlier result stands/)
-    expect(text).toMatch(/do not retry the call/i)
     expect(text).toMatch(
       /only where the calling workflow's own rules allow a fresh dispatch/,
     )
@@ -119,6 +119,29 @@ describe('orchestrating-subagents is the general reference', () => {
 
   test('marks a failed or cancelled child as final, not as a waiting state', () => {
     expect(text).toMatch(/failed or was cancelled is final/)
+  })
+
+  test('treats a continuation call that errors as a failed follow-up, not as license for a new child', () => {
+    expect(text).toMatch(
+      /continuation call itself errors \([^)]*not a refusal\), report the failure[^.]*earlier result stands[^.]*do not retry the call or open a replacement child/i,
+    )
+  })
+})
+
+describe('ce-work dispatch example is harness-neutral', () => {
+  const text = normalize(read('skills/ce-work/SKILL.md'))
+
+  test('names the delegation mechanism of the active profile, not OpenCode', () => {
+    expect(text).toMatch(
+      /delegation mechanism the active harness profile names/,
+    )
+    expect(text).not.toMatch(/OpenCode's `task` tool/)
+  })
+
+  test('keeps the bundled implementer and the unit brief', () => {
+    expect(text).toMatch(/bundled `systematic-implementer` subagent/)
+    expect(text).toMatch(/unit Goal/)
+    expect(text).toMatch(/plan path plus the unit's Files/)
   })
 })
 

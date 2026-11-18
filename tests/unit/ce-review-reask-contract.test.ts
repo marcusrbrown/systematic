@@ -61,6 +61,7 @@ const PIPELINE_NEVER_BYPASS = normalize(
   sectionByHeading(PIPELINE, '## Never-bypass'),
 )
 const PIPELINE_PREPARE = normalize(sectionByHeading(PIPELINE, '## prepare'))
+const PIPELINE_SCREEN = normalize(sectionByHeading(PIPELINE, '## screen'))
 
 describe('re-ask policy text', () => {
   test.each([
@@ -248,6 +249,37 @@ describe('re-ask policy text', () => {
     ['SKILL.md', SKILL_REASK],
     ['pipeline-invocation.md', PIPELINE_REASK],
   ])(
+    '%s treats a continuation call that errors like a refusal',
+    (_name, text) => {
+      expect(text).toMatch(
+        /the continuation call itself errors \(a transport or tool error, not a refusal\)/,
+      )
+      expect(text).toMatch(/the first `malformed` result stands/)
+      expect(text).toMatch(/Coverage says "continuation failed"/)
+      expect(text).toMatch(
+        /does not retry the call or open a replacement session/,
+      )
+      expect(text).toMatch(
+        /Rejected, continuation failed \| The first `malformed` result \| Continuation failed/,
+      )
+    },
+  )
+
+  test.each([
+    ['SKILL.md', SKILL_SCREEN],
+    ['pipeline-invocation.md', PIPELINE_SCREEN],
+  ])('%s screens only the report body, never its wrapper', (_name, text) => {
+    expect(text).toMatch(
+      /(?:Pass|feed) only the report's body, the reviewer's answer as the active harness profile defines it,/i,
+    )
+    expect(text).toMatch(/never the wrapper/)
+    expect(text).not.toMatch(/<subagent|sessionID/)
+  })
+
+  test.each([
+    ['SKILL.md', SKILL_REASK],
+    ['pipeline-invocation.md', PIPELINE_REASK],
+  ])(
     '%s keeps harness syntax in the profiles and bans a fresh dispatch',
     (_name, text) => {
       expect(text).not.toMatch(
@@ -352,6 +384,7 @@ describe('harness profiles carry the dispatch and continuation facts', () => {
     expect(text).toMatch(/Record the `sessionID`/)
     expect(text).toMatch(/<subagent sessionID="…" state="…">`? message/)
     expect(text).toMatch(/`state="running"`[^.]*is not final/)
+    expect(text).toMatch(/the message body is the child's answer/)
     expect(text).toMatch(
       /follow up a running or finished child.*`subagent` again with its `sessionID`/,
     )
@@ -417,6 +450,7 @@ describe('harness profiles carry the dispatch and continuation facts', () => {
     expect(text).toMatch(/Record that `id`/)
     expect(text).toMatch(/`task` again with it as `task_id`/)
     expect(text).toMatch(/`state="running"`[^.]*is not final/)
+    expect(text).toMatch(/the block's body is the child's answer/)
   })
 
   test('Pi has no continuation for the built-in delegate and resumes through pi-subagents', () => {

@@ -153,17 +153,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
 
    Even with no file overlap, parallel subagents sharing a working directory face git index contention (concurrent staging/committing corrupts the index) and test interference (concurrent test runs pick up each other's in-progress changes). The parallel subagent constraints below mitigate these.
 
-   **Subagent dispatch** uses OpenCode's `task` tool with the bundled `systematic-implementer` subagent:
-
-   ```typescript
-   task({
-     subagent_type: "systematic-implementer",
-     description: <unit goal>,
-     prompt: <unit prompt body>,
-   })
-   ```
-
-   `description` carries the one-line unit Goal. `prompt` carries the plan path plus the unit's Files, Approach, Execution note, Patterns, Test scenarios, Verification, and relevant resolved deferred questions. For each unit, give the subagent:
+   **Subagent dispatch** uses the delegation mechanism the active harness profile names (its *Subagent delegation* section), with the bundled `systematic-implementer` subagent. Give each dispatch a one-line description carrying the unit Goal and a prompt carrying the plan path plus the unit's Files, Approach, Execution note, Patterns, Test scenarios, Verification, and relevant resolved deferred questions. For each unit, give the subagent:
    - The full plan file path (for overall context)
    - The specific unit's Goal, Files, Approach, Execution note, Patterns, Test scenarios, and Verification
    - Any resolved deferred questions relevant to that unit

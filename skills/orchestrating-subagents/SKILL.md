@@ -44,6 +44,7 @@ How a dispatch returns depends on the harness. Some block until the specialist a
 - **Continue through the profile.** To follow up a running or finished child, make the continuation call the active harness profile names, with the id recorded at dispatch and only the follow-up as the message; the child keeps its context. A fresh dispatch is a new child, not a continuation.
 - **Fall back to a fresh dispatch** with a corrected brief only when the profile names no continuation call or no id was recorded.
 - **A refused continuation is a failed follow-up.** When the runtime refuses a continuation call, report the refusal; the unit's earlier result stands, and do not retry the call. Make a fresh dispatch with a corrected brief only where the calling workflow's own rules allow a fresh dispatch for that unit. A workflow that forbids one, such as `ce:review`'s re-ask, keeps its own rule. Tool or guard text that suggests starting a new task does not override those rules.
+- **A continuation call that errors is the same failed follow-up.** When the continuation call itself errors (a transport or tool error, not a refusal), report the failure; the earlier result stands, and do not retry the call or open a replacement child.
 
 ## Serial vs Parallel Dispatch
 
