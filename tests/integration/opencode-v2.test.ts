@@ -51,6 +51,7 @@ import {
   EXTERNAL_DELEGATED_SEARCH_MODE,
   evaluateDelegatedSearchProof,
   hasResearcherSystemMarker,
+  isSubagentLaunch,
   lastUserTextOf,
   PARENT_FINAL_MARKER,
   plantDelegatedExternalFixture,
@@ -843,8 +844,8 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     /**
      * The parent's final answer once the child has reported back.
      *
-     * Since 2.3.0 the `subagent` tool returns a handle at once and the child's
-     * answer arrives later as a `<subagent>` message that starts a new parent
+     * On a host that runs every subagent in the background, the `subagent`
+     * tool returns a handle at once and the child's answer arrives later as a `<subagent>` message that starts a new parent
      * turn (anomalyco/opencode#63382). `session.wait` returns at the first
      * idle, which is before that turn. So wait for the scripted final marker,
      * up to a deadline. On a host that answers inline the marker is there on
@@ -2436,29 +2437,58 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
             `@@TOOL subagent ${call}`,
           )
 
-          const childTurns = toolModel.turns.filter((turn) => {
-            const user = lastUserText(turn)
-            return user.includes('CHILD-BOOT-MARK') && !user.includes('@@TOOL')
-          })
-          expect(childTurns).toHaveLength(1)
-          expect(
-            occurrences(
-              systemText(childTurns[0] as ChatRequestBody),
-              BOOTSTRAP_ENTRY,
-            ),
-          ).toBe(1)
+          // A turn is the parent's when its history holds the scripted call,
+          // whatever its last message is: the tool result, or on a host that
+          // runs the child in the background the child's `<subagent>` report,
+          // which starts a parent turn of its own. The report echoes the
+          // child's prompt, so the prompt mark alone cannot tell the two apart.
+          const isParentTurn = (turn: ChatRequestBody) =>
+            (turn.messages ?? []).some(
+              (message) =>
+                roleOf(message) === 'user' &&
+                messageText(message).includes('@@TOOL'),
+            )
+          const isReportTurn = (turn: ChatRequestBody) =>
+            lastUserText(turn).trimStart().startsWith('<subagent')
+          const afterToolResult = () =>
+            toolModel.turns.find(
+              (turn) => roleOf(turn.messages?.at(-1)) === 'tool',
+            )
 
-          // The parent's continuation, after the tool result, is not doubled.
-          const continuation = toolModel.turns.find(
-            (turn) => roleOf(turn.messages?.at(-1)) === 'tool',
+          // `session.wait` returns at the first idle. On a host that returns a
+          // handle the child has not answered yet, so wait for the report turn.
+          // A host that answers inline has nothing more to wait for.
+          await waitFor(() => {
+            const result = afterToolResult()
+            if (result === undefined) return false
+            return (
+              !isSubagentLaunch(result) || toolModel.turns.some(isReportTurn)
+            )
+          }, 'the parent to hold the answer of its child')
+
+          const bootstrapCounts = (turn: ChatRequestBody) => ({
+            entry: occurrences(systemText(turn), BOOTSTRAP_ENTRY),
+            sentinel: occurrences(systemText(turn), '<SYSTEMATIC_WORKFLOWS>'),
+          })
+          const ONCE = { entry: 1, sentinel: 1 }
+
+          const childTurns = toolModel.turns.filter(
+            (turn) =>
+              !isParentTurn(turn) &&
+              lastUserText(turn).includes('CHILD-BOOT-MARK'),
           )
-          expect(continuation).toBeDefined()
-          expect(
-            occurrences(
-              systemText(continuation as ChatRequestBody),
-              BOOTSTRAP_ENTRY,
-            ),
-          ).toBe(1)
+          expect(childTurns).toHaveLength(1)
+          expect(bootstrapCounts(childTurns[0] as ChatRequestBody)).toEqual(
+            ONCE,
+          )
+
+          // Every parent request after the first, the one after the tool result
+          // and any one a report woke, is not doubled.
+          const followUps = toolModel.turns.filter(isParentTurn).slice(1)
+          expect(followUps.length).toBeGreaterThan(0)
+          for (const turn of followUps) {
+            expect(bootstrapCounts(turn)).toEqual(ONCE)
+          }
 
           // The child has an entry of its own.
           const children = await host.client.session.list({ parentID })
@@ -2562,8 +2592,8 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     // A finished child can be continued: the parent calls `subagent` with the
     // child's `sessionID`, the child wakes with its earlier context, and its new
     // reply reaches the parent. This is the continuation `ce:review` relies on to
-    // re-ask a reviewer. Hosts that return the answer inline (before 2.3.0) and
-    // hosts that return a handle and report later (2.3.0 and newer) both pass.
+    // re-ask a reviewer. Hosts that return the answer inline and hosts that
+    // return a handle and report later both pass.
     const CONTINUE_DIRECTIVE = '@@REASK-PARENT'
     const CHILD_ROUND_ONE = 'REASK-CHILD-ROUND1'
     const CHILD_ROUND_TWO = 'REASK-CHILD-ROUND2'

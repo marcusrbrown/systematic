@@ -239,7 +239,7 @@ describe('evaluateConnectIsolationProof', () => {
   })
 })
 
-describe('a parent whose child runs in the background (OpenCode v2 2.3.0 and later)', () => {
+describe('a parent whose child runs in the background (an OpenCode v2 host that returns a handle)', () => {
   const LAUNCH_HANDLE =
     'The subagent is working in the background (sessionID: ses_child). You will receive a <subagent> message when it goes idle.'
   const report = (body: string) => ({

@@ -356,7 +356,11 @@ describe('harness profiles carry the dispatch and continuation facts', () => {
       /follow up a running or finished child.*`subagent` again with its `sessionID`/,
     )
     expect(text).toMatch(/`agent`.*`description` and `prompt`/)
-    expect(text).toMatch(/2\.3\.0 always returns a handle/)
+    // The profile names the host version where the behavior changed; the test
+    // pins the behavior, so a version bump never touches it.
+    expect(text).toMatch(
+      /always returns a handle and has no `background` input/,
+    )
   })
 
   test('OpenCode v2 says a refused sessionID follow-up is final and names no deployment', () => {
@@ -378,11 +382,11 @@ describe('harness profiles carry the dispatch and continuation facts', () => {
     expect(text).toMatch(/blocks until|may end its turn/)
   })
 
-  test('OpenCode v2 reports wake the parent from 2.3.0; before that a foreground dispatch blocks', () => {
+  test('OpenCode v2 reports wake the parent; a foreground dispatch on an older host blocks', () => {
     const text = profileSection('opencode-v2-profile.md')
     expect(text).toMatch(/report wakes the parent/)
     expect(text).toMatch(/may end its turn/)
-    expect(text).toMatch(/before 2\.3\.0[^.]*foreground dispatch blocks until/i)
+    expect(text).toMatch(/foreground dispatch blocks until the child answers/)
   })
 
   test('OpenCode v1 blocks by default and wakes the parent only for the flagged background mode', () => {
