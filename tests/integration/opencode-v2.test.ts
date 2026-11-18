@@ -2591,9 +2591,8 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
 
     // A finished child can be continued: the parent calls `subagent` with the
     // child's `sessionID`, the child wakes with its earlier context, and its new
-    // reply reaches the parent. This is the continuation `ce:review` relies on to
-    // re-ask a reviewer. Hosts that return the answer inline and hosts that
-    // return a handle and report later both pass.
+    // reply reaches the parent as a report. This is the continuation `ce:review`
+    // relies on to re-ask a reviewer.
     const CONTINUE_DIRECTIVE = '@@REASK-PARENT'
     const CHILD_ROUND_ONE = 'REASK-CHILD-ROUND1'
     const CHILD_ROUND_TWO = 'REASK-CHILD-ROUND2'
@@ -2604,6 +2603,19 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     const REFUSAL_TEXT =
       'Session reuse is disabled in this environment. Start a new task and include the context it needs.'
     const SESSION_ID_IN_TEXT = /sessionID[=:"\s]+(ses_[A-Za-z0-9]+)/
+
+    /** The text of every `<subagent>` report the host put in the parent's context. */
+    function reportTexts(
+      messages: readonly { type: string; text?: unknown }[],
+    ): string[] {
+      const texts: string[] = []
+      for (const message of messages) {
+        if (message.type === 'synthetic' && typeof message.text === 'string') {
+          texts.push(message.text)
+        }
+      }
+      return texts
+    }
 
     interface ContinuationScript extends ScriptedModelServer {
       /** The arguments of every `subagent` call the parent made, in order. */
@@ -2761,15 +2773,21 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           expect(history).toContain(CHILD_ANSWER_ONE)
           expect(lastUserText(roundTwo ?? {})).toContain(CHILD_ROUND_TWO)
 
-          // Its new reply reached the parent as a `<subagent>` block from the
-          // same child session.
-          const parentContext = JSON.stringify(
+          // Its new reply reached the parent as one final `<subagent>` report
+          // from the same child session. The recorded child id, the
+          // `completed` state and the second answer sit in that one message:
+          // round one's completed report carries the same id and state, so
+          // checking them apart would pass with the answer in a report that
+          // is not final.
+          const reports = reportTexts(
             await host.client.session.context({ sessionID: session.id }),
           )
-          expect(parentContext).toContain(
-            `<subagent sessionID=\\"${followUp?.sessionID}\\" state=\\"completed\\"`,
+          const secondReport = reports.find((text) =>
+            text.includes(CHILD_ANSWER_TWO),
           )
-          expect(parentContext).toContain(CHILD_ANSWER_TWO)
+          expect(secondReport).toStartWith(
+            `<subagent sessionID="${followUp?.sessionID}" state="completed"`,
+          )
         } finally {
           model.stop()
           await host.server.stop()

@@ -176,7 +176,7 @@ runtime but must not appear in bundled examples.
 
 ### Dispatch results and continuation
 
-A foreground \`task\` returns the child's answer in the call result, inside a \`<task id="…" state="…">\` block. Record that \`id\` at dispatch, against the task it was given. To continue the same child, call \`task\` again with it as \`task_id\`, plus \`subagent_type\`, \`description\` and \`prompt\` (the follow-up only; the child keeps its context). A \`background: true\` dispatch returns the same block with \`state="running"\`, which is not final.
+A foreground \`task\` returns the child's answer in the call result, inside a \`<task id="…" state="…">\` block; the block's body is the child's answer. Record that \`id\` at dispatch, against the task it was given. To continue the same child, call \`task\` again with it as \`task_id\`, plus \`subagent_type\`, \`description\` and \`prompt\` (the follow-up only; the child keeps its context). A \`background: true\` dispatch returns the same block with \`state="running"\`, which is not final.
 
 **Wait path.** A foreground \`task\` (the default) blocks until the child answers, so there is nothing to wait for. \`background: true\` works only with the host's experimental background-subagents flag, and the call fails without it; where it is on, the final result arrives as a synthetic \`<task>\` message that starts a new parent turn, so the parent may end its turn. Where the flag is off or unknown, dispatch in the foreground.
 

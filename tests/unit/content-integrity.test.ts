@@ -7448,7 +7448,8 @@ describe('ce-work -> systematic-implementer dispatch contract', () => {
   test('skills/ce-work/SKILL.md dispatches to systematic-implementer subagent', () => {
     const skillPath = path.join(REPO_ROOT, 'skills/ce-work/SKILL.md')
     const content = fs.readFileSync(skillPath, 'utf8')
-    expect(content).toContain('subagent_type: "systematic-implementer"')
+    // The skill names the agent; the harness profile owns the call syntax.
+    expect(content).toContain('bundled `systematic-implementer` subagent')
   })
 
   test('agents/workflow/systematic-implementer.md has matching frontmatter', () => {
