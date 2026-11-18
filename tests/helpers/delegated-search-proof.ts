@@ -260,6 +260,40 @@ function lastToolText(request: ChatRequest): string | undefined {
   return last === undefined ? undefined : messageText(last)
 }
 
+/**
+ * OpenCode v2 2.3.0 runs every subagent in the background
+ * (anomalyco/opencode#63382). The `subagent` tool returns this handle at once,
+ * and the child's answer reaches the parent later, as a `<subagent>` user
+ * message that starts a new parent turn. Earlier hosts and v1 hand the answer
+ * back inline as the tool result.
+ */
+const SUBAGENT_LAUNCH_PATTERN =
+  /^The subagent is working in the background \(sessionID: /
+const SUBAGENT_REPORT_PATTERN = /^<subagent sessionID="[^"]*" state="[^"]*"/
+
+/** True when the request's last message is the handle of a child that is still running. */
+export function isSubagentLaunch(request: ChatRequest): boolean {
+  const last = (request.messages ?? []).at(-1)
+  return (
+    roleOf(last) === 'tool' && SUBAGENT_LAUNCH_PATTERN.test(messageText(last))
+  )
+}
+
+/**
+ * What the child handed the parent in this request: the tool result as an
+ * inline host returns it, or the `<subagent>` report that woke the parent on a
+ * background host. A launch handle is returned as is; use `isSubagentLaunch`
+ * to tell it from an answer. `undefined` when the request carries neither.
+ */
+export function parentResultTextOf(request: ChatRequest): string | undefined {
+  const last = (request.messages ?? []).at(-1)
+  const text = messageText(last)
+  if (roleOf(last) === 'tool') return text
+  if (roleOf(last) === 'user' && SUBAGENT_REPORT_PATTERN.test(text.trimStart()))
+    return text
+  return undefined
+}
+
 /** True when the request is the researcher child's, judged by its system prompt. */
 export function hasResearcherSystemMarker(
   request: ChatRequest,
@@ -427,13 +461,16 @@ function checkParentFinal(
   parentAnswer: string | undefined,
 ): DelegatedSearchVerdict | undefined {
   const lastParent = parentRequests.at(-1)
-  if (lastParent === undefined || lastMessageRole(lastParent) !== 'tool') {
+  const parentText =
+    lastParent === undefined || isSubagentLaunch(lastParent)
+      ? undefined
+      : parentResultTextOf(lastParent)
+  if (parentText === undefined) {
     return fail(
       'no-parent-final',
       "the parent never made a request after the researcher's result came back",
     )
   }
-  const parentText = lastToolText(lastParent) ?? ''
   const absent = plantedPaths.find((planted) => !parentText.includes(planted))
   if (absent !== undefined) {
     return fail(
@@ -553,7 +590,7 @@ export interface DelegatedSearchScript {
  * appear, or a marker when there is none.
  */
 function pathsInLastResult(request: ChatRequest, pattern: RegExp): string {
-  const found = new Set(lastToolText(request)?.match(pattern))
+  const found = new Set(parentResultTextOf(request)?.match(pattern))
   return found.size === 0 ? 'NO-PATH' : [...found].join(' ')
 }
 
@@ -597,7 +634,10 @@ export function createDelegatedSearchScript(
   let dispatched = false
 
   function parentTurn(request: ChatRequest): ScriptedTurn {
-    if (lastMessageRole(request) === 'tool') {
+    // A background host answers the dispatch with a handle. The parent has
+    // nothing to report yet, so it waits for the child's report.
+    if (isSubagentLaunch(request)) return { text: 'PARENT-WAITING' }
+    if (parentResultTextOf(request) !== undefined) {
       return {
         text: `${PARENT_FINAL_MARKER} ${pathsInLastResult(request, mode.pathPattern)}`,
       }

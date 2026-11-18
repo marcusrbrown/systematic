@@ -28,8 +28,10 @@ import path from 'node:path'
 
 import {
   type ChatRequest,
+  isSubagentLaunch,
   lastUserTextOf,
   messageText,
+  parentResultTextOf,
   roleOf,
   toolNamesOf,
 } from './delegated-search-proof.js'
@@ -293,10 +295,6 @@ function fail(
   return { ok: false, code, message }
 }
 
-function lastMessageRole(request: ChatRequest): string | undefined {
-  return roleOf((request.messages ?? []).at(-1))
-}
-
 function toolResultsOf(request: ChatRequest): string[] {
   return (request.messages ?? [])
     .filter((message) => roleOf(message) === 'tool')
@@ -358,7 +356,14 @@ function checkParentFinal(
   parentAnswer: string | undefined,
 ): ConnectIsolationVerdict | undefined {
   const last = parentRequests.at(-1)
-  if (last === undefined || lastMessageRole(last) !== 'tool') {
+  // The last request must hold the child's answer: the inline tool result, or
+  // the report that woke the parent on a host that runs children in the
+  // background. A bare launch handle is not an answer.
+  if (
+    last === undefined ||
+    isSubagentLaunch(last) ||
+    parentResultTextOf(last) === undefined
+  ) {
     return fail(
       'no-parent-final',
       "the parent never made a request after the researcher's result came back",
@@ -600,10 +605,12 @@ export function createConnectIsolationScript(
   }
 
   function parentTurn(request: ChatRequest): ScriptedTurn {
-    if (lastMessageRole(request) === 'tool') {
-      return {
-        text: `${CONNECT_PARENT_FINAL} ${markerIn(toolResultsOf(request).at(-1))}`,
-      }
+    // A background host answers the dispatch with a handle; the parent waits
+    // for the child's report, which carries the marker.
+    if (isSubagentLaunch(request)) return { text: 'PARENT-WAITING' }
+    const result = parentResultTextOf(request)
+    if (result !== undefined) {
+      return { text: `${CONNECT_PARENT_FINAL} ${markerIn(result)}` }
     }
     if (dispatched) return { text: 'PARENT-UNEXPECTED-TURN' }
     dispatched = true
