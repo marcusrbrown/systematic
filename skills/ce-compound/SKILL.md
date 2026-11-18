@@ -120,7 +120,7 @@ If no relevant entries are found, proceed to Phase 1 without passing memory cont
 
 Launch research subagents. Each returns text data to the orchestrator.
 
-**Dispatch order:** launch `Context Analyzer`, `Solution Extractor`, and `Related Docs Finder` in parallel (background).
+**Dispatch order:** launch `Context Analyzer`, `Solution Extractor`, and `Related Docs Finder` in parallel.
 
 <parallel_tasks>
 
@@ -197,7 +197,7 @@ Launch research subagents. Each returns text data to the orchestrator.
 
 <sequential_tasks>
 
-**WAIT for all Phase 1 subagents to complete before proceeding.**
+**WAIT for all Phase 1 subagents to complete before proceeding.** A subagent has completed only when its final report arrives (see the active harness profile's *Dispatch results and continuation* section); a launch handle is not a result, and waiting is not a reason to dispatch it again.
 
 The orchestrating agent (main conversation) performs these steps:
 

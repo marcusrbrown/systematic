@@ -515,6 +515,8 @@ Spawn each selected persona reviewer as a parallel sub-agent using the subagent 
 7. **Selected structured conditionals only:** the `selection_reason` and non-empty `selection_surface` from Stage 3, passed into the review context. Core personas receive empty values for both
 8. **For `project-standards` only:** the standards file path list from Stage 3b, wrapped in a `<standards-paths>` block appended to the review context
 
+Record each persona's child session or task id from the launch result, against the persona name. The re-ask needs it, and no other handle continues that reviewer.
+
 Persona sub-agents are **read-only** with respect to the project: they review and return structured JSON. They do not edit project files, write artifacts, or propose refactors. The parent orchestrator owns all persistence.
 
 Read-only here means **non-mutating**, not "no shell access." Reviewer sub-agents may use non-mutating inspection commands when needed to gather evidence, including read-oriented `git` / `gh` usage against the pinned scope: the diff of one pinned path, `git show <base_sha>:<path>` for old source, `git blame`, a log of one path, and `gh pr view`. A diff or log across the whole range to rebuild or widen the scope is not permitted. They must not edit project files, change branches, commit, push, create PRs, or otherwise mutate the checkout or repository state. Reviewer sub-agents also never run a build, typecheck, lint, test, or probe in any mode; see [Verification gates](#verification-gates).
@@ -561,6 +563,8 @@ Returning the detail tier inline increases parent context per persona. The previ
 
 Before parsing a persona return into fields, assessing evidence, synthesizing, or persisting anything, admit it with the packaged structural validator's `screen` phase. `screen` replaces the former separate raw-return-admission and dispatch-identity-binding steps with one call: it structurally admits the return and binds it to the dispatched persona in the same pass. Invoke it through this skill's own installed directory (`node "$SKILL_DIR/scripts/validate-review.mjs" screen --reviewer <persona> --harness <opencode|pi|claude-code>`, the raw return on stdin through a fresh single-quoted heredoc delimiter) so every harness resolves the same committed bytes. The full envelope shape, the fresh-delimiter rules, and the invocation block are in [pipeline invocation: screen](./references/pipeline-invocation.md#screen).
 
+Pass only the report's body, the reviewer's answer as the active harness profile defines it, to `screen`, never the wrapper around it.
+
 Read the exit status:
 
 - **exit 0** — structurally admitted. Parse the already structurally validated JSON without logging the raw text; the parent adds `harness` and `dispatch_outcome` from the result to the persisted per-agent dispatch record. `exit 0` with zero findings is `dispatch_outcome: "empty"`; `exit 0` with findings is `dispatch_outcome: "findings"`, each finding already carrying a stable `input_id` and `disposition: "surviving"`.
@@ -569,9 +573,9 @@ Read the exit status:
 
 #### Re-ask a rejected return
 
-A persona gets at most 2 returns and 2 screens. When the first `screen` exits 1, the parent may resume the same reviewer session once. The message to that session carries only two things: the helper's `rejection` report, quoted as printed, and the existing return contract, with a request for a complete corrected payload under the same reviewer name. The parent screens the corrected return with a fresh heredoc and a fresh delimiter. A second exit 1 is final.
+A persona gets at most 2 returns and 2 screens. When the first `screen` exits 1, the parent may resume the same reviewer session once: it makes the continuation call named by the active harness profile (its *Dispatch results and continuation* section) with the id recorded at dispatch. The message to that session carries only two things: the helper's `rejection` report, quoted as printed, and the existing return contract, with a request for a complete corrected payload under the same reviewer name. Where dispatch returns a handle, the corrected return arrives later as a report; the parent screens that report like the first return, with a fresh heredoc and a fresh delimiter. A report that is not final is not a return, so wait for the final one. A second exit 1 is final.
 
-The parent never rewrites, trims, repairs or re-serializes a rejected payload, and never dispatches a correction, repair or replacement subagent. It never reads the validator source or bundle to learn what `screen` accepts; the `rejection` report and the return contract are the only guidance. If the harness cannot continue the reviewer's session, the persona is `malformed`, Coverage says "continuation unavailable", and the parent opens no new session for it.
+The parent never rewrites, trims, repairs or re-serializes a rejected payload, and never dispatches a correction, repair or replacement subagent. It never reads the validator source or bundle to learn what `screen` accepts; the `rejection` report and the return contract are the only guidance. Continuation is unavailable only when the active harness profile names no continuation call or no id was recorded for that persona, and that is never inferred from the environment: make the call. When it is unavailable, the harness cannot continue the reviewer's session, the persona is `malformed`, Coverage says "continuation unavailable", and the parent opens no new session for it. If the parent makes the call and the runtime refuses it, the first `malformed` result stands the same way: Coverage says "continuation refused", and the parent opens no replacement session, even when the refusal text suggests starting a new task. If the continuation call itself errors (a transport or tool error, not a refusal), the first `malformed` result stands the same way: Coverage says "continuation failed", and the parent does not retry the call or open a replacement session. Tool or guard text does not override this policy.
 
 Each persona ends with one terminal result, and a corrected return supersedes the earlier one for admission:
 
@@ -581,6 +585,8 @@ Each persona ends with one terminal result, and a corrected return supersedes th
 | Rejected, then accepted | The second, accepted result | One re-ask |
 | Rejected, then rejected | The second `malformed` result and its `rejection` report | One re-ask, final `malformed` |
 | Rejected, continuation unavailable | The first `malformed` result | Continuation unavailable |
+| Rejected, continuation refused | The first `malformed` result | Continuation refused |
+| Rejected, continuation failed | The first `malformed` result | Continuation failed |
 | Launch failure (exit 2) | `validation_unavailable` | The exit status and what was withheld |
 | Never returned | `never_returned` | The task-lifecycle fact, with no `screen` call |
 

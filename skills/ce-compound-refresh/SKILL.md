@@ -330,6 +330,8 @@ There are two subagent roles:
 1. **Investigation subagents** — read-only. They must not edit files, create successors, or delete anything. Each returns: file path, evidence, recommended action, confidence, and open questions. These can run in parallel when artifacts are independent.
 2. **Replacement subagents** — write a single new learning to replace a stale one. These run **one at a time, sequentially** (each replacement subagent may need to read significant code, and running multiple in parallel risks context exhaustion). The orchestrator handles all deletions and metadata updates after each replacement completes.
 
+A subagent has returned only when its final report arrives; a launch handle is not a result, and the orchestrator waits for each report without dispatching the same work again (see the active harness profile's *Dispatch results and continuation* section).
+
 The orchestrator merges investigation results, detects contradictions, coordinates replacement subagents, and performs all deletions/metadata edits centrally. In interactive mode, it asks the user questions on ambiguous cases. In autofix mode, it marks ambiguous cases as stale instead. If two artifacts overlap or discuss the same root issue, investigate them together rather than parallelizing.
 
 ## Phase 2: Classify the Right Maintenance Action
@@ -569,7 +571,7 @@ Do not let replacement subagents invent frontmatter fields, enum values, or sect
    - The target path. File the new learning in the directory that the category mapping in `references/yaml-schema.md` gives for its `problem_type`, not simply the old learning's directory. Create that directory on first use (`mkdir -p`).
    - The relevant contents of the three support files listed above
 2. The subagent writes the new learning using the support files as the source of truth, and uses only the offered `values` for enum fields, never a `legacy_values` entry: `references/schema.yaml` for frontmatter fields and enum values, `references/yaml-schema.md` for category mapping, and `assets/resolution-template.md` for section order. It should use dedicated file search and read tools if it needs additional context beyond what was passed.
-3. After the subagent completes, the orchestrator retargets any `superseded_by` pointer to the old learning at the new one, then deletes the old learning file, subject to the safeguards in Lifecycle Consistency ("Retarget before removing"). Do not write a `supersedes` field or any other back-pointer into the new learning — the git history and commit message record the replacement.
+3. After the subagent's final report arrives, the orchestrator retargets any `superseded_by` pointer to the old learning at the new one, then deletes the old learning file, subject to the safeguards in Lifecycle Consistency ("Retarget before removing"). Do not write a `supersedes` field or any other back-pointer into the new learning — the git history and commit message record the replacement.
 
 **When evidence is insufficient:**
 

@@ -129,13 +129,13 @@ Dispatch all agents in **parallel** using the platform's task/agent tool (e.g., 
 
 Pass each agent the **full document** -- do not split into sections.
 
-**Error handling:** If an agent fails or times out, proceed with findings from agents that completed. Note the failed agent in the Coverage section. Do not block the entire review on a single agent failure.
+**Error handling:** An agent has returned only when its final report arrives (see the active harness profile's *Dispatch results and continuation* section), and waiting for a report is not a failure: do not dispatch the same persona again while its report is owed. If an agent's final report says it failed or was cancelled, or it times out, proceed with findings from agents that completed. Note the failed agent in the Coverage section. Do not block the entire review on a single agent failure.
 
 **Dispatch limit:** Even at maximum (7 agents), use parallel dispatch. These are document reviewers with bounded scope reading a single document -- parallel is safe and fast.
 
 ## Phases 3-5: Synthesis, Presentation, and Next Action
 
-After all dispatched agents return, read `references/synthesis-and-presentation.md` for the synthesis pipeline (validate, gate, dedup, promote, resolve contradictions, route by autofix class), fix application, finding presentation, and next-action menu. Do not load this file before agent dispatch completes.
+After every dispatched agent's final report has arrived, read `references/synthesis-and-presentation.md` for the synthesis pipeline (validate, gate, dedup, promote, resolve contradictions, route by autofix class), fix application, finding presentation, and next-action menu. Do not load this file before agent dispatch completes.
 
 ---
 

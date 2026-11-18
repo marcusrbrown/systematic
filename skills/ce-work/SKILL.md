@@ -153,17 +153,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
 
    Even with no file overlap, parallel subagents sharing a working directory face git index contention (concurrent staging/committing corrupts the index) and test interference (concurrent test runs pick up each other's in-progress changes). The parallel subagent constraints below mitigate these.
 
-   **Subagent dispatch** uses OpenCode's `task` tool with the bundled `systematic-implementer` subagent:
-
-   ```typescript
-   task({
-     subagent_type: "systematic-implementer",
-     description: <unit goal>,
-     prompt: <unit prompt body>,
-   })
-   ```
-
-   `description` carries the one-line unit Goal. `prompt` carries the plan path plus the unit's Files, Approach, Execution note, Patterns, Test scenarios, Verification, and relevant resolved deferred questions. For each unit, give the subagent:
+   **Subagent dispatch** uses the delegation mechanism the active harness profile names (its *Subagent delegation* section), with the bundled `systematic-implementer` subagent. Give each dispatch a one-line description carrying the unit Goal and a prompt carrying the plan path plus the unit's Files, Approach, Execution note, Patterns, Test scenarios, Verification, and relevant resolved deferred questions. For each unit, give the subagent:
    - The full plan file path (for overall context)
    - The specific unit's Goal, Files, Approach, Execution note, Patterns, Test scenarios, and Verification
    - Any resolved deferred questions relevant to that unit
@@ -176,6 +166,8 @@ Determine how to proceed based on what was provided in `<input_document>`.
 
    **Permission mode:** Omit the `mode` parameter when dispatching subagents so the user's configured permission settings apply. Do not pass `mode: "auto"` — it overrides user-level settings like `bypassPermissions`.
 
+   **Collecting results:** a subagent has completed only when its final report arrives; a launch handle is not a result. The active harness profile's *Dispatch results and continuation* section defines the final report and the continuation call. Record each subagent's id at dispatch, wait for its report without dispatching the same unit again, and continue a subagent through the profile-named call rather than starting a replacement.
+
    **After each subagent completes (serial mode):**
    1. Review the subagent's diff — verify changes match the unit's scope and `Files:` list
    2. Run the relevant test suite to confirm the tree is healthy
@@ -184,7 +176,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
    5. Dispatch the next unit
 
    **After all parallel subagents in a batch complete:**
-   1. Wait for every subagent in the current parallel batch to finish before acting on any of their results
+   1. Wait for every subagent in the current parallel batch to deliver its final report before acting on any of their results
    2. Cross-check for discovered file collisions: compare the actual files modified by all subagents in the batch (not just their declared `Files:` lists). Subagents may create or modify files not anticipated during planning — this is expected, since plans describe *what* not *how*. A collision only matters when 2+ subagents in the same batch modified the same file. In a shared working directory, only the last writer's version survives — the other unit's changes to that file are lost. If a collision is detected: commit all non-colliding files from all units first, then re-run the affected units serially for the shared file so each builds on the other's committed work
    3. For each completed unit, in dependency order: review the diff, run the relevant test suite, stage only that unit's files, and commit with a conventional message derived from the unit's Goal
    4. If tests fail after committing a unit's changes, diagnose and fix before committing the next unit

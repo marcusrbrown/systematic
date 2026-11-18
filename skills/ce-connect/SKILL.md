@@ -149,7 +149,7 @@ List every allowed project the run reads under `projects:`, each as its absolute
 
 The researcher covers only the rule ids it is given, but it searches the learnings and code of every project in that list for evidence, rules marked `later` included. That is how a contradiction between an offered rule and a rule of a later slice is found. Do not narrow the project list to the projects of the offered rules.
 
-Wait for the reply. Then write the batch to `<workDir>/family-<n>.json` with the file-writing tool, where `<n>` counts the families from 1:
+Wait for the reply. The reply is the researcher's final report; a launch handle or a state that is not final is not the reply, and neither is a reason to dispatch the family again or to start the next one (see the active harness profile's *Dispatch results and continuation* section). Then write the batch to `<workDir>/family-<n>.json` with the file-writing tool, where `<n>` counts the families from 1:
 
 - If the reply holds one JSON object, write that object alone, unchanged. Text or a code fence around it is dropped; nothing inside it is touched. Never retype, trim, reformat or summarize it: excerpts must stay character for character.
 - Before you write it, check its shape against `references/candidate-contract.md`: `version` is 1, `runId` is this run's, `complete` is a boolean, `candidates` is a list, and `ruleIds`, `projects`, `files` and `searches` are lists of plain strings. Never repair a batch that fails the check.
