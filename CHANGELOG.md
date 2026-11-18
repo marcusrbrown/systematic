@@ -4,6 +4,23 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.35.2](https://github.com/marcusrbrown/systematic/compare/v3.35.1...v3.35.2) (2026-11-18)
+
+### Bug Fixes
+
+* **ce-review:** state the one-path diff rule literally in reviewer and CE agent prompts ([#1451](https://github.com/marcusrbrown/systematic/issues/1451)) ([cff99e6](https://github.com/marcusrbrown/systematic/commit/cff99e674113ef7036eb7f057beef808630adeda))
+* keep permission-mode rules in the Claude Code profile, budget the v2 profile, and ban range diffs in validators ([#1453](https://github.com/marcusrbrown/systematic/issues/1453)) ([b6be38a](https://github.com/marcusrbrown/systematic/commit/b6be38aa7d3f5e866c866e61ebf33a0ab12e7662))
+
+### Continuous Integration
+
+* **deps:** update Systematic to v3.35.1 ([#1448](https://github.com/marcusrbrown/systematic/issues/1448)) ([035cd24](https://github.com/marcusrbrown/systematic/commit/035cd24e7d5d24150da23bcaedce1b02dad0b64d))
+
+### Miscellaneous Chores
+
+* **deps:** update actions/create-github-app-token action to v3.4.0 ([#1450](https://github.com/marcusrbrown/systematic/issues/1450)) ([08671b2](https://github.com/marcusrbrown/systematic/commit/08671b24b218e28bc7a214e56f42205f672dbe50))
+* **deps:** update dependency @biomejs/biome to v2.6.8 ([#1449](https://github.com/marcusrbrown/systematic/issues/1449)) ([5af4f12](https://github.com/marcusrbrown/systematic/commit/5af4f129ddd44307c90ee98e3e7f001a0174cb9a))
+* **deps:** update fro-bot/agent to v0.145.2 ([#1440](https://github.com/marcusrbrown/systematic/issues/1440)) ([7d9fc70](https://github.com/marcusrbrown/systematic/commit/7d9fc70468491ee8bb70a3f48b668658d6e38b38))
+
 ## [3.35.1](https://github.com/marcusrbrown/systematic/compare/v3.35.0...v3.35.1) (2026-11-18)
 
 ### Bug Fixes
