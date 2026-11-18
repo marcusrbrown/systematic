@@ -262,6 +262,163 @@ describe('ce:review pinned scope: how a child reads it', () => {
   })
 })
 
+/**
+ * The parent model writes each reviewer prompt itself, so the
+ * `{diff_scope_rules}` slot is not a guarantee: the rules can be dropped or
+ * summarized on the way. The per-path rule therefore lives literally in the
+ * template body and the review context, and every pin below reads those, never
+ * the diff-scope reference.
+ */
+const BOUNDED = normalize(
+  REVIEWER_TEMPLATE.slice(
+    REVIEWER_TEMPLATE.indexOf('<bounded-investigation>'),
+    REVIEWER_TEMPLATE.indexOf('</bounded-investigation>'),
+  ),
+)
+const REVIEWER_VARIABLES = normalize(
+  REVIEWER_TEMPLATE.slice(REVIEWER_TEMPLATE.indexOf('## Variable Reference')),
+)
+const SPAWNING = normalize(section(SKILL, '#### Spawning'))
+const CE_AGENTS = normalize(
+  STAGE_4.slice(
+    STAGE_4.indexOf('**CE conditional agents**'),
+    STAGE_4.indexOf('**CE agent gate boundary.**'),
+  ),
+)
+
+describe('ce:review pinned scope: the per-path rule survives the parent’s prompt assembly', () => {
+  test('the rule stays in the template body when the scope-rules slot is dropped', () => {
+    expect(BOUNDED.length).toBeGreaterThan(0)
+    const withoutSlot = REVIEWER_TEMPLATE.replace('{diff_scope_rules}', '')
+    expect(normalize(withoutSlot)).toContain(BOUNDED)
+  })
+
+  const BODY_PINS: readonly (readonly [string, RegExp])[] = [
+    ['one path per call', /read one path's diff per call/i],
+    ['the not-permitted list opens', /not permitted:/i],
+    ['a diff or log with no path', /a diff or log with no path/i],
+    ['git diff --stat', /`git diff --stat`/],
+    ['git diff --name-only', /`git diff --name-only`/],
+    ['git log <base>..', /`git log <base_sha>\.\.`/],
+    ['several paths in one call', /one call that lists several paths/i],
+    [
+      'the rename source and path are the one multi-path exception',
+      /rename's source and path together[^.]*exception/i,
+    ],
+    [
+      'the manifest is the complete file list',
+      /the manifest in the review context is the complete file list/i,
+    ],
+    ['never rebuild the file list with git', /never rebuild it with git/i],
+  ]
+  for (const [name, pattern] of BODY_PINS) {
+    test(`the template body states: ${name}`, () => {
+      expect(BOUNDED).toMatch(pattern)
+    })
+  }
+
+  const CONTEXT_PINS: readonly (readonly [string, RegExp])[] = [
+    [
+      'the filled-in one-path diff command',
+      /Read one path's diff with this command[^.]*: \{path_diff_command\}/,
+    ],
+    [
+      'the base-side form for old source and deleted files',
+      /git -C \{checkout_path\} show \{base_sha\}:<path>/,
+    ],
+    [
+      'the manifest is the complete file list',
+      /The Manifest below is the complete file list; never rebuild it with git/,
+    ],
+  ]
+  for (const [name, pattern] of CONTEXT_PINS) {
+    test(`the review context carries: ${name}`, () => {
+      expect(REVIEWER_CONTEXT).toMatch(pattern)
+    })
+  }
+
+  test('the command is a documented variable with a form for each head kind', () => {
+    expect(REVIEWER_VARIABLES).toMatch(/`\{path_diff_command\}`/)
+    expect(REVIEWER_VARIABLES).toMatch(
+      /`git -C <checkout_path> diff -U10 <base_sha> <head> -- <path>`/,
+    )
+    expect(REVIEWER_VARIABLES).toMatch(
+      /"working tree"[^|]*`git -C <checkout_path> diff -U10 <base_sha> -- <path>`/,
+    )
+  })
+
+  test('the documented commands run for real against the pinned scope', () => {
+    const row = REVIEWER_TEMPLATE.split('\n').find((line) =>
+      line.startsWith('| `{path_diff_command}`'),
+    )
+    const forms = [...(row ?? '').matchAll(/`(git -C [^`]+)`/g)].map(
+      (match) => match[1] as string,
+    )
+    expect(forms.length).toBe(2)
+    const repo = makeRepo()
+    try {
+      const fill = (command: string, head: string) =>
+        command
+          .replace('<checkout_path>', repo.root)
+          .replace('<base_sha>', repo.base)
+          .replace('<head>', head)
+          .replace('<path>', 'src/keep.ts')
+      const headCommit = git(repo.root, 'rev-parse', 'HEAD')
+      const committed = runShell(
+        repo.root,
+        fill(forms[0] as string, headCommit),
+        {},
+      )
+      expect(committed.status).toBe(0)
+      expect(committed.stdout).toContain('+export const keep = 2')
+      writeFile(repo.root, 'src/keep.ts', 'export const keep = 9\n')
+      const dirty = runShell(repo.root, fill(forms[1] as string, ''), {})
+      expect(dirty.status).toBe(0)
+      expect(dirty.stdout).toContain('+export const keep = 9')
+      expect(dirty.stdout).not.toContain('+export const keep = 2')
+      const oldSource = runShell(
+        repo.root,
+        `git -C ${repo.root} show ${repo.base}:src/gone.ts`,
+        {},
+      )
+      expect(oldSource.stdout).toContain('export const gone = 1')
+    } finally {
+      repo.cleanup()
+    }
+  })
+
+  const CE_PINS: readonly (readonly [string, RegExp])[] = [
+    ['one path per call', /one path's diff per call/i],
+    ['the filled-in command', /filled-in path diff command/i],
+    [
+      'the banned forms',
+      /no path, `git diff --stat`, `git diff --name-only`, or several paths in one call/i,
+    ],
+    ['the manifest is the file list', /manifest as the complete file list/i],
+  ]
+  for (const [name, pattern] of CE_PINS) {
+    test(`the CE agent bundle carries: ${name}`, () => {
+      expect(CE_AGENTS).toMatch(pattern)
+    })
+  }
+
+  test('the deployment agent bundle carries the same rule and command', () => {
+    const deployment = normalize(
+      STAGE_4.slice(
+        STAGE_4.indexOf('**CE conditional agents** (deployment-verification'),
+        STAGE_4.indexOf('**CE agent gate boundary.**'),
+      ),
+    )
+    expect(deployment).toMatch(/one-path diff rule and command/i)
+  })
+
+  test('the parent pastes the scope rules verbatim and never summarizes them', () => {
+    expect(SPAWNING).toMatch(/verbatim/i)
+    expect(SPAWNING).toMatch(/never summarize or paraphrase/i)
+    expect(SPAWNING).toMatch(/exact one-path diff command/i)
+  })
+})
+
 describe('ce:review pinned scope: the head is re-resolved before the report', () => {
   test('the re-check runs before the first finalize call', () => {
     expect(STAGE_6).toMatch(/re-resolve the head/i)
