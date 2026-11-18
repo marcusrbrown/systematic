@@ -41,11 +41,6 @@ uses the canonical `systematic:<category>:<name>` form instead, which the
 content-integrity gate validates against real agent files. Leave `model` unset
 unless the user names a model.
 
-Both forms are enforced. Examples in bundled content must name agents this
-package actually ships, so they work for every reader. A host may provide
-additional agents through the user's own configuration; those are available at
-runtime but must not appear in bundled examples.
-
 ### Dispatch results and continuation
 
 From 2.3.0, `subagent` returns immediately with a handle, not the child's answer: a `sessionID` and `status: "running"`. Record the `sessionID` at dispatch, against the task it was given. The answer arrives later as a `<subagent sessionID="…" state="…">` message that starts a new parent turn, and the message body is the child's answer. Do not poll, sleep or dispatch the same work again while the child runs.

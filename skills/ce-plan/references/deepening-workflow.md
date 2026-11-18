@@ -177,7 +177,7 @@ Refer to the echoed absolute path as `<scratch-dir>` throughout the rest of this
 
 ## 5.3.6 Run Targeted Research
 
-Launch the selected agents in parallel using the execution mode chosen above. If the current platform does not support parallel dispatch, run them sequentially instead. An agent has returned only when its final report arrives (see the active harness profile's *Dispatch results and continuation* section): wait for every report before synthesizing, and do not dispatch the same research again while one is owed. Omit the `mode` parameter when dispatching so the user's configured permission settings apply.
+Launch the selected agents in parallel using the execution mode chosen above. If the current platform does not support parallel dispatch, run them sequentially instead. An agent has returned only when its final report arrives (see the active harness profile's *Dispatch results and continuation* section): wait for every report before synthesizing, and do not dispatch the same research again while one is owed. Dispatch without a permission-mode override so the user's configured permission settings apply.
 
 Prefer local repo and institutional evidence first. Use external research only when the gap cannot be closed responsibly from repo context or already-cited sources.
 

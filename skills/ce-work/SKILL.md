@@ -164,7 +164,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
    - Instruct each subagent: "Do not stage files (`git add`), create commits, or run the project test suite. The orchestrator handles testing, staging, and committing after all parallel units complete."
    - These constraints prevent git index contention and test interference between concurrent subagents
 
-   **Permission mode:** Omit the `mode` parameter when dispatching subagents so the user's configured permission settings apply. Do not pass `mode: "auto"` — it overrides user-level settings like `bypassPermissions`.
+   **Permission mode:** Dispatch subagents without a permission-mode override so the user's configured permission settings apply. The active harness profile names any harness-specific rule.
 
    **Collecting results:** a subagent has completed only when its final report arrives; a launch handle is not a result. The active harness profile's *Dispatch results and continuation* section defines the final report and the continuation call. Record each subagent's id at dispatch, wait for its report without dispatching the same unit again, and continue a subagent through the profile-named call rather than starting a replacement.
 

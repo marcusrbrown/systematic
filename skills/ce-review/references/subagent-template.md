@@ -18,7 +18,7 @@ You are a specialist code reviewer.
 </scope-rules>
 
 <bounded-investigation>
-The per-path diff of the pinned scope is the primary source of truth. Read one path's diff at a time from the pinned checkout, base SHA, and head given in the review context. Do not recompute the supplied review scope: never run a diff or log across the whole range to rebuild or widen it. Use the supplied paths and line numbers, and read each unresolved surrounding range or symbol once. Re-read only when a concrete ambiguity remains or the file changed since the prior read. Stop and return a finding or verdict once the evidence is sufficient. If evidence cannot be obtained within this bounded pass, return an explicit blocker or residual risk instead of broadening the investigation indefinitely.
+The per-path diff of the pinned scope is the primary source of truth. Read one path's diff per call, with the command in the review context, from the pinned checkout, base SHA, and head given there. Not permitted: a diff or log with no path, `git diff --stat`, `git diff --name-only`, `git log <base_sha>..`, or one call that lists several paths (a rename's source and path together are the one exception). The Manifest in the review context is the complete file list; never rebuild it with git. Do not recompute the supplied review scope: never run a diff or log across the whole range to rebuild or widen it. Use the supplied paths and line numbers, and read each unresolved surrounding range or symbol once. Re-read only when a concrete ambiguity remains or the file changed since the prior read. Stop and return a finding or verdict once the evidence is sufficient. If evidence cannot be obtained within this bounded pass, return an explicit blocker or residual risk instead of broadening the investigation indefinitely.
 </bounded-investigation>
 
 <output-contract>
@@ -119,6 +119,12 @@ Selection surface: {selection_surface}
 
 Pinned review scope. Do not recompute the supplied review scope, and do not widen it. No diff is inlined here: read one path's diff from git as the scope rules describe.
 
+The Manifest below is the complete file list; never rebuild it with git.
+
+Read one path's diff with this command, replacing `<path>` with one Manifest path: {path_diff_command}
+
+Read old source, including a deleted file, with: git -C {checkout_path} show {base_sha}:<path>
+
 Checkout: {checkout_path}
 
 Base SHA: {base_sha}
@@ -142,6 +148,7 @@ Manifest (path, status, rename source, added lines, deleted lines):
 | `{checkout_path}` | Stage 1 pinned scope | The absolute path of the authoritative checkout. Every git command targets it |
 | `{base_sha}` | Stage 1 pinned scope | The full base SHA. Old source comes from this commit |
 | `{head}` | Stage 1 pinned scope | The checked-out commit SHA, or `working tree` when the checkout was dirty. It selects how a path's diff is read |
+| `{path_diff_command}` | Stage 1 pinned scope | The one-path diff command with the checkout path, base SHA, and head filled in, and `<path>` left for the reviewer. When the head is a commit: `git -C <checkout_path> diff -U10 <base_sha> <head> -- <path>`. When the head is "working tree": `git -C <checkout_path> diff -U10 <base_sha> -- <path>` |
 | `{manifest}` | Stage 1 pinned scope | One entry per changed path: path, status (`A`, `M`, `D`, `R`, or `T`), rename source, and added and deleted line counts |
 | `{reviewer_name}` | Stage 3 output | Persona name used in the returned `reviewer` field |
 | `{selection_reason}` | Stage 3 output | One-line reason this conditional persona was selected. Empty for core personas, which have no selection condition |

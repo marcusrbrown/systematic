@@ -502,15 +502,15 @@ Capture the actual invoking harness once in the parent (`opencode`, `pi`, or `cl
 
 #### Spawning
 
-Omit the `mode` parameter when dispatching sub-agents so the user's configured permission settings apply. Do not pass `mode: "auto"`.
+Dispatch sub-agents without a permission-mode override so the user's configured permission settings apply.
 
 Spawn each selected persona reviewer as a parallel sub-agent using the subagent template included below. Each persona sub-agent receives:
 
 1. Their persona file content (identity, failure modes, calibration, suppress conditions)
-2. Shared diff-scope rules from the diff-scope reference included below, which say how to read one path of the pinned scope
+2. Shared diff-scope rules from the diff-scope reference included below, which say how to read one path of the pinned scope. Paste them verbatim into the `<scope-rules>` slot; never summarize or paraphrase them
 3. The JSON output contract from the reviewer return schema included below, with its populated example
 4. PR metadata: title, body, and URL when reviewing a PR (empty string otherwise). Passed in a `<pr-context>` block so reviewers can verify code against stated intent
-5. Review context: intent summary and the pinned scope (checkout path, base SHA, head, and manifest). The parent passes no inline diff, so a reviewer reads one path's diff from git against those values and never recomputes the scope
+5. Review context: intent summary and the pinned scope (checkout path, base SHA, head, and manifest). The parent passes no inline diff, so a reviewer reads one path's diff from git against those values and never recomputes the scope. Fill the `{path_diff_command}` slot with the exact one-path diff command for the pinned head, leaving only `<path>` open
 6. Reviewer name for the returned `reviewer` field
 7. **Selected structured conditionals only:** the `selection_reason` and non-empty `selection_surface` from Stage 3, passed into the review context. Core personas receive empty values for both
 8. **For `project-standards` only:** the standards file path list from Stage 3b, wrapped in a `<standards-paths>` block appended to the review context
@@ -553,9 +553,9 @@ Each persona sub-agent returns one full JSON payload (all schema fields) to the 
 
 Returning the detail tier inline increases parent context per persona. The previous compact/detail split kept synthesis context lean, so this is an intentional cost of deleting the sub-agent write path. Verify it against a real multi-persona run. If it materially degrades synthesis, use a second targeted request per persona and keep the write parent-side; never restore sub-agent disk access.
 
-**CE conditional agents** (agent-native-reviewer, learnings-researcher) are dispatched as standard Agent calls when their Stage 3 triggers apply, in parallel with the persona agents. Give them the same review context bundle the personas receive (entry mode, any PR metadata gathered in Stage 1, intent summary, review base branch name when known, the pinned checkout path, base SHA, head, and manifest, and `UNTRACKED:` scope notes, with no inline diff) plus the selection reason and triggering surface. Do not invoke them with a generic "review this" prompt. Their output is unstructured and synthesized separately in Stage 6; they never receive a raw-return dispatch record.
+**CE conditional agents** (agent-native-reviewer, learnings-researcher) are dispatched as standard Agent calls when their Stage 3 triggers apply, in parallel with the persona agents. Give them the same review context bundle the personas receive (entry mode, any PR metadata gathered in Stage 1, intent summary, review base branch name when known, the pinned checkout path, base SHA, head, and manifest, and `UNTRACKED:` scope notes, with no inline diff) plus the selection reason and triggering surface. The bundle also carries the one-path rule and the exact command: read one path's diff per call with the filled-in path diff command, never run a diff or log with no path, `git diff --stat`, `git diff --name-only`, or several paths in one call, and treat the manifest as the complete file list. Do not invoke them with a generic "review this" prompt. Their output is unstructured and synthesized separately in Stage 6; they never receive a raw-return dispatch record.
 
-**CE conditional agents** (deployment-verification-agent) are also dispatched as standard Agent calls when applicable. Pass the same review context bundle plus the selection reason and triggering surface (for example, which migration files triggered the agent). Their output is unstructured and must be preserved for Stage 6 synthesis just like the other CE conditional agents.
+**CE conditional agents** (deployment-verification-agent) are also dispatched as standard Agent calls when applicable. Pass the same review context bundle, including the one-path diff rule and command, plus the selection reason and triggering surface (for example, which migration files triggered the agent). Their output is unstructured and must be preserved for Stage 6 synthesis just like the other CE conditional agents.
 
 **CE agent gate boundary.** Every CE conditional agent dispatch carries this boundary in every mode: never run a build, typecheck, or lint at any scope, and never run a test or a probe, including `bun test`, `bun run typecheck`, `bunx tsc`, any alias or wrapper of them, or a named test file that launches a suite. Use non-mutating inspection only. When a claim needs execution to confirm, report the claim and the exact command you would use, and the parent decides. See [Verification gates](#verification-gates).
 
