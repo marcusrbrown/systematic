@@ -91,7 +91,8 @@ function parentFinal(toolText: string): ChatRequest {
   )
 }
 
-// What OpenCode v2 2.3.0 and later do: the `subagent` tool returns this at once
+// What an OpenCode v2 host that runs every subagent in the background does:
+// the `subagent` tool returns this at once
 // (anomalyco/opencode#63382), and the child's answer comes back later as a
 // `<subagent>` user message that wakes the parent.
 const LAUNCH_HANDLE =

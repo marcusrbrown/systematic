@@ -261,11 +261,11 @@ function lastToolText(request: ChatRequest): string | undefined {
 }
 
 /**
- * OpenCode v2 2.3.0 runs every subagent in the background
- * (anomalyco/opencode#63382). The `subagent` tool returns this handle at once,
- * and the child's answer reaches the parent later, as a `<subagent>` user
- * message that starts a new parent turn. Earlier hosts and v1 hand the answer
- * back inline as the tool result.
+ * An OpenCode v2 host that runs every subagent in the background
+ * (anomalyco/opencode#63382) has the `subagent` tool return this handle at
+ * once, and the child's answer reaches the parent later, as a `<subagent>` user
+ * message that starts a new parent turn. A v2 host that runs a subagent in the
+ * foreground, and v1, hand the answer back inline as the tool result.
  */
 const SUBAGENT_LAUNCH_PATTERN =
   /^The subagent is working in the background \(sessionID: /
