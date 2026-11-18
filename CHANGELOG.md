@@ -4,6 +4,31 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.35.1](https://github.com/marcusrbrown/systematic/compare/v3.35.0...v3.35.1) (2026-11-18)
+
+### Bug Fixes
+
+* make ce:work dispatch harness-neutral and settle errored continuations and report bodies ([#1447](https://github.com/marcusrbrown/systematic/issues/1447)) ([f3c6711](https://github.com/marcusrbrown/systematic/commit/f3c67112b106f9b9b149d1430e4f9d353ba520d2))
+* wait for and continue background subagents in the orchestrating skills ([#1442](https://github.com/marcusrbrown/systematic/issues/1442)) ([25c960a](https://github.com/marcusrbrown/systematic/commit/25c960abdebda751232c4a39f21cb79ad44eee81))
+
+### Build System
+
+* **deps:** update OpenCode v2 to v2.3.0 ([#1429](https://github.com/marcusrbrown/systematic/issues/1429)) ([d04879a](https://github.com/marcusrbrown/systematic/commit/d04879a3a6608b28e1b9b2708fe0dc57eca8aebb))
+
+### Tests
+
+* make the v2 host-contract bootstrap proof and pin guard version-neutral ([#1444](https://github.com/marcusrbrown/systematic/issues/1444)) ([96aa711](https://github.com/marcusrbrown/systematic/commit/96aa711caac9cbbf69a144da5f0492be0bf9ccdc))
+* wait for background subagent reports in the v2 host contract ([#1438](https://github.com/marcusrbrown/systematic/issues/1438)) ([3859674](https://github.com/marcusrbrown/systematic/commit/3859674fe8784dbfcece63fee7d1bc2745808717))
+
+### Continuous Integration
+
+* **connect:** run the connect agent under isolate-agent ([#1441](https://github.com/marcusrbrown/systematic/issues/1441)) ([56b530e](https://github.com/marcusrbrown/systematic/commit/56b530ed9a22c4974c2d352cc4bce64546d2bfaa))
+* **deps:** update Systematic to v3.35.0 ([#1437](https://github.com/marcusrbrown/systematic/issues/1437)) ([fb9e34d](https://github.com/marcusrbrown/systematic/commit/fb9e34d6be44748ea705f99ab25918dc8e8ebd3d))
+
+### Miscellaneous Chores
+
+* **dev:** update dependency playwright to v1.65.1 ([#1435](https://github.com/marcusrbrown/systematic/issues/1435)) ([646ae76](https://github.com/marcusrbrown/systematic/commit/646ae769ebd5b0b1715a8a13f18bf9d9c44ce7e7))
+
 ## [3.35.0](https://github.com/marcusrbrown/systematic/compare/v3.34.0...v3.35.0) (2026-11-17)
 
 ### Features
