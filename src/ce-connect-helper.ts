@@ -599,6 +599,8 @@ interface AcceptedCandidate {
   readonly refreshPointer?: string
   readonly possibleMatches: readonly string[]
   readonly candidate: ValidCandidate
+  /** The generation the ledger gives a reopened candidate; absent for a new one. */
+  readonly generation?: number
   /** The checkout HEAD each `counterevidence` item was recorded at, for an import. */
   readonly evidenceHeads?: ReadonlyArray<string | undefined>
 }
@@ -1670,10 +1672,13 @@ function noteDropped(
   result.droppedCandidates.push(nameDropped(family, raw, reason))
 }
 
-function standingOf(
-  outcome: CandidateStanding,
-):
-  | { standing: Standing; refreshPointer?: string; possible: string[] }
+function standingOf(outcome: CandidateStanding):
+  | {
+      standing: Standing
+      refreshPointer?: string
+      possible: string[]
+      generation?: number
+    }
   | 'skip' {
   if (outcome.standing === 'new') {
     return { standing: 'new', possible: [...outcome.possibleMatches] }
@@ -1682,6 +1687,7 @@ function standingOf(
     return {
       standing: outcome.reason,
       possible: [],
+      generation: outcome.generation,
       ...(outcome.refreshPointer === undefined
         ? {}
         : { refreshPointer: outcome.refreshPointer }),
@@ -1750,6 +1756,9 @@ function classifyAgainstLedger(
       : { refreshPointer: standing.refreshPointer }),
     possibleMatches,
     candidate,
+    ...(standing.generation === undefined
+      ? {}
+      : { generation: standing.generation }),
   })
 }
 
@@ -1948,6 +1957,7 @@ function validateResponse(
       ...(item.refreshPointer === undefined
         ? {}
         : { refreshPointer: item.refreshPointer }),
+      ...(item.generation === undefined ? {} : { generation: item.generation }),
     })),
     recorded: classified.recorded.map((item) => ({
       pointer: item.pointer,
@@ -2220,6 +2230,7 @@ function digestModel(
       : { refreshPointer: item.refreshPointer }),
     possibleMatches: item.possibleMatches,
     candidate: item.candidate,
+    ...(item.generation === undefined ? {} : { generation: item.generation }),
   }))
   const projects: DigestProject[] = snapshot.projects.map((project) => ({
     name: project.name,
@@ -2555,19 +2566,26 @@ function publishRunOp(
 
 // ── decide and ledger ───────────────────────────────────────────────────────
 
+/** A generation a digest showed: a non-negative integer. */
+function isGeneration(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
 function parseDecision(request: unknown): DecideInput | undefined {
   if (!isRecord(request)) return undefined
-  const { id, status, reason, destination } = request
+  const { id, status, reason, destination, generation } = request
   if (typeof id !== 'string' || typeof reason !== 'string') return undefined
   if (status !== 'promoted' && status !== 'rejected') return undefined
   if (destination !== undefined && typeof destination !== 'string') {
     return undefined
   }
+  if (generation !== undefined && !isGeneration(generation)) return undefined
   return {
     id,
     status,
     reason,
     ...(destination === undefined ? {} : { destination }),
+    ...(generation === undefined ? {} : { generation }),
   }
 }
 
@@ -2593,6 +2611,11 @@ function decisionResult(
       ok: false,
       body: { ok: false, op: 'decide', outcome: 'busy', reason: result.reason },
     }
+  }
+  if (result.reason === 'stale-generation') {
+    return failure('decide', result.reason, {
+      hint: 'The candidate was reopened since the digest you decided from. Nothing was recorded. Read the current digest or run again, then decide against the generation it shows.',
+    })
   }
   return failure('decide', result.reason)
 }

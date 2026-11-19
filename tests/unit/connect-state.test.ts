@@ -2448,6 +2448,30 @@ describe('the decision generation of a ledger entry', () => {
     }
   })
 
+  it('names the generation a reopen will give in the standing it returns', () => {
+    const { s, id } = opened()
+    const ledger = () => {
+      const read = readLedger(s.root)
+      if (read.status !== 'ok') throw new Error('ledger unreadable')
+      return read.ledger
+    }
+    expect(classifyCandidate(ledger(), candidate())).toMatchObject({
+      standing: 'suppressed',
+    })
+    expect(classifyCandidate(ledger(), candidate())).not.toHaveProperty(
+      'generation',
+    )
+
+    reopen(s, id, changed)
+    expect(classifyCandidate(ledger(), changedAgain)).toMatchObject({
+      standing: 'reopened',
+      generation: 2,
+    })
+    // What the standing names is what the ledger then holds.
+    reopen(s, id, changedAgain)
+    expect(ledgerEntries(s.root)[0]).toMatchObject({ generation: 2 })
+  })
+
   it('writes a ledger the shipped reader still loads after a reopen', () => {
     const { s, id } = opened()
     reopen(s, id, changed)

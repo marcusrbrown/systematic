@@ -34,7 +34,7 @@ Suppressing on path alone bypasses the ledger's changed-source decision.
 
 ## Solution
 
-Put the change signal in front of the shortcut. `classifyOne` still calls `findRecorded` first, because it is cheap and deterministic, but it now suppresses only when the ledger would not reopen the candidate for changed sources (`src/ce-connect-helper.ts:1757-1763` `reopensForChangedSources`; `src/ce-connect-helper.ts:1777-1825` `classifyOne`):
+Put the change signal in front of the shortcut. `classifyOne` still calls `findRecorded` first, because it is cheap and deterministic, but it now suppresses only when the ledger would not reopen the candidate for changed sources (`src/ce-connect-helper.ts:1772-1778` `reopensForChangedSources`; `src/ce-connect-helper.ts:1792-1840` `classifyOne`):
 
 ```ts
 // Before (reconstructed from the order of the checks): a citation of the
@@ -55,7 +55,7 @@ classifyAgainstLedger(check.candidate, record, input, result)
 The two neighbouring defects were fixed in the same pass:
 
 - **A contradiction must span projects.** The shape check required two sources and the target among them, but not a second project. A candidate with two learnings from the target alone is now dropped as `same-project-contradiction` (`contradictionProblem`, `src/lib/connect-helper-core.ts:1201-1219`).
-- **Lost evidence degrades the run.** A candidate dropped as `changed-since-begin` now adds the degrade reason `evidence-changed` and holds its rule back from the covered set, so the rule is offered again. A plain rejection stays non-degrading (`classifyOne`, `src/ce-connect-helper.ts:1777-1825`; `holdBack`, `src/ce-connect-helper.ts:1765-1775`).
+- **Lost evidence degrades the run.** A candidate dropped as `changed-since-begin` now adds the degrade reason `evidence-changed` and holds its rule back from the covered set, so the rule is offered again. A plain rejection stays non-degrading (`classifyOne`, `src/ce-connect-helper.ts:1792-1840`; `holdBack`, `src/ce-connect-helper.ts:1781-1790`).
 
 ## Why This Works
 

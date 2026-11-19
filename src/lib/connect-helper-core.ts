@@ -1546,6 +1546,12 @@ export interface DigestCandidate {
   readonly possibleMatches: readonly string[]
   readonly candidate: ValidCandidate
   /**
+   * How often the ledger has reopened this candidate, counting the reopen this
+   * run records. A decision sends it back so one made from an older digest is
+   * refused. Left out for a candidate that never reopened, which is 0.
+   */
+  readonly generation?: number
+  /**
    * The checkout HEAD each `counterevidence` item was recorded at, in the same
    * order. An import sets it, because it cannot find an item's HEAD by the item's
    * local root: two recorded checkouts can map to one local root. An entry is
@@ -1766,6 +1772,13 @@ function headsOf(projects: readonly DigestProject[]): Map<string, string> {
   return heads
 }
 
+/** The generation of a reopened candidate as one line; nothing at generation 0, so older output stays as it was. */
+function generationLines(item: DigestCandidate, prefix: string): string[] {
+  return item.generation === undefined || item.generation === 0
+    ? []
+    : [`${prefix}Generation: ${item.generation}`]
+}
+
 export function renderCandidate(
   item: DigestCandidate,
   index: number,
@@ -1783,6 +1796,7 @@ export function renderCandidate(
       : [`- Reason: ${candidate.reason}`]),
     `- Next step: ${candidate.nextStep}`,
     `- Status: candidate`,
+    ...generationLines(item, '- '),
   ]
   if (item.refreshPointer !== undefined) {
     out.push(`- Refresh pointer: ${inline(item.refreshPointer)}`)
@@ -2029,6 +2043,7 @@ function candidateLines(model: DigestModel, runRecordPath: string): string[] {
     const label = reason === undefined ? kind : `${kind} (${reason})`
     out.push(quote(`${label}: ${title}`))
     out.push(handoffLine(item, runRecordPath, pasteable))
+    out.push(...generationLines(item, ''))
   }
   const promotesLesson = titles.some(
     (item) =>

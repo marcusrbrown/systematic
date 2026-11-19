@@ -614,6 +614,40 @@ function section(text: string, from: string, to: string): string {
   return text.slice(start, end)
 }
 
+describe('ce:connect decide binds a decision to the digest generation', () => {
+  const step7 = section(skillText, '## Step 7', '## Final line')
+  const decideBlock =
+    /connect\.mjs" decide <<'(JSON_[0-9a-f]+)'\n([\s\S]*?)\n\1\n/.exec(
+      step7,
+    )?.[2] ?? ''
+  const paragraph = step7
+    .split('\n\n')
+    .find((text) => text.startsWith('Always send `generation`'))
+
+  test('sends generation in the decide request, beside the id, status and reason', () => {
+    expect(decideBlock).toContain('"id"')
+    expect(decideBlock).toContain('"status"')
+    expect(decideBlock).toContain('"reason"')
+    expect(decideBlock).toContain('"generation": <generation>')
+  })
+
+  test('takes the number from the Generation line of the candidate, or 0 when it has none', () => {
+    if (paragraph === undefined) throw new Error('no generation paragraph')
+    expect(paragraph).toMatch(/number on the `Generation:` line/)
+    expect(paragraph).toMatch(/digest/)
+    expect(paragraph).toMatch(/no such line[^.]*send `0`/)
+    expect(paragraph).toMatch(/never one of your own/)
+  })
+
+  test('on stale-generation prints the hint and does not retry', () => {
+    if (paragraph === undefined) throw new Error('no generation paragraph')
+    expect(paragraph).toMatch(/`reason` `stale-generation`/)
+    expect(paragraph).toMatch(/nothing was recorded/i)
+    expect(paragraph).toMatch(/Print its `hint`/)
+    expect(paragraph).toMatch(/do not retry/i)
+  })
+})
+
 describe('ce:connect rotation across runs', () => {
   const step4 = section(skillText, '## Step 4', '## Step 5')
 

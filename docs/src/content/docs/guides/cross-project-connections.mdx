@@ -318,6 +318,8 @@ After you promote or turn down a candidate, tell the ledger. In an interactive r
 
 The ledger suppresses a candidate whose sources and target evidence have not changed, whatever its status. A changed source reopens it as "sources changed"; changed target evidence reopens it as "target changed".
 
+Each reopen adds one to a count the ledger keeps for the candidate, its generation. The digest shows it on a reopened candidate as `Generation: <n>` (the summary repeats it under the title), and a candidate that never reopened shows nothing, which is generation 0. When the skill records a decision it sends the generation of the digest you decided from. If the candidate was reopened after that digest, the helper refuses with `stale-generation`, records nothing and says to read the current digest first. A decision sent without a generation is recorded as before.
+
 A code mismatch is decided one claim at a time: a `stale` and an `unscoped` finding on one claim are separate decisions, and an edited claim is a new candidate. It reopens as "sources changed" when its learning changes, and as "evidence changed" when a recorded evidence file changes or disappears. A different set of evidence over unchanged files does not reopen it. A sibling learning that cites the learning does not mark the candidate as already recorded.
 
 ## Manage the ledger

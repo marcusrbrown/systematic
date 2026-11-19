@@ -4221,6 +4221,102 @@ describe('code-mismatch candidates in a run', () => {
   })
 })
 
+describe('decide against the generation of a digest', () => {
+  /** Run 1 proposes a candidate, it is rejected, and run 2 reopens it because its evidence changed. */
+  function reopenedCandidate() {
+    const { world, evidence } = mismatchWorld()
+    const first = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence)]),
+    ])
+    const id = String(accepted(first.validated)[0]?.id)
+    decideRejected(world, id)
+    const changed = `${PROXY_CONFIG}# edited\n`
+    fs.writeFileSync(path.join(evidence, 'Caddyfile'), changed)
+    const second = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence, changed)]),
+    ])
+    expect(accepted(second.validated)).toMatchObject([
+      { id, standing: 'evidence changed' },
+    ])
+    return { world, id, first, second }
+  }
+
+  const decision = (id: string, over: Json = {}): Json => ({
+    id,
+    status: 'rejected',
+    reason: 'Checked by hand; not needed.',
+    ...over,
+  })
+
+  function statusIn(world: World, id: string): unknown {
+    const shown = ok(runHelperOp('ledger-show', {}, world.deps))
+    return (shown.entries as Json[]).find((entry) => entry.id === id)?.status
+  }
+
+  it('shows the generation of a reopened candidate in the digest, the summary and the validate answer', () => {
+    const { id, first, second } = reopenedCandidate()
+    expect(readDigest(second.published)).toContain('- Generation: 1')
+    expect(String(second.published.summary)).toContain('Generation: 1')
+    expect(accepted(second.validated)[0]).toMatchObject({ id, generation: 1 })
+    // The first digest is as it was: no generation to show or send.
+    expect(readDigest(first.published)).not.toContain('Generation')
+    expect(String(first.published.summary)).not.toContain('Generation')
+    expect(accepted(first.validated)[0]).not.toHaveProperty('generation')
+  })
+
+  it('applies a decision that carries the generation the digest showed', () => {
+    const { world, id } = reopenedCandidate()
+    const body = ok(
+      runHelperOp('decide', decision(id, { generation: 1 }), world.deps),
+    )
+    expect(body.status).toBe('decided')
+    expect(statusIn(world, id)).toBe('rejected')
+  })
+
+  it('refuses a decision made from a digest older than the reopen, and the candidate stays open', () => {
+    const { world, id } = reopenedCandidate()
+    const body = failed(
+      runHelperOp('decide', decision(id, { generation: 0 }), world.deps),
+    )
+    expect(body).toMatchObject({
+      outcome: 'failed',
+      op: 'decide',
+      reason: 'stale-generation',
+    })
+    expect(String(body.hint)).toContain('reopened')
+    expect(statusIn(world, id)).toBe('candidate')
+    expect(fs.existsSync(path.join(world.stateRoot, 'lock'))).toBe(false)
+  })
+
+  it('takes the generation a digest without one means as 0', () => {
+    const { world, id, first } = reopenedCandidate()
+    // The digest of the first run names no generation, so a skill sends 0.
+    expect(readDigest(first.published)).not.toContain('Generation')
+    expect(
+      failed(runHelperOp('decide', decision(id, { generation: 0 }), world.deps))
+        .reason,
+    ).toBe('stale-generation')
+  })
+
+  it('still decides when no generation is sent', () => {
+    const { world, id } = reopenedCandidate()
+    const body = ok(runHelperOp('decide', decision(id), world.deps))
+    expect(body.status).toBe('decided')
+    expect(statusIn(world, id)).toBe('rejected')
+  })
+
+  it('refuses a generation that is not a non-negative integer', () => {
+    const { world, id } = reopenedCandidate()
+    for (const generation of [-1, 1.5, '1', null, true, Number.MAX_VALUE]) {
+      expect(
+        failed(runHelperOp('decide', decision(id, { generation }), world.deps))
+          .reason,
+      ).toBe('invalid-request')
+    }
+    expect(statusIn(world, id)).toBe('candidate')
+  })
+})
+
 describe('a decided code-mismatch candidate across runs', () => {
   function firstRun(): MismatchWorld & { id: string } {
     const built = mismatchWorld()

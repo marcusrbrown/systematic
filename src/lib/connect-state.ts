@@ -1238,6 +1238,8 @@ export type CandidateStanding =
       readonly id: string
       readonly reason: ReopenReason
       readonly priorStatus: LedgerStatus
+      /** The generation the reopened entry has once the run is published: one more than before. */
+      readonly generation: number
       /** Where the promoted learning lives, when a promoted entry's sources changed. */
       readonly refreshPointer?: string
     }
@@ -1370,6 +1372,7 @@ export function classifyCandidate(
     }
   }
   const sourcesSame = sameSources(sources, prior)
+  const reopenedGeneration = generationOf(prior) + 1
   const pointer =
     prior.status === 'promoted' && prior.destination !== undefined
       ? { refreshPointer: prior.destination }
@@ -1380,6 +1383,7 @@ export function classifyCandidate(
       id,
       reason: 'sources changed',
       priorStatus: prior.status,
+      generation: reopenedGeneration,
       ...pointer,
     }
   }
@@ -1389,6 +1393,7 @@ export function classifyCandidate(
       id,
       reason: 'evidence changed',
       priorStatus: prior.status,
+      generation: reopenedGeneration,
       ...pointer,
     }
   }
@@ -1400,6 +1405,7 @@ export function classifyCandidate(
     id,
     reason: 'target changed',
     priorStatus: prior.status,
+    generation: reopenedGeneration,
   }
 }
 
@@ -1534,7 +1540,7 @@ function applyCandidates(
               ...mismatchFields(candidate),
               status: 'candidate',
               ...reopenedFields(outcome.reason),
-              generation: generationOf(entry) + 1,
+              generation: outcome.generation,
               history: [...entry.history, snapshot(entry)].slice(-MAX_HISTORY),
               recordedAt,
             }
