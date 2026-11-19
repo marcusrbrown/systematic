@@ -268,6 +268,181 @@ function startToolModelServer(): ToolScriptedModel {
   return model
 }
 
+interface ResponsesRequestBody {
+  tools?: unknown[]
+  input?: unknown
+}
+
+interface ResponsesScriptedModel extends ScriptedModelServer {
+  /** Every request body the host sent, in arrival order, title request included. */
+  requests: ResponsesRequestBody[]
+}
+
+function responsesItems(body: ResponsesRequestBody): Record<string, unknown>[] {
+  return Array.isArray(body.input)
+    ? body.input.filter(
+        (item): item is Record<string, unknown> =>
+          typeof item === 'object' && item !== null,
+      )
+    : []
+}
+
+/**
+ * The `output` of every `function_call_output` item in a request, as the host
+ * sent it: a string, or an array of content parts. Nothing is flattened, which
+ * is the point: the chat wire turns both into one string.
+ */
+function functionCallOutputs(body: ResponsesRequestBody): Map<string, unknown> {
+  return new Map(
+    responsesItems(body)
+      .filter((item) => item.type === 'function_call_output')
+      .map((item) => [String(item.call_id), item.output]),
+  )
+}
+
+/** The Responses stream for one scripted answer: a tool call, or plain text. */
+function responsesStreamEvents(
+  response: ScriptedResponse,
+  n: number,
+): Record<string, unknown>[] {
+  const calls = response.toolCalls ?? []
+  const items: Record<string, unknown>[] =
+    calls.length > 0
+      ? calls.map((call, index) => ({
+          type: 'function_call',
+          id: `fc_${n}_${index}`,
+          call_id: call.id,
+          name: call.name,
+          arguments: JSON.stringify(call.arguments),
+          status: 'completed',
+        }))
+      : [
+          {
+            type: 'message',
+            id: `msg_${n}`,
+            role: 'assistant',
+            status: 'completed',
+            content: [
+              {
+                type: 'output_text',
+                text: response.text ?? '',
+                annotations: [],
+              },
+            ],
+          },
+        ]
+  const events: Record<string, unknown>[] = []
+  for (const [index, item] of items.entries()) {
+    events.push({
+      type: 'response.output_item.added',
+      output_index: index,
+      item: {
+        ...item,
+        status: 'in_progress',
+        ...(item.type === 'function_call'
+          ? { arguments: '' }
+          : { content: [] }),
+      },
+    })
+    if (item.type === 'function_call') {
+      events.push(
+        {
+          type: 'response.function_call_arguments.delta',
+          item_id: item.id,
+          output_index: index,
+          delta: item.arguments,
+        },
+        {
+          type: 'response.function_call_arguments.done',
+          item_id: item.id,
+          output_index: index,
+          arguments: item.arguments,
+        },
+      )
+    } else {
+      events.push({
+        type: 'response.output_text.delta',
+        item_id: item.id,
+        output_index: index,
+        content_index: 0,
+        delta: response.text ?? '',
+      })
+    }
+    events.push({
+      type: 'response.output_item.done',
+      output_index: index,
+      item,
+    })
+  }
+  events.push({
+    type: 'response.completed',
+    response: {
+      id: `resp_${n}`,
+      status: 'completed',
+      output: items,
+      usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+    },
+  })
+  return events
+}
+
+/**
+ * A scripted model on the OpenAI Responses wire. It scripts like
+ * `startToolModelServer` (a `@@TOOL <name> <json>` line in the latest user
+ * message becomes one tool call, a tool result is answered with text, and a
+ * request that offers no tools is the title request) and keeps every request
+ * body untouched so a test can read the wire.
+ */
+function startResponsesModelServer(): ResponsesScriptedModel {
+  const requests: ResponsesRequestBody[] = []
+  let answered = 0
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      if (request.method !== 'POST' || !request.url.endsWith('/responses')) {
+        return new Response('not found', { status: 404 })
+      }
+      const body = (await request.json()) as ResponsesRequestBody
+      requests.push(body)
+      const items = responsesItems(body)
+      const hasTools = Array.isArray(body.tools) && body.tools.length > 0
+      const lastUser = items.findLast((item) => item.role === 'user')
+      const userText = messageText({ content: lastUser?.content })
+      const call = /@@TOOL (\S+) (.*)$/m.exec(userText)
+      let response: ScriptedResponse
+      if (!hasTools) response = { text: 'Scripted title' }
+      else if (items.at(-1)?.type === 'function_call_output')
+        response = { text: 'Tool call finished.' }
+      else if (call?.[1] === undefined || call[2] === undefined)
+        response = { text: 'Scripted reply' }
+      else
+        response = {
+          toolCalls: [
+            {
+              id: 'call-1',
+              name: call[1],
+              arguments: JSON.parse(call[2]) as Record<string, unknown>,
+            },
+          ],
+        }
+      answered += 1
+      const payload = responsesStreamEvents(response, answered)
+        .map(
+          (event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+        )
+        .join('')
+      return new Response(payload, {
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    },
+  })
+  return {
+    url: `http://localhost:${server.port}/v1`,
+    stop: () => server.stop(true),
+    requests,
+  }
+}
+
 /**
  * A scripted model that answers every request from a delegated-search script.
  * The script decides each turn from the request, so the server keeps no state.
@@ -479,11 +654,13 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       pluginSpec: string,
       toolModel: ScriptedModelServer,
       extraConfig: Record<string, unknown> = {},
+      wire: 'chat' | 'responses' = 'chat',
     ) {
       const configContent = withScriptedProvider(
         JSON.stringify({ plugins: [pluginSpec], ...extraConfig }),
         toolModel.url,
         HOST,
+        wire,
       )
       const server = await startOpencodeServer(
         fixture,
@@ -1920,6 +2097,91 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
         } finally {
           toolModel.stop()
           await host.server.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a skill under the host limit reaches the Responses wire as the same function_call_output with a store entry and after a restart',
+      async () => {
+        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
+        // What the tool produces for this skill, from the packed copy by its real
+        // path (the one the host loads), so the base directory in the text matches.
+        const expected = createSkillToolDescriptor({
+          bundledSkillsDir: path.join(fs.realpathSync(packageDir), 'skills'),
+          disabledSkills: [],
+        }).load({ name: 'git-worktree' }).output
+        // The premise: the host does not cut this skill (51200 bytes, 2000 lines).
+        expect(Buffer.byteLength(expected)).toBeLessThanOrEqual(51_200)
+        expect(expected.split('\n').length).toBeLessThanOrEqual(2000)
+        const responses = startResponsesModelServer()
+        const prompt = async (
+          host: Awaited<ReturnType<typeof startAgentHost>>,
+          sessionID: string,
+          text: string,
+        ) => {
+          await host.client.session.prompt({ sessionID, text })
+          await host.client.session.wait({ sessionID })
+        }
+        try {
+          // One process: the store holds the load, so the hook runs on every request.
+          const live = await startAgentHost(
+            pluginSpec,
+            responses,
+            {},
+            'responses',
+          )
+          let sessionID: string
+          try {
+            const session = await live.client.session.create({
+              location: { directory: fixture.projectDir },
+              model: { providerID: SCRIPTED_PROVIDER, id: SCRIPTED_MODEL },
+            })
+            sessionID = session.id
+            await prompt(
+              live,
+              sessionID,
+              '@@TOOL systematic_skill {"name":"git-worktree"}',
+            )
+            await prompt(live, sessionID, 'Carry on.')
+          } finally {
+            await live.server.stop()
+          }
+          const liveOutputs = responses.requests
+            .map((body) => functionCallOutputs(body).get('call-1'))
+            .filter((output) => output !== undefined)
+          // The continuation request and the follow-up both carry the load.
+          expect(liveOutputs).toHaveLength(2)
+
+          // A new process: its store is empty, so the hook has nothing to restore.
+          const restarted = await startAgentHost(
+            pluginSpec,
+            responses,
+            {},
+            'responses',
+          )
+          try {
+            await prompt(restarted, sessionID, 'Carry on after the restart.')
+          } finally {
+            await restarted.server.stop()
+          }
+          const outputs = responses.requests
+            .map((body) => functionCallOutputs(body).get('call-1'))
+            .filter((output) => output !== undefined)
+          expect(outputs).toHaveLength(3)
+
+          // The raw wire value, not its text: a string is not `[{ type: 'input_text' }]`,
+          // and the provider caches by the bytes of the history. Every request
+          // carries exactly the full skill text, so a result that is the same on
+          // every request but cut, or wrapped, fails too.
+          for (const [index, output] of outputs.entries()) {
+            expect(output, `request ${index + 1} carries the full skill`).toBe(
+              expected,
+            )
+          }
+        } finally {
+          responses.stop()
         }
       },
       TIMEOUT_MS,

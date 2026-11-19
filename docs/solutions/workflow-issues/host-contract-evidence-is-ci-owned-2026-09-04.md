@@ -67,7 +67,7 @@ with no binary configured throws (`opencodeLauncherArgv`).
 `--version` under a caller-built, isolated env and classifies the result as
 `available`, `mismatch`, or `unavailable` — it never throws and never
 memoizes. Every fixture-consuming suite wraps it in a memoizing
-`isOpencodeAvailable()` (`tests/integration/fixtures/opencode-host.ts:273`).
+`isOpencodeAvailable()` (`tests/integration/fixtures/opencode-host.ts:276`).
 
 The evidence itself is five job kinds in `.github/workflows/main.yaml`:
 

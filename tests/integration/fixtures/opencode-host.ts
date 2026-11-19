@@ -48,6 +48,9 @@ const SCRIPTED_MODEL_ID = 'systematic-host-contract-model'
 const SCRIPTED_PROVIDER_KEY_ENV = 'SYSTEMATIC_HOST_CONTRACT_KEY'
 // A v2 host's OpenAI-compatible provider package.
 const V2_OPENAI_COMPATIBLE_PACKAGE = '@opencode/ai/providers/openai-compatible'
+// The same provider speaking the Responses API (`POST <baseURL>/responses`).
+const V2_OPENAI_COMPATIBLE_RESPONSES_PACKAGE =
+  '@opencode/ai/providers/openai-compatible-responses'
 
 export interface OpencodeResult {
   stdout: string
@@ -561,9 +564,18 @@ export function withScriptedProvider(
   configContent: string,
   baseUrl: string,
   host: OpencodeHost = 'v1',
+  /**
+   * The wire the scripted provider speaks. `'responses'` is a v2 option: it is
+   * the only way to see the raw `function_call_output` the host sends, which
+   * the chat wire flattens to a string.
+   */
+  wire: 'chat' | 'responses' = 'chat',
 ): string {
   const parsed = JSON.parse(configContent) as Record<string, unknown>
-  if (host === 'v2') return withScriptedProviderV2(parsed, baseUrl)
+  if (host === 'v2') return withScriptedProviderV2(parsed, baseUrl, wire)
+  if (wire === 'responses') {
+    throw new Error('the Responses wire is only available on a v2 host')
+  }
   const existingProvider =
     typeof parsed.provider === 'object' && parsed.provider !== null
       ? (parsed.provider as Record<string, unknown>)
@@ -600,6 +612,7 @@ export function withScriptedProvider(
 function withScriptedProviderV2(
   parsed: Record<string, unknown>,
   baseUrl: string,
+  wire: 'chat' | 'responses',
 ): string {
   const { plugin, providers, ...rest } = parsed
   const existingProviders = isRecord(providers) ? providers : {}
@@ -611,7 +624,10 @@ function withScriptedProviderV2(
       ...existingProviders,
       [SCRIPTED_PROVIDER_ID]: {
         name: 'Systematic Host Contract Provider',
-        package: V2_OPENAI_COMPATIBLE_PACKAGE,
+        package:
+          wire === 'responses'
+            ? V2_OPENAI_COMPATIBLE_RESPONSES_PACKAGE
+            : V2_OPENAI_COMPATIBLE_PACKAGE,
         env: [SCRIPTED_PROVIDER_KEY_ENV],
         settings: { baseURL: baseUrl },
         models: {

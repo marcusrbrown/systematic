@@ -145,10 +145,11 @@ function parseToolInput(input: unknown): SkillToolInput {
 }
 
 /**
- * Put the full text back into the tool results of a model request. Matching is
- * by session, tool name and call id. Nothing depends on the host's marker
- * text. The store is read, not emptied: the host builds each request from
- * history, so the same result is restored on every later request.
+ * Put the full text back into the tool results of a model request where the
+ * host cut it. Matching is by session, tool name and call id. Nothing depends
+ * on the host's marker text. The store is read, not emptied: the host builds
+ * each request from history, so the same result is restored on every later
+ * request.
  */
 export function restoreSkillResults(
   store: SkillOutputStore,
@@ -173,7 +174,31 @@ function restorePart(
   if (part.name !== SKILL_TOOL_NAME || typeof part.id !== 'string') return
   const full = store.peek(sessionID, part.id)
   if (full === undefined) return
-  part.result = { type: 'content', value: [{ type: 'text', text: full }] }
+  part.result = restoredResult(part.result, full)
+}
+
+/**
+ * The host lowers a single text part to `{ type: 'text' }` and anything else to
+ * `{ type: 'content' }`, and that kind decides the request body: a string or an
+ * array. Keep the kind, and touch the result only when its text is not the full
+ * text, so a skill under the host limit reads the same with or without a store
+ * entry. A result that is neither kind (an error) is left alone.
+ */
+function restoredResult(result: unknown, full: string): unknown {
+  if (!isRecord(result)) return result
+  if (result.type === 'text') {
+    return result.value === full ? result : { type: 'text', value: full }
+  }
+  if (result.type !== 'content' || !Array.isArray(result.value)) return result
+  const [only, ...more] = result.value
+  if (
+    more.length === 0 &&
+    isRecord(only) &&
+    only.type === 'text' &&
+    only.text === full
+  )
+    return result
+  return { ...result, value: [{ type: 'text', text: full }] }
 }
 
 function createToolDefinition(
