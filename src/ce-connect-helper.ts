@@ -2156,6 +2156,9 @@ function buildCandidateBlock(accepted: readonly AcceptedCandidate[]): Json {
       title: item.candidate.title,
       summary: item.candidate.summary,
       nextStep: item.candidate.nextStep,
+      ...(item.candidate.reason === undefined
+        ? {}
+        : { reason: item.candidate.reason }),
       overlapCheck: item.candidate.overlapCheck,
       sources: item.candidate.sources,
       targetEvidence: item.candidate.targetEvidence,
@@ -2858,21 +2861,25 @@ const NO_PLACEMENT: Placement = {
 }
 
 /**
- * What a candidate stands on: its target, sources, target evidence and
- * counterevidence. A kept record is the same candidate only when this matches,
- * because the id is the same across changed fingerprints.
+ * What a candidate stands on: its target, sources, target evidence,
+ * counterevidence and, for a code-mismatch candidate, its reason. The
+ * counterevidence carries each evidence's project, path, span and fingerprint.
+ * A kept record is the same candidate only when this matches, because the id is
+ * the same across changed fingerprints and changed evidence.
  */
 function evidenceOf(candidate: {
   readonly target?: unknown
   readonly sources?: unknown
   readonly targetEvidence?: unknown
   readonly counterevidence?: unknown
+  readonly reason?: unknown
 }): string {
   return JSON.stringify([
     candidate.target,
     candidate.sources,
     candidate.targetEvidence,
     candidate.counterevidence,
+    candidate.reason ?? null,
   ])
 }
 
@@ -2944,12 +2951,33 @@ type Placed =
   | { readonly placed: Fresh | Open }
   | { readonly skipped: SkippedCandidate }
 
+/**
+ * How the evidence files of an imported candidate stand: each was checked
+ * against the local bytes, so the candidate's own fingerprint is the local one.
+ * A file it does not cite says nothing, so a decided entry reopens on evidence
+ * the import re-cites with new bytes, not on a file it never read.
+ */
+function importedEvidence(item: ImportAccepted): EvidenceLookup {
+  const cited = new Map(
+    (item.record.evidence ?? []).map((ref) => [
+      `${ref.project}\0${ref.path}`,
+      ref.fingerprint,
+    ]),
+  )
+  return (project, rel) => {
+    const fingerprint = cited.get(`${project}\0${rel}`)
+    return fingerprint === undefined
+      ? { status: 'unread' }
+      : { status: 'present', fingerprint }
+  }
+}
+
 function placeOne(
   item: ImportAccepted,
   ledger: Ledger,
   heldIn: (item: ImportAccepted) => string | undefined,
 ): Placed {
-  const outcome = classifyCandidate(ledger, item.record)
+  const outcome = classifyCandidate(ledger, item.record, importedEvidence(item))
   if (outcome.standing === 'new') {
     return {
       placed: freshOf(item, 'new', {

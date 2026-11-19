@@ -647,7 +647,7 @@ export type NextStep = (typeof NEXT_STEPS)[number]
 export const MISMATCH_REASONS = ['stale', 'unscoped'] as const
 export type MismatchReason = (typeof MISMATCH_REASONS)[number]
 
-function isMismatchReason(value: unknown): value is MismatchReason {
+export function isMismatchReason(value: unknown): value is MismatchReason {
   return MISMATCH_REASONS.some((reason) => reason === value)
 }
 
@@ -1345,7 +1345,7 @@ export function checkCandidate(
 }
 
 /** A fingerprint of a claim: the learning's verbatim source excerpt. */
-function claimFingerprint(excerpt: string): string {
+export function claimFingerprint(excerpt: string): string {
   return createHash('sha256').update(excerpt).digest('hex')
 }
 

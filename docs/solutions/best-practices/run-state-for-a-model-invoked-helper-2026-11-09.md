@@ -68,7 +68,7 @@ Three choices keep a nondeterministic researcher from re-proposing what a person
 - **Identity excludes fingerprints.** `candidateIdentity` hashes kind, target, rule id and the normalized (role, path) of each source (`src/lib/connect-state.ts:842-863`). A changed file is the same entry.
 - **Reopen only on a change both runs can see.** `classifyCandidate` compares source fingerprints, and compares target-evidence fingerprints only for paths that both the stored entry and the new candidate cite (`sameTargetEvidence`, `src/lib/connect-state.ts:1205-1214`). If nothing the two runs share changed, the standing is `suppressed` whatever the prior status (promoted, rejected or candidate). A changed source reopens as "sources changed" with a refresh pointer when the prior entry was promoted. A source with no fingerprint is `unresolved`, not `changed` (`src/lib/connect-state.ts:1262-1327`).
 
-`ledger show` pages the ledger 500 entries at a time with `total` and `nextOffset` (`MAX_LEDGER_ENTRIES_SHOWN`, `src/ce-connect-helper.ts:2571-2571`).
+`ledger show` pages the ledger 500 entries at a time with `total` and `nextOffset` (`MAX_LEDGER_ENTRIES_SHOWN`, `src/ce-connect-helper.ts:2574-2574`).
 
 ## Why This Matters
 
