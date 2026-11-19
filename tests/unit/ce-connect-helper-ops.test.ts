@@ -4309,3 +4309,97 @@ describe('a decided code-mismatch candidate across runs', () => {
     expect(validated.suppressed).toBe(1)
   })
 })
+
+// ── code-mismatch: digest, summary and handoff ──────────────────────────────
+
+describe('a code-mismatch run, validated and published', () => {
+  function loaderEvidence(evidence: string): Json {
+    return evidenceItem(
+      evidence,
+      'src/loader.ts',
+      LOADER_FILE,
+      'export function loadConfig(raw: Config): string[] {',
+    )
+  }
+
+  it('writes a digest that shows the reason, the evidence with its HEAD and the evidence-only project', () => {
+    const { world, evidence } = mismatchWorld()
+    const { validated, published } = fullRun(world, [
+      mismatchCandidate(world, [loaderEvidence(evidence)]),
+    ])
+    expect(accepted(validated)).toHaveLength(1)
+    const head = git(evidence, ['rev-parse', 'HEAD'])
+    const digest = readDigest(published)
+    expect(digest).toContain('### Candidate 1: code-mismatch (new)')
+    expect(digest).toContain('- Reason: stale')
+    expect(digest).toContain(CLAIM)
+    expect(digest).toMatch(
+      new RegExp(
+        `\`src/loader\\.ts:1-3\` fingerprint \`${sha256(LOADER_FILE)}\` HEAD \`${head}\``,
+      ),
+    )
+    // The project lines carry each HEAD and mark the project that holds no learning.
+    expect(digest).toContain(
+      `${inlineOf(projectName(evidence))} ${inlineOf(evidence)}`,
+    )
+    const line = digest
+      .split('\n')
+      .find((text) => text.includes(`\`${evidence}\`: `))
+    expect(line).toContain(`HEAD \`${head}\``)
+    expect(line).toContain('read only as evidence')
+    const learningLine = digest
+      .split('\n')
+      .find((text) => text.includes(`\`${world.target}\`: `))
+    expect(learningLine).not.toContain('read only as evidence')
+  })
+
+  it('prints the refresh command in the learning project and lists the evidence beside it', () => {
+    const { world, evidence } = mismatchWorld()
+    const { published } = fullRun(world, [
+      mismatchCandidate(world, [loaderEvidence(evidence)]),
+    ])
+    const lines = String(published.summary).split('\n')
+    const title = lines.findIndex((line) => line.startsWith('> code-mismatch'))
+    expect(lines[title]).toStartWith('> code-mismatch (stale): ')
+    expect(lines[title + 1]).toBe(
+      `Review in \`${projectName(world.target)}\`: /ce:compound-refresh path:docs/solutions/lock-now.md`,
+    )
+    expect(lines[title + 2]).toBe(
+      `Evidence to recheck before you confirm: \`${projectName(evidence)}\` \`src/loader.ts:1-3\``,
+    )
+    expect(String(published.summary)).not.toContain('candidate-id:')
+  })
+
+  it('keeps the mismatch reason in the ledger entry the digest points at', () => {
+    const { world, evidence } = mismatchWorld()
+    const { validated } = fullRun(world, [
+      mismatchCandidate(world, [loaderEvidence(evidence)]),
+    ])
+    const [item] = accepted(validated)
+    const shown = ok(runHelperOp('ledger-show', {}, world.deps))
+    expect((shown.entries as Json[])[0]).toMatchObject({
+      id: item?.id,
+      kind: 'code-mismatch',
+      status: 'candidate',
+      mismatchReason: 'stale',
+    })
+  })
+
+  it('gives an investigate candidate with no evidence no command and no token', () => {
+    const { world } = mismatchWorld()
+    const { published } = fullRun(world, [
+      mismatchCandidate(world, [], { nextStep: 'investigate' }),
+    ])
+    const summary = String(published.summary)
+    expect(summary).toContain('Investigate first')
+    expect(summary).not.toContain('/ce:compound-refresh')
+    expect(summary).not.toContain('candidate-id:')
+    const digest = readDigest(published)
+    expect(digest).toContain('- Reason: stale')
+    expect(digest).not.toContain('\nEvidence:')
+  })
+})
+
+function inlineOf(text: string): string {
+  return `\`${text}\``
+}

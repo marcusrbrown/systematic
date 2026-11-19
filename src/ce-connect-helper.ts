@@ -2185,6 +2185,10 @@ function digestModel(
     files: project.files,
     citationsUnsupported: project.citationsUnsupported,
     truncated: project.truncated,
+    ...(project.commit === undefined ? {} : { commit: project.commit }),
+    ...(project.inventory.some((file) => file.role === 'learning')
+      ? {}
+      : { evidenceOnly: true }),
   }))
   return {
     runId: snapshot.runId,

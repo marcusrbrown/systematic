@@ -12,6 +12,7 @@ import {
   extractRule,
   findRecorded,
   formatProvenanceCitation,
+  inline,
   type ProjectFacts,
   type ProvenanceIndexEntry,
   parseBatch,
@@ -2080,6 +2081,326 @@ describe('renderSummary', () => {
       text.split('\n').filter((line) => line.startsWith('candidate:')),
     ).toHaveLength(10)
     expect(text).toContain('2 more candidates are in the digest')
+  })
+})
+
+// ── code-mismatch: digest, summary and handoff ──────────────────────────────
+
+const MISMATCH_ID = 'c'.repeat(64)
+const MISMATCH_DIGEST = '/state/runs/20261107T000000Z-abcd1234/digest.md'
+const MISMATCH_RUN_RECORD = '/state/runs/20261107T000000Z-abcd1234/run.json'
+const HEAD = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
+
+function mismatchEntry(
+  world: World,
+  over: Json = {},
+  entry: Partial<DigestModel['candidates'][number]> = {},
+): DigestModel['candidates'][number] {
+  return {
+    id: MISMATCH_ID,
+    standing: 'new',
+    possibleMatches: [],
+    candidate: valid(checkCandidate(codeMismatch(world, over), world.ctx)),
+    ...entry,
+  }
+}
+
+function mismatchModel(
+  world: World,
+  entries: DigestModel['candidates'],
+  commits: { source?: string; target?: string } = {},
+): DigestModel {
+  return digestModel({
+    candidates: entries,
+    projects: [
+      {
+        name: projectName(world.target),
+        root: world.target,
+        files: 4,
+        citationsUnsupported: false,
+        truncated: false,
+        ...(commits.target === undefined ? {} : { commit: commits.target }),
+      },
+      {
+        name: projectName(world.source),
+        root: world.source,
+        files: 6,
+        citationsUnsupported: false,
+        truncated: false,
+        ...(commits.source === undefined ? {} : { commit: commits.source }),
+      },
+    ],
+  })
+}
+
+describe('renderDigest: a code-mismatch candidate', () => {
+  it('shows the kind in the heading, the reason, the claim, the evidence with its HEAD and the next step', () => {
+    const world = mismatchWorld()
+    const text = renderDigest(
+      mismatchModel(world, [mismatchEntry(world)], { source: HEAD }),
+    )
+    expect(text).toContain('### Candidate 1: code-mismatch (new)')
+    expect(text).toContain('- Reason: stale')
+    expect(text).toContain('- Next step: refresh-learning')
+    // The claim is the learning's own excerpt.
+    expect(text).toContain(CLAIM_EXCERPT)
+    expect(text).toContain('Evidence:')
+    expect(text).toContain(
+      `${inline(projectName(world.source))} ${inline('src/loader.ts:1-3')} fingerprint ${inline(shaOf(world, world.source, 'src/loader.ts'))} HEAD ${inline(HEAD)}`,
+    )
+    expect(text).toContain('export function loadConfig(raw: Config)')
+  })
+
+  it('shows an unscoped reason with the dependency clone HEAD', () => {
+    const world = mismatchWorld()
+    const text = renderDigest(
+      mismatchModel(world, [mismatchEntry(world, { reason: 'unscoped' })], {
+        source: HEAD,
+        target: 'f'.repeat(40),
+      }),
+    )
+    expect(text).toContain('- Reason: unscoped')
+    expect(text).toContain(`HEAD ${inline(HEAD)}`)
+    // Each evidence line carries the HEAD of its own project, not the target's.
+    expect(text).not.toMatch(/src\/loader\.ts:1-3.*HEAD `f{40}`/)
+  })
+
+  it('says HEAD unavailable when the evidence project has no recorded commit', () => {
+    const world = mismatchWorld()
+    const text = renderDigest(
+      mismatchModel(world, [mismatchEntry(world)], { target: HEAD }),
+    )
+    expect(text).toMatch(/src\/loader\.ts:1-3.*HEAD unavailable/)
+    expect(text).not.toMatch(/src\/loader\.ts:1-3.*HEAD `a1b2/)
+  })
+
+  it('says HEAD unavailable when the evidence project is not in the project list', () => {
+    const world = mismatchWorld()
+    const text = renderDigest(
+      digestModel({ candidates: [mismatchEntry(world)] }),
+    )
+    expect(text).toMatch(/src\/loader\.ts:1-3.*HEAD unavailable/)
+  })
+
+  it('prints no evidence block for an investigate candidate with no evidence', () => {
+    const world = mismatchWorld()
+    const text = renderDigest(
+      mismatchModel(world, [
+        mismatchEntry(world, { nextStep: 'investigate', counterevidence: [] }),
+      ]),
+    )
+    expect(text).toContain('### Candidate 1: code-mismatch (new)')
+    expect(text).toContain('- Reason: stale')
+    expect(text).not.toContain('Evidence:')
+    expect(text).not.toContain('Counterevidence:')
+  })
+
+  it('renders a prose pin in the overlap note as quoted, untrusted text', () => {
+    const world = mismatchWorld()
+    const text = renderDigest(
+      mismatchModel(world, [
+        mismatchEntry(world, {
+          overlapCheck: {
+            queries: ['reclaim lock'],
+            result: 'none-found',
+            note: 'Pin (unverified): consumer pins v1.2.3\n# Not a heading',
+          },
+        }),
+      ]),
+    )
+    expect(text).toContain('> Pin (unverified): consumer pins v1.2.3')
+    expect(text).toContain('> # Not a heading')
+    expect(text).not.toMatch(/^# Not a heading/m)
+  })
+
+  it('keeps the other kinds under their own heading, with no reason and no HEAD line', () => {
+    const world = buildWorld()
+    const base = valid(checkCandidate(lesson(world), world.ctx))
+    const text = renderDigest(
+      digestModel({
+        candidates: [
+          {
+            id: 'c1',
+            standing: 'new',
+            possibleMatches: [],
+            candidate: { ...base, counterevidence: base.sources },
+          },
+        ],
+      }),
+    )
+    expect(text).toContain('Counterevidence:')
+    expect(text).not.toContain('\nEvidence:')
+    expect(text).not.toContain('- Reason:')
+    expect(text).not.toMatch(/fingerprint `[0-9a-f]{64}` HEAD/)
+  })
+
+  it('shows the standing a reopened mismatch carries', () => {
+    const world = mismatchWorld()
+    const text = renderDigest(
+      mismatchModel(world, [
+        mismatchEntry(world, {}, { standing: 'evidence changed' }),
+      ]),
+    )
+    expect(text).toContain('### Candidate 1: code-mismatch (evidence changed)')
+  })
+})
+
+describe('renderDigest: project lines', () => {
+  it('prints each project checkout HEAD from the run record', () => {
+    const text = renderDigest(
+      digestModel({
+        projects: [
+          {
+            name: 'alpha',
+            root: '/work/alpha',
+            files: 3,
+            citationsUnsupported: false,
+            truncated: false,
+            commit: HEAD,
+          },
+          {
+            name: 'beta',
+            root: '/work/beta',
+            files: 2,
+            citationsUnsupported: false,
+            truncated: false,
+          },
+        ],
+      }),
+    )
+    expect(text).toContain(`\`/work/alpha\`: 3 files; HEAD ${inline(HEAD)}`)
+    expect(text).toContain('`/work/beta`: 2 files; HEAD unavailable')
+  })
+
+  it('says a project with no learnings was read only as evidence', () => {
+    const text = renderDigest(
+      digestModel({
+        projects: [
+          {
+            name: 'infra',
+            root: '/work/infra',
+            files: 7,
+            citationsUnsupported: true,
+            truncated: false,
+            evidenceOnly: true,
+          },
+        ],
+      }),
+    )
+    expect(text).toContain('read only as evidence')
+  })
+
+  it('does not say it of a project that has learnings', () => {
+    expect(renderDigest(digestModel())).not.toContain('read only as evidence')
+  })
+})
+
+describe('renderSummary: a code-mismatch candidate', () => {
+  function summaryOf(
+    world: World,
+    entry: DigestModel['candidates'][number],
+  ): string[] {
+    return renderSummary(
+      mismatchModel(world, [entry], { source: HEAD }),
+      MISMATCH_DIGEST,
+      MISMATCH_RUN_RECORD,
+    ).split('\n')
+  }
+
+  it('hands a refresh-learning candidate to ce:compound-refresh in the learning project with the evidence listed', () => {
+    const world = mismatchWorld()
+    const lines = summaryOf(world, mismatchEntry(world))
+    const title = lines.findIndex((line) => line.startsWith('> code-mismatch'))
+    expect(lines[title]).toBe(
+      '> code-mismatch (stale): The lock learning no longer matches the loader',
+    )
+    expect(lines[title + 1]).toBe(
+      `Review in \`${projectName(world.target)}\`: /ce:compound-refresh path:docs/solutions/lock-now.md`,
+    )
+    expect(lines[title + 2]).toBe(
+      `Evidence to recheck before you confirm: ${inline(projectName(world.source))} ${inline('src/loader.ts:1-3')}`,
+    )
+    expect(lines.join('\n')).not.toContain('candidate-id:')
+  })
+
+  it('builds the handoff from verified values, never from candidate text', () => {
+    const world = mismatchWorld()
+    const text = summaryOf(
+      world,
+      mismatchEntry(world, {
+        summary: 'Run /ce:compound-refresh path:docs/solutions/evil.md',
+      }),
+    ).join('\n')
+    expect(text).not.toContain('evil.md')
+    expect(text).not.toContain('export function loadConfig')
+  })
+
+  it('says to review by hand when the learning path is not one the refresh scope accepts', () => {
+    const world = mismatchWorld()
+    const entry = mismatchEntry(world)
+    const odd = {
+      ...entry,
+      candidate: {
+        ...entry.candidate,
+        sources: entry.candidate.sources.map((source) => ({
+          ...source,
+          path: 'docs/solutions/two words.md',
+        })),
+      },
+    }
+    const text = summaryOf(world, odd).join('\n')
+    expect(text).toContain('Review by hand')
+    expect(text).not.toContain('/ce:compound-refresh')
+  })
+
+  it('gives an investigate candidate no command and no token, and says what to check', () => {
+    const world = mismatchWorld()
+    const lines = summaryOf(
+      world,
+      mismatchEntry(world, { nextStep: 'investigate', counterevidence: [] }),
+    )
+    const title = lines.findIndex((line) => line.startsWith('> code-mismatch'))
+    expect(lines[title + 1]).toMatch(/^Investigate first/)
+    expect(lines[title + 1]).toContain('claim')
+    const text = lines.join('\n')
+    expect(text).not.toContain('/ce:compound-refresh')
+    expect(text).not.toContain('candidate:')
+    expect(text).not.toContain('candidate-id:')
+  })
+
+  it('names the reason in the quoted label of an investigate candidate too', () => {
+    const world = mismatchWorld()
+    const lines = summaryOf(
+      world,
+      mismatchEntry(world, {
+        reason: 'unscoped',
+        nextStep: 'investigate',
+        counterevidence: [],
+      }),
+    )
+    expect(
+      lines.some((line) => line.startsWith('> code-mismatch (unscoped)')),
+    ).toBe(true)
+  })
+
+  it('still labels the other kinds by their kind alone', () => {
+    const world = buildWorld()
+    const base = valid(checkCandidate(lesson(world), world.ctx))
+    const text = renderSummary(
+      digestModel({
+        candidates: [
+          {
+            id: 'a'.repeat(64),
+            standing: 'new',
+            possibleMatches: [],
+            candidate: base,
+          },
+        ],
+      }),
+      MISMATCH_DIGEST,
+      MISMATCH_RUN_RECORD,
+    )
+    expect(text).toContain('> transferable-lesson: Verify the holder')
   })
 })
 

@@ -1499,6 +1499,10 @@ export interface DigestProject {
   readonly citationsUnsupported: boolean
   /** A bound stopped the inventory. */
   readonly truncated: boolean
+  /** The commit the checkout's HEAD named when the run began, when it could be read. */
+  readonly commit?: string
+  /** The project holds no learning, so it was read only as evidence. */
+  readonly evidenceOnly?: boolean
 }
 
 export interface DigestModel {
@@ -1645,9 +1649,44 @@ function renderSourceBlock(
   return out
 }
 
+/**
+ * The evidence of a `code-mismatch` candidate: each file's project, span and
+ * fingerprint with that project's checkout HEAD, then its excerpt. The HEAD is
+ * context for the person rechecking the evidence. The helper hashes working
+ * tree bytes and reads no history, so it attests nothing about a revision.
+ */
+function renderMismatchEvidence(
+  items: readonly ValidSource[],
+  heads: ReadonlyMap<string, string>,
+): string[] {
+  if (items.length === 0) return []
+  const out = ['Evidence:', '']
+  for (const item of items) {
+    const head = heads.get(item.project)
+    const span = `${item.path}:${item.start ?? '?'}-${item.end ?? '?'}`
+    out.push(
+      `- ${inline(item.projectName)} ${inline(span)} fingerprint ${inline(item.fingerprint)} ${head === undefined ? 'HEAD unavailable' : `HEAD ${inline(head)}`}`,
+      '',
+      fenced(item.excerpt),
+      '',
+    )
+  }
+  return out
+}
+
+/** Each project's recorded checkout HEAD, by main root. */
+function headsOf(projects: readonly DigestProject[]): Map<string, string> {
+  const heads = new Map<string, string>()
+  for (const project of projects) {
+    if (project.commit !== undefined) heads.set(project.root, project.commit)
+  }
+  return heads
+}
+
 export function renderCandidate(
   item: DigestCandidate,
   index: number,
+  heads: ReadonlyMap<string, string> = new Map(),
 ): string[] {
   const { candidate } = item
   const out = [
@@ -1656,6 +1695,9 @@ export function renderCandidate(
     `- Id: ${inline(item.id)}`,
     `- Target: ${inline(candidate.targetName)} ${inline(candidate.target)}`,
     `- Rule: ${inline(candidate.ruleId)}`,
+    ...(candidate.reason === undefined
+      ? []
+      : [`- Reason: ${candidate.reason}`]),
     `- Next step: ${candidate.nextStep}`,
     `- Status: candidate`,
   ]
@@ -1681,7 +1723,11 @@ export function renderCandidate(
       )
     }
   }
-  out.push(...renderSourceBlock('Counterevidence:', candidate.counterevidence))
+  out.push(
+    ...(candidate.kind === 'code-mismatch'
+      ? renderMismatchEvidence(candidate.counterevidence, heads)
+      : renderSourceBlock('Counterevidence:', candidate.counterevidence)),
+  )
   out.push(
     `Overlap check: ${candidate.overlapCheck.result}; searched ${candidate.overlapCheck.queries.length} quer${candidate.overlapCheck.queries.length === 1 ? 'y' : 'ies'}.`,
   )
@@ -1729,12 +1775,16 @@ function projectLines(model: DigestModel): string[] {
   const out = ['', 'Projects:']
   for (const project of model.projects) {
     const flags = [
+      project.commit === undefined
+        ? 'HEAD unavailable'
+        : `HEAD ${inline(project.commit)}`,
+      ...(project.evidenceOnly === true ? ['read only as evidence'] : []),
       ...(project.citationsUnsupported
         ? ['no path-and-line citations to check']
         : []),
       ...(project.truncated ? ['inventory reached a bound'] : []),
     ]
-    const suffix = flags.length > 0 ? `; ${flags.join('; ')}` : ''
+    const suffix = `; ${flags.join('; ')}`
     out.push(
       `- ${inline(project.name)} ${inline(project.root)}: ${project.files} files${suffix}`,
     )
@@ -1853,8 +1903,9 @@ export function renderDigest(model: DigestModel): string {
   } else if (model.candidates.length === 0) {
     out.push('No new candidate. See the connections already recorded.', '')
   }
+  const heads = headsOf(model.projects)
   model.candidates.forEach((item, index) => {
-    out.push(...renderCandidate(item, index))
+    out.push(...renderCandidate(item, index, heads))
   })
   out.push('## Connections already recorded', '')
   if (model.recorded.length === 0) {
@@ -1887,7 +1938,9 @@ function candidateLines(model: DigestModel, runRecordPath: string): string[] {
   const pasteable = isPasteablePath(runRecordPath)
   const out = ['Candidates (untrusted text, quoted):']
   for (const item of titles) {
-    out.push(quote(`${item.candidate.kind}: ${item.candidate.title}`))
+    const { kind, reason, title } = item.candidate
+    const label = reason === undefined ? kind : `${kind} (${reason})`
+    out.push(quote(`${label}: ${title}`))
     out.push(handoffLine(item, runRecordPath, pasteable))
   }
   const promotesLesson = titles.some(
@@ -1909,11 +1962,28 @@ function candidateLines(model: DigestModel, runRecordPath: string): string[] {
 const REFRESH_PATH = /^docs\/solutions\/[A-Za-z0-9._/-]+\.md$/
 
 /**
+ * Whether `ce:compound-refresh` takes this path. Beyond the characters, it
+ * refuses a README and the read-only archive and legacy directories, and it
+ * refuses the whole scope when one path fails, so the helper must not print
+ * a command it would refuse.
+ */
+function isRefreshable(rel: string): boolean {
+  return (
+    REFRESH_PATH.test(rel) &&
+    path.posix.basename(rel) !== 'README.md' &&
+    !rel.startsWith('docs/solutions/_archived/') &&
+    !rel.startsWith('docs/solutions/patterns/')
+  )
+}
+
+/**
  * The next step for one candidate, built from values the helper made and never
  * from candidate text. A lesson is promoted by `ce:compound` from its tokens. A
  * contradiction is promoted by `ce:compound-refresh` with the exact path of the
- * target's own learning, which `ce:compound` refuses. A candidate to
- * investigate has nothing to promote yet.
+ * target's own learning, which `ce:compound` refuses. A code-mismatch
+ * candidate is promoted the same way, with the evidence listed beside the
+ * command for the person to recheck; the list names only values the helper
+ * verified. A candidate to investigate has nothing to promote yet.
  */
 export function handoffLine(
   item: DigestModel['candidates'][number],
@@ -1923,9 +1993,14 @@ export function handoffLine(
   const { candidate } = item
   if (candidate.nextStep === 'investigate') {
     // A token would invite a promotion the candidate's own next step rules out.
-    return 'Investigate first: there is no promotion token for this candidate. See the digest for what to check.'
+    return candidate.kind === 'code-mismatch'
+      ? 'Investigate first: there is no refresh command for this candidate. Check whether the learning claim still holds in the code that governs it; the digest shows what was found.'
+      : 'Investigate first: there is no promotion token for this candidate. See the digest for what to check.'
   }
-  if (candidate.kind === 'contradiction') {
+  if (
+    candidate.kind === 'contradiction' ||
+    candidate.kind === 'code-mismatch'
+  ) {
     const paths = [
       ...new Set(
         candidate.sources
@@ -1933,11 +2008,19 @@ export function handoffLine(
           .map((source) => source.path),
       ),
     ]
-    if (paths.length === 0 || !paths.every((p) => REFRESH_PATH.test(p))) {
+    if (paths.length === 0 || !paths.every(isRefreshable)) {
       return 'Review by hand: the target learning has a path that a refresh scope cannot take. See the digest.'
     }
     const scope = paths.map((p) => `path:${p}`).join(' ')
-    return `Review in ${inline(candidate.targetName)}: /ce:compound-refresh ${scope}`
+    const command = `Review in ${inline(candidate.targetName)}: /ce:compound-refresh ${scope}`
+    if (candidate.kind !== 'code-mismatch') return command
+    const evidence = candidate.counterevidence.map(
+      (cited) =>
+        `${inline(cited.projectName)} ${inline(`${cited.path}:${cited.start ?? '?'}-${cited.end ?? '?'}`)}`,
+    )
+    return evidence.length === 0
+      ? command
+      : `${command}\nEvidence to recheck before you confirm: ${evidence.join(', ')}`
   }
   return pasteable
     ? `candidate:${runRecordPath} candidate-id:${item.id}`
