@@ -1,7 +1,7 @@
 ---
 title: "feat: ce:connect code-mismatch candidates"
 type: feat
-status: active
+status: completed
 date: 2026-11-19
 origin: docs/brainstorms/2026-11-19-ce-connect-code-mismatch-candidates-requirements.md
 ---
@@ -275,7 +275,7 @@ flowchart TB
 
 Every unit that edits `src/` regenerates the committed helper bundle and checks it for drift (the connect-helper surface). The final surface sweep and the citation re-pointing happen in U6.
 
-- [ ] U1. **Eligible `Caddyfile` evidence**
+- [x] U1. **Eligible `Caddyfile` evidence**
 
 **Goal:** An extensionless `Caddyfile` is inventoried as a config file at any depth.
 
@@ -309,7 +309,7 @@ Every unit that edits `src/` regenerates the committed helper bundle and checks 
 - The tests above pass and the existing eligibility and exclusion tests are unchanged.
 - The bundle is regenerated and the connect-helper surface shows no drift.
 
-- [ ] U2. **The `code-mismatch` candidate contract and validation**
+- [x] U2. **The `code-mismatch` candidate contract and validation**
 
 **Goal:** The helper parses and validates a `code-mismatch` candidate with provenance-only checks, ahead of any other behaviour.
 
@@ -350,7 +350,7 @@ Every unit that edits `src/` regenerates the committed helper bundle and checks 
 - Every scenario passes and the existing `checkCandidate` tests are untouched.
 - The bundle is regenerated and shows no drift.
 
-- [ ] U3. **Identity, reopen and coverage**
+- [x] U3. **Identity, reopen and coverage**
 
 **Goal:** One decision per claim; a decided mismatch reopens when the learning or any recorded evidence file changes or disappears; an evidence-only project no longer degrades a run.
 
@@ -397,7 +397,7 @@ Every unit that edits `src/` regenerates the committed helper bundle and checks 
 - Every scenario passes, and the existing identity tests (`candidateIdentity` section) still pass with unchanged ids.
 - The bundle is regenerated and shows no drift.
 
-- [ ] U4. **Digest, summary and handoff**
+- [x] U4. **Digest, summary and handoff**
 
 **Goal:** The operator sees the reason, the evidence with each checkout HEAD, and a handoff that the real refresh skill accepts.
 
@@ -437,7 +437,7 @@ Every unit that edits `src/` regenerates the committed helper bundle and checks 
 - Every scenario passes; ordering and numbering tests for the digest are unchanged.
 - The bundle is regenerated with no drift.
 
-- [ ] U5. **CI report and import carry the new facts**
+- [x] U5. **CI report and import carry the new facts**
 
 **Goal:** The reason and the evidence survive the run record, the persistent report payload, the report and a local import; an unmapped evidence project is refused with a remedy.
 
@@ -480,7 +480,7 @@ Every unit that edits `src/` regenerates the committed helper bundle and checks 
 - Every scenario passes, and the existing import and report tests are unchanged.
 - The bundle is regenerated with no drift.
 
-- [ ] U6. **Researcher prompt, contract text, docs and registrations**
+- [x] U6. **Researcher prompt, contract text, docs and registrations**
 
 **Goal:** The researcher knows the kind, the contract text and docs describe it, and every generated or hand-registered surface agrees.
 
@@ -526,7 +526,7 @@ Every unit that edits `src/` regenerates the committed helper bundle and checks 
 - The content-integrity gate, typecheck for tests and scripts, lint and the connect unit tests pass.
 - Every moved citation in `docs/solutions/` points at the symbol it names.
 
-- [ ] U7. **Acceptance: a pass/fail real run**
+- [x] U7. **Acceptance: a pass/fail real run**
 
 **Goal:** Show on a real host that the researcher reaches both positive cases and stays silent on the three negatives (R16).
 
