@@ -874,7 +874,8 @@ function classifyPath(rel: string): InventoryRole | undefined {
   if (
     CONFIG_EXTENSIONS.has(extension) ||
     name === 'Dockerfile' ||
-    name === 'Makefile'
+    name === 'Makefile' ||
+    name === 'Caddyfile'
   ) {
     return 'config'
   }
