@@ -105,6 +105,7 @@ import {
   clearLedger,
   type DecideInput,
   decideLedgerEntry,
+  type EvidenceLookup,
   forceUnlock,
   type ImportInsertResult,
   type ImportPlan,
@@ -1673,14 +1674,39 @@ function standingOf(
   return 'skip'
 }
 
+/**
+ * How the evidence files of a decided candidate stand in this run's inventory.
+ * A project the run did not read, or read only in part, says nothing about a
+ * file it does not list, so that file is neither changed nor gone.
+ */
+function evidenceLookup(snapshot: Snapshot): EvidenceLookup {
+  const projects = new Map(
+    snapshot.projects.map((project) => [
+      project.key,
+      {
+        complete: !project.truncated,
+        files: new Map(project.inventory.map((f) => [f.path, f.sha256])),
+      },
+    ]),
+  )
+  return (key, rel) => {
+    const project = projects.get(key)
+    if (project === undefined) return { status: 'unread' }
+    const fingerprint = project.files.get(rel)
+    if (fingerprint !== undefined) return { status: 'present', fingerprint }
+    return project.complete ? { status: 'gone' } : { status: 'unread' }
+  }
+}
+
 /** What the ledger says about a candidate that is not a duplicate or already recorded. */
 function classifyAgainstLedger(
   candidate: ValidCandidate,
   record: CandidateRecord,
-  ledger: Ledger,
+  input: ClassifyInput,
   result: Classified,
 ): void {
-  const outcome = classifyCandidate(ledger, record)
+  const { ledger } = input
+  const outcome = classifyCandidate(ledger, record, input.evidence)
   const standing = standingOf(outcome)
   if (standing === 'skip') {
     if (outcome.standing === 'unresolved') result.unresolved++
@@ -1711,13 +1737,14 @@ interface ClassifyInput {
   readonly ctx: ValidationContext
   readonly snapshot: Snapshot
   readonly ledger: Ledger
+  readonly evidence: EvidenceLookup
 }
 
 function reopensForChangedSources(
   record: CandidateRecord,
   input: ClassifyInput,
 ): boolean {
-  const outcome = classifyCandidate(input.ledger, record)
+  const outcome = classifyCandidate(input.ledger, record, input.evidence)
   return outcome.standing === 'reopened' && outcome.reason === 'sources changed'
 }
 
@@ -1766,7 +1793,13 @@ function classifyOne(
   // A promoted learning cites its source by project and path, so it still
   // matches after the source changed. A changed source reopens the connection
   // for refresh (with the pointer to the promoted learning) and is not recorded.
-  const recorded = findRecorded(check.candidate, input.snapshot.provenance)
+  // A code-mismatch candidate has no such shortcut: its source is the target's
+  // own learning, and a sibling that names or cites that learning says nothing
+  // about whether its claim was refreshed. The ledger decides.
+  const recorded =
+    check.candidate.kind === 'code-mismatch'
+      ? undefined
+      : findRecorded(check.candidate, input.snapshot.provenance)
   if (recorded !== undefined && !reopensForChangedSources(record, input)) {
     result.recorded.push({
       pointer: recorded.pointer,
@@ -1774,7 +1807,7 @@ function classifyOne(
     })
     return
   }
-  classifyAgainstLedger(check.candidate, record, input.ledger, result)
+  classifyAgainstLedger(check.candidate, record, input, result)
 }
 
 function classifyBatches(
@@ -1949,14 +1982,25 @@ function runValidation(
   }
   const classified = classifyBatches(
     batches,
-    { ctx: contextFrom(snapshot), snapshot, ledger },
+    {
+      ctx: contextFrom(snapshot),
+      snapshot,
+      ledger,
+      evidence: evidenceLookup(snapshot),
+    },
     limits,
   )
   // Only the rules the run was offered must be covered. The rest of the index
   // waits for a later run and is not a reason to degrade this one.
+  // A project with no learning has no rule to cover: it is read as evidence
+  // only, and a batch need not name it.
   const coverage = checkCoverage({
     ruleIds: snapshot.offer.offered,
-    projects: snapshot.projects.map((project) => project.root),
+    projects: snapshot.projects
+      .filter((project) =>
+        project.inventory.some((file) => file.role === 'learning'),
+      )
+      .map((project) => project.root),
     batches,
   })
   // A rule whose candidate was lost to changed evidence is not covered, even
@@ -2296,6 +2340,7 @@ function commitRun(
       candidates: state.accepted.map((item) =>
         toCandidateRecord(item.candidate),
       ),
+      evidence: evidenceLookup(snapshot),
       // The rename commits the run; coverage follows it in the same ledger write.
       coverage: {
         runId: snapshot.runId,
@@ -2653,6 +2698,9 @@ function ledgerShow(request: unknown, deps: HelperDeps): HelperResult {
         ? {}
         : { destination: entry.destination }),
       ...(entry.reopened === undefined ? {} : { reopened: entry.reopened }),
+      ...(entry.mismatchReason === undefined
+        ? {}
+        : { mismatchReason: entry.mismatchReason }),
       sources: entry.sources.map((source) => ({
         role: source.role,
         path: source.path,

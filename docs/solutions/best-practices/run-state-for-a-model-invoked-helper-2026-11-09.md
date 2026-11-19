@@ -37,7 +37,7 @@ Reclaim is a rename, not a delete. `reclaimLock` moves the lock directory to a u
 
 ### 2. Publishing is one rename; the ledger follows
 
-`publishRun` stages `runs/<id>.tmp/`, renames it to `runs/<id>/`, and only then rewrites the ledger (`src/lib/connect-state.ts:1450-1520`). The rename is the commit. A crash has two windows, and each leaves a state the next run can read:
+`publishRun` stages `runs/<id>.tmp/`, renames it to `runs/<id>/`, and only then rewrites the ledger (`src/lib/connect-state.ts:1626-1748`). The rename is the commit. A crash has two windows, and each leaves a state the next run can read:
 
 - Before the rename: nothing is committed. The next run removes the leftover `.tmp` directory (`pruneRuns`) and proposes the candidate as new.
 - After the rename and before the ledger write: the run exists, the ledger does not know its candidates, and the next run proposes them once more. After that the ledger suppresses them.
@@ -54,8 +54,8 @@ One run is bounded at 6 families of at most 8 rules each, so at most 48 rules (`
 
 Three rules keep this honest:
 
-- Coverage is recorded only on commit, in the same ledger rewrite as the run (`applyCoverage`, `src/lib/connect-state.ts:1339-1399`). A run that fails to commit covers nothing.
-- Only the offered rules must be covered. The rest of the index waits for a later run and is not a reason to degrade this one (`src/ce-connect-helper.ts:1955-1971`, `checkCoverage` is called with `snapshot.offer.offered`).
+- Coverage is recorded only on commit, in the same ledger rewrite as the run (`applyCoverage`, `src/lib/connect-state.ts:1548-1624`). A run that fails to commit covers nothing.
+- Only the offered rules must be covered. The rest of the index waits for a later run and is not a reason to degrade this one (`src/ce-connect-helper.ts:1994-2005`, `checkCoverage` is called with `snapshot.offer.offered`).
 - A rule whose candidate was lost because its evidence changed during the run is held back and not counted as covered (`heldBackRuleIds` in the same span).
 
 The digest carries a `Sweep:` line, covered X of Y rules and about N runs left (`renderSweepLine`, `src/lib/connect-helper-core.ts:611-620`), so a person can see that a clean run covers a slice and not the corpus. In a four-project evaluation set that included 12 planted documents, the ledger recorded all 376 indexed rules as covered over nine runs. That is bookkeeping from the researcher's self-report: the helper checks that a complete batch names every offered rule, not that each one was searched.
@@ -65,10 +65,10 @@ The digest carries a `Sweep:` line, covered X of Y rules and about N runs left (
 Three choices keep a nondeterministic researcher from re-proposing what a person already decided.
 
 - **Rule ids come from the helper and depend on location only.** `ruleIdFor` hashes the project root and the relative path (`src/lib/connect-helper-core.ts:79-89`). An edited learning keeps its id, so it reopens its entry instead of creating a new one. A candidate must carry an id from the issued index (`unknown-rule-id`, in `parseHeader`, `src/lib/connect-helper-core.ts:1210-1237`) and the id must belong to one of its own sources (`rule-source-mismatch`, in `checkCandidate`, `src/lib/connect-helper-core.ts:1180-1245`), so the model cannot choose its own identity.
-- **Identity excludes fingerprints.** `candidateIdentity` hashes kind, target, rule id and the normalized (role, path) of each source (`src/lib/connect-state.ts:767-785`). A changed file is the same entry.
-- **Reopen only on a change both runs can see.** `classifyCandidate` compares source fingerprints, and compares target-evidence fingerprints only for paths that both the stored entry and the new candidate cite (`sameTargetEvidence`, `src/lib/connect-state.ts:1091-1100`). If nothing the two runs share changed, the standing is `suppressed` whatever the prior status (promoted, rejected or candidate). A changed source reopens as "sources changed" with a refresh pointer when the prior entry was promoted. A source with no fingerprint is `unresolved`, not `changed` (`src/lib/connect-state.ts:1103-1157`).
+- **Identity excludes fingerprints.** `candidateIdentity` hashes kind, target, rule id and the normalized (role, path) of each source (`src/lib/connect-state.ts:842-863`). A changed file is the same entry.
+- **Reopen only on a change both runs can see.** `classifyCandidate` compares source fingerprints, and compares target-evidence fingerprints only for paths that both the stored entry and the new candidate cite (`sameTargetEvidence`, `src/lib/connect-state.ts:1205-1214`). If nothing the two runs share changed, the standing is `suppressed` whatever the prior status (promoted, rejected or candidate). A changed source reopens as "sources changed" with a refresh pointer when the prior entry was promoted. A source with no fingerprint is `unresolved`, not `changed` (`src/lib/connect-state.ts:1262-1327`).
 
-`ledger show` pages the ledger 500 entries at a time with `total` and `nextOffset` (`MAX_LEDGER_ENTRIES_SHOWN`, `src/ce-connect-helper.ts:2522-2537`).
+`ledger show` pages the ledger 500 entries at a time with `total` and `nextOffset` (`MAX_LEDGER_ENTRIES_SHOWN`, `src/ce-connect-helper.ts:2567-2567`).
 
 ## Why This Matters
 

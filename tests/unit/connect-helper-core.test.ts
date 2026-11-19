@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { inventoryProject } from '../../src/lib/connect-evidence.js'
@@ -30,6 +31,7 @@ import {
   toProjectFacts,
   type ValidationContext,
 } from '../../src/lib/connect-helper-core.js'
+import { candidateIdentity } from '../../src/lib/connect-state.js'
 import { cleanupTempDirs, git, makeDir } from './git-worktree-fixtures'
 
 afterEach(cleanupTempDirs)
@@ -1505,6 +1507,70 @@ describe('toCandidateRecord', () => {
       `source@${projectKey(world.target)}`,
     ])
     expect(record.sources[0]?.fingerprint).toBe(world.sourceSha)
+  })
+
+  it('carries nothing of a code-mismatch candidate for the other kinds', () => {
+    const world = buildWorld()
+    const record = toCandidateRecord(
+      valid(checkCandidate(contradiction(world), world.ctx)),
+    )
+    expect(record.mismatchReason).toBeUndefined()
+    expect(record.claim).toBeUndefined()
+    expect(record.evidence).toBeUndefined()
+  })
+
+  it('carries the reason, a claim fingerprint and project-keyed evidence for a code-mismatch candidate', () => {
+    const world = mismatchWorld()
+    const record = toCandidateRecord(
+      valid(checkCandidate(codeMismatch(world), world.ctx)),
+    )
+    expect(record.mismatchReason).toBe('stale')
+    expect(record.claim).toBe(
+      createHash('sha256').update(CLAIM_EXCERPT).digest('hex'),
+    )
+    expect(record.evidence).toEqual([
+      {
+        project: projectKey(world.source),
+        path: 'src/loader.ts',
+        fingerprint: shaOf(world, world.source, 'src/loader.ts'),
+      },
+    ])
+    // The learning is the one source; the evidence is not a source.
+    expect(record.sources.map((s) => s.path)).toEqual([
+      'docs/solutions/lock-now.md',
+    ])
+    expect(record.targetEvidence).toEqual([])
+  })
+
+  it('gives the same id to the same claim and a different id to another claim, reason or learning', () => {
+    const world = mismatchWorld()
+    const id = (over: Json = {}): string =>
+      candidateIdentity(
+        toCandidateRecord(
+          valid(checkCandidate(codeMismatch(world, over), world.ctx)),
+        ),
+      )
+    const base = id()
+    // Another evidence file and another next step leave the id alone.
+    expect(
+      id({
+        nextStep: 'investigate',
+        counterevidence: [],
+      }),
+    ).toBe(base)
+    expect(id({ reason: 'unscoped' })).not.toBe(base)
+    expect(
+      id({
+        sources: [
+          {
+            project: world.target,
+            path: 'docs/solutions/lock-now.md',
+            fingerprint: world.otherSha,
+            excerpt: 'A lock file can outlive the process that took it',
+          },
+        ],
+      }),
+    ).not.toBe(base)
   })
 })
 

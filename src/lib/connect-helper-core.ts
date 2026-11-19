@@ -1344,12 +1344,46 @@ export function checkCandidate(
   }
 }
 
+/** A fingerprint of a claim: the learning's verbatim source excerpt. */
+function claimFingerprint(excerpt: string): string {
+  return createHash('sha256').update(excerpt).digest('hex')
+}
+
+/**
+ * What identifies a `code-mismatch` candidate beyond the shared fields: its
+ * reason, the claim it quotes and the evidence it cites. The evidence is kept
+ * with its project key so the ledger can recheck each file later; it is not
+ * part of the id.
+ */
+function mismatchRecord(
+  candidate: ValidCandidate,
+): Pick<CandidateRecord, 'mismatchReason' | 'claim' | 'evidence'> | undefined {
+  const [claim] = candidate.sources
+  if (
+    candidate.kind !== 'code-mismatch' ||
+    candidate.reason === undefined ||
+    claim === undefined
+  ) {
+    return undefined
+  }
+  return {
+    mismatchReason: candidate.reason,
+    claim: claimFingerprint(claim.excerpt),
+    evidence: candidate.counterevidence.map((item) => ({
+      project: projectKey(item.project),
+      path: item.path,
+      fingerprint: item.fingerprint,
+    })),
+  }
+}
+
 /**
  * The record the ledger identifies a candidate by. A source's role carries the
  * project key, so the same relative path in two projects stays two sources.
  */
 export function toCandidateRecord(candidate: ValidCandidate): CandidateRecord {
   return {
+    ...mismatchRecord(candidate),
     kind: candidate.kind,
     target: candidate.target,
     ruleId: candidate.ruleId,
@@ -1426,7 +1460,11 @@ export function findRecorded(
 
 // ── Digest ──────────────────────────────────────────────────────────────────
 
-export type Standing = 'new' | 'sources changed' | 'target changed'
+export type Standing =
+  | 'new'
+  | 'sources changed'
+  | 'target changed'
+  | 'evidence changed'
 
 export interface DigestCandidate {
   readonly id: string

@@ -34,7 +34,7 @@ Suppressing on path alone bypasses the ledger's changed-source decision.
 
 ## Solution
 
-Put the change signal in front of the shortcut. `classifyOne` still calls `findRecorded` first, because it is cheap and deterministic, but it now suppresses only when the ledger would not reopen the candidate for changed sources (`src/ce-connect-helper.ts:1716-1722` `reopensForChangedSources`; `src/ce-connect-helper.ts:1736-1778` `classifyOne`):
+Put the change signal in front of the shortcut. `classifyOne` still calls `findRecorded` first, because it is cheap and deterministic, but it now suppresses only when the ledger would not reopen the candidate for changed sources (`src/ce-connect-helper.ts:1743-1749` `reopensForChangedSources`; `src/ce-connect-helper.ts:1763-1811` `classifyOne`):
 
 ```ts
 // Before (reconstructed from the order of the checks): a citation of the
@@ -47,19 +47,19 @@ const recorded = findRecorded(check.candidate, input.snapshot.provenance)
 if (recorded !== undefined && !reopensForChangedSources(record, input)) {
   /* list as already recorded and stop */
 }
-classifyAgainstLedger(check.candidate, record, input.ledger, result)
+classifyAgainstLedger(check.candidate, record, input, result)
 ```
 
-`reopensForChangedSources` asks `classifyCandidate` (`src/lib/connect-state.ts:1103-1157`) and answers true only for a reopen with the reason `sources changed`. A promoted entry then carries the destination as its refresh pointer.
+`reopensForChangedSources` asks `classifyCandidate` (`src/lib/connect-state.ts:1262-1327`) and answers true only for a reopen with the reason `sources changed`. A promoted entry then carries the destination as its refresh pointer.
 
 The two neighbouring defects were fixed in the same pass:
 
 - **A contradiction must span projects.** The shape check required two sources and the target among them, but not a second project. A candidate with two learnings from the target alone is now dropped as `same-project-contradiction` (`contradictionProblem`, `src/lib/connect-helper-core.ts:1128-1146`).
-- **Lost evidence degrades the run.** A candidate dropped as `changed-since-begin` now adds the degrade reason `evidence-changed` and holds its rule back from the covered set, so the rule is offered again. A plain rejection stays non-degrading (`classifyOne`, `src/ce-connect-helper.ts:1736-1778`; `holdBack`, `src/ce-connect-helper.ts:1724-1734`).
+- **Lost evidence degrades the run.** A candidate dropped as `changed-since-begin` now adds the degrade reason `evidence-changed` and holds its rule back from the covered set, so the rule is offered again. A plain rejection stays non-degrading (`classifyOne`, `src/ce-connect-helper.ts:1763-1811`; `holdBack`, `src/ce-connect-helper.ts:1751-1761`).
 
 ## Why This Works
 
-`findRecorded` answers "does the target cite this source?" by project name and path (`src/lib/connect-helper-core.ts:1390-1417`). That is the right question for a suppression, and the wrong one for a changed source, because the citation was written at the fingerprint the source had then. The ledger holds the only record of that fingerprint, so only the ledger can say whether the cited text still matches. Suppression is allowed to be a shortcut. It is not allowed to bypass the check that makes the shortcut safe.
+`findRecorded` answers "does the target cite this source?" by project name and path (`src/lib/connect-helper-core.ts:1432-1459`). That is the right question for a suppression, and the wrong one for a changed source, because the citation was written at the fingerprint the source had then. The ledger holds the only record of that fingerprint, so only the ledger can say whether the cited text still matches. Suppression is allowed to be a shortcut. It is not allowed to bypass the check that makes the shortcut safe.
 
 ## Prevention
 
