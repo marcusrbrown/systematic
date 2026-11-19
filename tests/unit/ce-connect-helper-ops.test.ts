@@ -4352,6 +4352,28 @@ describe('a decided code-mismatch candidate across runs', () => {
     expect(readDigest(refresh.published)).toContain('evidence changed')
   })
 
+  it('accepts one code-mismatch candidate per claim of a learning, and drops only a repeat of the same claim', () => {
+    const { world, evidence } = mismatchWorld()
+    const first = mismatchCandidate(world, [proxyEvidence(evidence)])
+    const otherClaim = mismatchCandidate(world, [proxyEvidence(evidence)], {
+      title: 'The lock learning claims the wrong prevention',
+      sources: [
+        {
+          project: world.target,
+          path: 'docs/solutions/lock-now.md',
+          fingerprint: sha256(NOW_LEARNING),
+          excerpt: 'Keep the timeout short.',
+        },
+      ],
+    })
+    const { validated } = fullRun(world, [first, otherClaim, first])
+    const ids = accepted(validated).map((item) => item.id)
+    expect(ids).toHaveLength(2)
+    expect(new Set(ids).size).toBe(2)
+    expect(validated.droppedTotal).toBe(1)
+    expect(validated.dropped).toEqual({ 'duplicate-candidate': 1 })
+  })
+
   it('does not reopen when a recorded file is skipped as oversize', () => {
     const { world, evidence } = decidedOnLoader()
     fs.writeFileSync(
@@ -4456,8 +4478,14 @@ describe('a code-mismatch run, validated and published', () => {
     expect(lines[title + 1]).toBe(
       `Review in \`${projectName(world.target)}\`: /ce:compound-refresh path:docs/solutions/lock-now.md`,
     )
-    expect(lines[title + 2]).toBe(
-      `Evidence to recheck before you confirm: \`${projectName(evidence)}\` \`src/loader.ts:1-3\``,
+    expect(lines[title + 2]).toStartWith(
+      'Give ce:compound-refresh the lines below as context',
+    )
+    expect(lines[title + 3]).toBe(
+      '  Claim (stale): `Always reclaim a stale lock immediately after the timeout`',
+    )
+    expect(lines[title + 4]).toBe(
+      `  Evidence to recheck before you confirm: \`${projectName(evidence)}\` \`src/loader.ts:1-3\``,
     )
     expect(String(published.summary)).not.toContain('candidate-id:')
   })

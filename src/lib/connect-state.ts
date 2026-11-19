@@ -1400,6 +1400,7 @@ function applyCandidates(
   candidates: readonly CandidateRecord[],
   recordedAt: string,
   evidence: EvidenceLookup | undefined,
+  evidenceFor?: PublishInput['evidenceFor'],
 ): { ledger: Ledger; outcomes: CandidateStanding[] } {
   let entries = [...ledger.entries]
   const outcomes: CandidateStanding[] = []
@@ -1407,7 +1408,7 @@ function applyCandidates(
     const outcome = classifyCandidate(
       { version: LEDGER_VERSION, entries },
       candidate,
-      evidence,
+      evidenceFor?.(candidate) ?? evidence,
     )
     outcomes.push(outcome)
     if (outcome.standing === 'new') {
@@ -1495,6 +1496,13 @@ export interface PublishInput {
    * run's inventory. Left out, evidence never reopens an entry.
    */
   readonly evidence?: EvidenceLookup
+  /**
+   * The same for one candidate, where each candidate was checked against its
+   * own files (an import). Wins over `evidence` for the candidates it names.
+   */
+  readonly evidenceFor?: (
+    candidate: CandidateRecord,
+  ) => EvidenceLookup | undefined
   /** Left out, the ledger's coverage is kept as it is. */
   readonly coverage?: CoverageUpdate
 }
@@ -1652,6 +1660,7 @@ function foldRun(
     input.candidates,
     recordedAt,
     input.evidence,
+    input.evidenceFor,
   )
   const coverage =
     input.coverage === undefined
@@ -1867,6 +1876,8 @@ export type ImportPlan =
       readonly runId: string
       readonly files: Readonly<Record<string, string>>
       readonly candidates: readonly CandidateRecord[]
+      /** How each candidate's evidence stands, so the ledger fold classifies it as placement did. */
+      readonly evidenceFor?: PublishInput['evidenceFor']
       /**
        * The files that replace the committed ones when the ledger could not be
        * written after the commit, so the run says what happened to it.
@@ -1946,6 +1957,9 @@ export function insertImportRun(
         runId: decision.runId,
         files: decision.files,
         candidates: decision.candidates,
+        ...(decision.evidenceFor === undefined
+          ? {}
+          : { evidenceFor: decision.evidenceFor }),
       },
       options,
     )

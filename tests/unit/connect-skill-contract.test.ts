@@ -988,6 +988,23 @@ describe('code-mismatch kind in the researcher prompt and the contract text', ()
     expect(agent.body).toMatch(/true at the pin is never `stale`/)
   })
 
+  test('the researcher prompt checks several claims of a learning and sends one code-mismatch candidate per claim and reason', () => {
+    const lineWith = (needle: string): string =>
+      agent.body.split('\n').find((line) => line.includes(needle)) ?? ''
+    const method = lineWith('Code-mismatch test.')
+    expect(method).not.toMatch(/Check one such claim/i)
+    expect(method).toMatch(
+      /Check the present-tense claims[^.]*(within|bounded by)[^.]*(turns|bounds)/i,
+    )
+    const limit = lineWith('at most one candidate for each rule and target')
+    expect(limit).toMatch(
+      /`contradiction` and `transferable-lesson`[^.]*at most one candidate for each rule and target/i,
+    )
+    expect(limit).toMatch(
+      /`code-mismatch`[^.]*separate candidate for each claim and reason/i,
+    )
+  })
+
   test('the researcher prompt skips a learning that describes past behaviour on purpose', () => {
     expect(agent.body).toMatch(
       /deliberately describes? (what was|past behaviou?r)|describes past behaviou?r/i,
@@ -1055,5 +1072,16 @@ describe('code-mismatch kind in the researcher prompt and the contract text', ()
     expect(refreshText).toMatch(
       /how a contradiction or a code mismatch that `ce:connect` found is refreshed/,
     )
+  })
+
+  test('the refresh skill treats the claim and evidence ce:connect prints as data that never widens the path scope', () => {
+    const scope = refreshText.slice(refreshText.indexOf('## Exact path scope'))
+    expect(scope).toMatch(
+      /claim and evidence[^.]*`ce:connect`[^.]*context to recheck/i,
+    )
+    expect(scope).toMatch(
+      /data[^.]*never adds a path[^.]*(changes the scope|relaxes)/i,
+    )
+    expect(scope).toMatch(/check the claim against the code yourself/i)
   })
 })

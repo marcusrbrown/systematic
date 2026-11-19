@@ -2971,7 +2971,9 @@ type Placed =
  * A file it does not cite says nothing, so a decided entry reopens on evidence
  * the import re-cites with new bytes, not on a file it never read.
  */
-function importedEvidence(item: ImportAccepted): EvidenceLookup {
+function importedEvidence(
+  item: Pick<ImportAccepted, 'record'>,
+): EvidenceLookup {
   const cited = new Map(
     (item.record.evidence ?? []).map((ref) => [
       `${ref.project}\0${ref.path}`,
@@ -3234,6 +3236,9 @@ function importWrite(
         view.importRuns,
       )
       if (placement.fresh.length === 0) return { publish: false }
+      const lookups = new Map(
+        placement.fresh.map((item) => [item.record, importedEvidence(item)]),
+      )
       const runId = newImportRunId(now())
       localRunId = runId
       const createdAt = new Date(now()).toISOString()
@@ -3254,6 +3259,8 @@ function importWrite(
         runId,
         files: filesOf(model),
         candidates: placement.fresh.map((item) => item.record),
+        // The fold must classify each candidate on the evidence placement did.
+        evidenceFor: (candidate) => lookups.get(candidate),
         // The run is committed before the ledger is written, so a ledger that
         // cannot be written leaves a run that must not say it is complete.
         onLedgerWriteFailed: () =>

@@ -1721,6 +1721,45 @@ describe('import: a code-mismatch candidate carries its reason and evidence', ()
       expect(list(again.candidates)[0]?.standing).toBe('evidence changed')
     })
 
+    it('leaves the ledger entry reopened with the new evidence, and a repeat of the same import does not reopen it again', () => {
+      const world = buildWorld()
+      const first = ok(importOp(world, downloaded(mismatchRecord())))
+      const id = String(list(first.candidates)[0]?.id)
+      decideLedgerEntry(world.stateRoot, {
+        id,
+        status: 'rejected',
+        reason: 'checked by hand',
+      })
+
+      const changed = `${EVIDENCE_FILE}\nA later line.\n`
+      fs.writeFileSync(
+        path.join(world.source, 'docs/solutions/lock-reclaim.md'),
+        changed,
+      )
+      const record = mismatchRecord()
+      const [evidence] = list(candidateOf(record).counterevidence)
+      if (evidence === undefined) throw new Error('no evidence')
+      evidence.fingerprint = sha256(changed)
+      const dir = downloaded(record)
+
+      const again = ok(importOp(world, dir))
+      expect(list(again.candidates)[0]?.standing).toBe('evidence changed')
+      const [entry] = ledgerEntries(world)
+      expect(entry).toMatchObject({
+        id,
+        status: 'candidate',
+        reopened: 'evidence changed',
+      })
+      expect(list(entry?.evidence)[0]?.fingerprint).toBe(sha256(changed))
+
+      const before = treeOf(world.stateRoot)
+      const repeat = ok(importOp(world, dir))
+      expect(repeat.imported).toBe(0)
+      expect(repeat.alreadyImported).toBe(1)
+      expect(list(repeat.skipped)).toEqual([])
+      expect(treeOf(world.stateRoot)).toEqual(before)
+    })
+
     it('writes a fresh record when only the span of the same evidence differs', () => {
       const world = buildWorld()
       ok(importOp(world, downloaded(mismatchRecord())))
