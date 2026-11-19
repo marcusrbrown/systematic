@@ -531,6 +531,18 @@ function toolResultMessage(id: string, name: string, texts: string[]) {
   }
 }
 
+/** The host collapses a single text part to `{ type: 'text' }` before the hook runs. */
+function textToolResultMessage(id: string, name: string, text: string) {
+  return {
+    role: 'tool',
+    content: [
+      { type: 'tool-result', id, name, result: { type: 'text', value: text } },
+    ],
+  }
+}
+
+type ToolResultMessage = ReturnType<typeof textToolResultMessage>
+
 describe('restoreSkillResults', () => {
   test('replaces the matching tool-result with the full text and leaves the rest', () => {
     const store = createSkillOutputStore()
@@ -617,6 +629,122 @@ describe('restoreSkillResults', () => {
     ).toEqual([{ type: 'text', text: 'CUT' }])
   })
 
+  test('leaves a text result unchanged when it already holds the full text', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c1', 'FULL-OUTPUT')
+    const event = {
+      sessionID: 's',
+      messages: [
+        textToolResultMessage('c1', 'systematic_skill', 'FULL-OUTPUT'),
+      ],
+    }
+
+    restoreSkillResults(store, event)
+
+    expect((event.messages[0] as ToolResultMessage).content[0]?.result).toEqual(
+      { type: 'text', value: 'FULL-OUTPUT' },
+    )
+  })
+
+  test('leaves a content result unchanged when its only text part is the full text', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c1', 'FULL-OUTPUT')
+    const event = {
+      sessionID: 's',
+      messages: [toolResultMessage('c1', 'systematic_skill', ['FULL-OUTPUT'])],
+    }
+
+    restoreSkillResults(store, event)
+
+    expect(
+      (event.messages[0] as ReturnType<typeof toolResultMessage>).content[0]
+        ?.result,
+    ).toEqual({
+      type: 'content',
+      value: [{ type: 'text', text: 'FULL-OUTPUT' }],
+    })
+  })
+
+  test('restores a truncated text result as text, not as content', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c1', 'FULL-OUTPUT')
+    const event = {
+      sessionID: 's',
+      messages: [textToolResultMessage('c1', 'systematic_skill', 'CUT')],
+    }
+
+    restoreSkillResults(store, event)
+
+    expect((event.messages[0] as ToolResultMessage).content[0]?.result).toEqual(
+      { type: 'text', value: 'FULL-OUTPUT' },
+    )
+  })
+
+  test('restores a truncated content result as content and drops the host marker', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c1', 'FULL-OUTPUT')
+    const event = {
+      sessionID: 's',
+      messages: [
+        toolResultMessage('c1', 'systematic_skill', ['CUT', '[showing 1-5]']),
+      ],
+    }
+
+    restoreSkillResults(store, event)
+
+    expect(
+      (event.messages[0] as ReturnType<typeof toolResultMessage>).content[0]
+        ?.result,
+    ).toEqual({
+      type: 'content',
+      value: [{ type: 'text', text: 'FULL-OUTPUT' }],
+    })
+  })
+
+  test('leaves a result of either kind unchanged when the store has no entry', () => {
+    const store = createSkillOutputStore()
+    const event = {
+      sessionID: 's',
+      messages: [
+        textToolResultMessage('c1', 'systematic_skill', 'TEXT'),
+        toolResultMessage('c2', 'systematic_skill', ['CONTENT']),
+      ],
+    }
+
+    restoreSkillResults(store, event)
+
+    const [text, content] = event.messages as [
+      ToolResultMessage,
+      ReturnType<typeof toolResultMessage>,
+    ]
+    expect(text.content[0]?.result).toEqual({ type: 'text', value: 'TEXT' })
+    expect(content.content[0]?.result).toEqual({
+      type: 'content',
+      value: [{ type: 'text', text: 'CONTENT' }],
+    })
+  })
+
+  test('does not overwrite a result that is neither text nor content', () => {
+    const store = createSkillOutputStore()
+    store.put('s', 'c1', 'FULL-OUTPUT')
+    const failed = {
+      role: 'tool',
+      content: [
+        {
+          type: 'tool-result',
+          id: 'c1',
+          name: 'systematic_skill',
+          result: { error: 'boom', content: [] },
+          resultType: 'error',
+        },
+      ],
+    }
+
+    restoreSkillResults(store, { sessionID: 's', messages: [failed] })
+
+    expect(failed.content[0]?.result).toEqual({ error: 'boom', content: [] })
+  })
+
   test('ignores events and messages of any other shape without throwing', () => {
     const store = createSkillOutputStore()
     store.put('s', 'c1', 'FULL-OUTPUT')
@@ -666,6 +794,28 @@ describe('context hook wiring', () => {
       (event.messages[0] as ReturnType<typeof toolResultMessage>).content[0]
         ?.result.value,
     ).toEqual([{ type: 'text', text: loaded.content ?? '' }])
+  })
+
+  test('a load that fits under the host limit keeps the host text shape on every request', async () => {
+    const host = await setup()
+    const tool = await registeredTool(host)
+    const loaded = await tool.execute(
+      { name: 'git-worktree' },
+      toolContext({ sessionID: 's-fit', id: 'call-fit' }),
+    )
+    const full = loaded.content ?? ''
+    const hook = host.hooks.find((candidate) => candidate.name === 'context')
+
+    for (let request = 0; request < 2; request++) {
+      const event = {
+        sessionID: 's-fit',
+        messages: [textToolResultMessage('call-fit', 'systematic_skill', full)],
+      }
+      await hook?.callback(event)
+      expect(
+        (event.messages[0] as ToolResultMessage).content[0]?.result,
+      ).toEqual({ type: 'text', value: full })
+    }
   })
 
   test('a failed permission check stores nothing to restore', async () => {
