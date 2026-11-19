@@ -942,13 +942,15 @@ export interface LedgerEntry {
   /** Set when `reopened` stands in for `evidence changed`. */
   readonly reopenedFor?: ReopenedFor
   /**
-   * How many times the entry has been reopened. Absent means 0 and is what a
-   * new entry has, so a ledger that never reopened one is the bytes it always
-   * was. A decision settles one generation: a caller that made it against an
-   * earlier one is refused. `history` cannot stand in, because it is capped.
-   * The shipped 3.35 reader names the fields it reads and ignores this one.
+   * The revision of what a decision on this entry reviews: 12 hex characters
+   * of a hash of its source, target-evidence and recorded-evidence
+   * fingerprints, fixed when the entry is written new or reopened. The same
+   * content always has the same revision, so no number can name two. A decision
+   * made against another revision is refused. Absent on an entry written
+   * before revisions; `revisionOf` then hashes the entry's own fields. The
+   * shipped 3.35 reader names the fields it reads and ignores this one.
    */
-  readonly generation?: number
+  readonly revision?: string
   readonly history: readonly LedgerHistoryItem[]
   readonly recordedAt: string
 }
@@ -1018,13 +1020,14 @@ function isOptionalText(value: unknown, maxLength: number): boolean {
   return value === undefined || plainText(value, maxLength)
 }
 
-function isGeneration(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+const REVISION = /^[0-9a-f]{12}$/
+
+function isRevision(value: unknown): value is string {
+  return typeof value === 'string' && REVISION.test(value)
 }
 
-/** A stored generation is a positive integer: the writer leaves 0 out. */
-function isOptionalGeneration(value: unknown): boolean {
-  return value === undefined || (isGeneration(value) && value > 0)
+function isOptionalRevision(value: unknown): boolean {
+  return value === undefined || isRevision(value)
 }
 
 function isLedgerSource(value: unknown): value is LedgerSource {
@@ -1098,7 +1101,7 @@ function isLedgerEntry(value: unknown): value is LedgerEntry {
     isOptionalText(value.destination, MAX_PATH_LENGTH) &&
     (value.reopened === undefined || isReopenReason(value.reopened)) &&
     isOptionalReopenedFor(value.reopenedFor) &&
-    isOptionalGeneration(value.generation) &&
+    isOptionalRevision(value.revision) &&
     Array.isArray(value.history) &&
     value.history.every(isHistoryItem) &&
     plainText(value.recordedAt, MAX_STRING_LENGTH)
@@ -1238,8 +1241,6 @@ export type CandidateStanding =
       readonly id: string
       readonly reason: ReopenReason
       readonly priorStatus: LedgerStatus
-      /** The generation the reopened entry has once the run is published: one more than before. */
-      readonly generation: number
       /** Where the promoted learning lives, when a promoted entry's sources changed. */
       readonly refreshPointer?: string
     }
@@ -1372,7 +1373,6 @@ export function classifyCandidate(
     }
   }
   const sourcesSame = sameSources(sources, prior)
-  const reopenedGeneration = generationOf(prior) + 1
   const pointer =
     prior.status === 'promoted' && prior.destination !== undefined
       ? { refreshPointer: prior.destination }
@@ -1383,7 +1383,6 @@ export function classifyCandidate(
       id,
       reason: 'sources changed',
       priorStatus: prior.status,
-      generation: reopenedGeneration,
       ...pointer,
     }
   }
@@ -1393,7 +1392,6 @@ export function classifyCandidate(
       id,
       reason: 'evidence changed',
       priorStatus: prior.status,
-      generation: reopenedGeneration,
       ...pointer,
     }
   }
@@ -1405,7 +1403,6 @@ export function classifyCandidate(
     id,
     reason: 'target changed',
     priorStatus: prior.status,
-    generation: reopenedGeneration,
   }
 }
 
@@ -1443,7 +1440,11 @@ function withEvidence(
   evidence: readonly EvidenceRef[],
 ): LedgerEntry {
   const { evidence: _recorded, ...rest } = entry
-  return evidence.length === 0 ? rest : { ...rest, evidence: [...evidence] }
+  // The revision stays what the entry was proposed with, so a report written
+  // for it still matches; an entry without one is pinned before its evidence
+  // changes.
+  const pinned = { ...rest, revision: revisionOf(entry) }
+  return evidence.length === 0 ? pinned : { ...pinned, evidence: [...evidence] }
 }
 
 /** The `reopened` a ledger file keeps for a reason, and the reason itself when the old reader cannot hold it. */
@@ -1456,9 +1457,45 @@ function reopenedFields(reason: ReopenReason): {
     : { reopened: reason }
 }
 
-/** The generation of an entry: how many times it was reopened, 0 when none is recorded. */
-export function generationOf(entry: LedgerEntry): number {
-  return entry.generation ?? 0
+/**
+ * The revision of what is reviewed: a hash of the source, target-evidence and
+ * recorded-evidence fingerprints, each list in the order the ledger normalizes
+ * it to, kept to 12 hex characters. Equal content gives an equal revision, so a revision can never
+ * name two different contents.
+ */
+function revisionOfParts(
+  sources: readonly LedgerSource[],
+  targetEvidence: readonly TargetEvidenceRef[],
+  evidence: readonly EvidenceRef[],
+): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify([
+        'connect-revision-v1',
+        sources.map((x) => [x.role, x.path, x.fingerprint]),
+        targetEvidence.map((x) => [x.path, x.fingerprint]),
+        evidence.map((x) => [x.project, x.path, x.fingerprint]),
+      ]),
+    )
+    .digest('hex')
+    .slice(0, 12)
+}
+
+/** The revision a candidate has once written: what the digest and the report show for it. */
+export function revisionOfCandidate(candidate: CandidateRecord): string {
+  return revisionOfParts(
+    ledgerSources(candidate),
+    normalizedTargetEvidence(candidate),
+    normalizedEvidence(candidate),
+  )
+}
+
+/** The revision of an entry: the one it was written with, or the one its own fields hash to when it has none. */
+export function revisionOf(entry: LedgerEntry): string {
+  return (
+    entry.revision ??
+    revisionOfParts(entry.sources, entry.targetEvidence, entry.evidence ?? [])
+  )
 }
 
 function snapshot(entry: LedgerEntry): LedgerHistoryItem {
@@ -1512,6 +1549,7 @@ function applyCandidates(
         sources: ledgerSources(candidate),
         targetEvidence: normalizedTargetEvidence(candidate),
         ...mismatchFields(candidate),
+        revision: revisionOfCandidate(candidate),
         status: 'candidate',
         history: [],
         recordedAt,
@@ -1540,7 +1578,7 @@ function applyCandidates(
               ...mismatchFields(candidate),
               status: 'candidate',
               ...reopenedFields(outcome.reason),
-              generation: outcome.generation,
+              revision: revisionOfCandidate(candidate),
               history: [...entry.history, snapshot(entry)].slice(-MAX_HISTORY),
               recordedAt,
             }
@@ -2382,12 +2420,12 @@ export interface DecideInput {
    */
   readonly onlyIfOpen?: boolean
   /**
-   * The generation of the entry the decision was made against. Applied only if
-   * the entry is still at it when the lock is held; an entry reopened since is
-   * left as it is and the answer is `stale-generation`. Left out, any
-   * generation is decided.
+   * The revision of the entry the decision was made against: 12 lowercase hex
+   * characters. Applied only if the entry still has it when the lock is held;
+   * an entry with another revision is left as it is and the answer is
+   * `stale-revision`. Left out, any revision is decided.
    */
-  readonly generation?: number
+  readonly revision?: string
 }
 
 export type DecideResult =
@@ -2399,7 +2437,7 @@ export type DecideResult =
         | 'invalid-input'
         | 'unknown-candidate'
         | 'not-open'
-        | 'stale-generation'
+        | 'stale-revision'
         | 'lock-failed'
         | 'ledger-unreadable'
         | 'write-failed'
@@ -2409,8 +2447,7 @@ function validDecision(input: DecideInput): boolean {
   if (!plainText(input.id, MAX_STRING_LENGTH)) return false
   if (input.status !== 'promoted' && input.status !== 'rejected') return false
   if (!plainText(input.reason.trim(), MAX_REASON_LENGTH)) return false
-  const { generation } = input
-  if (generation !== undefined && !isGeneration(generation)) return false
+  if (input.revision !== undefined && !isRevision(input.revision)) return false
   return isOptionalText(input.destination, MAX_PATH_LENGTH)
 }
 
@@ -2418,22 +2455,22 @@ function validDecision(input: DecideInput): boolean {
 function refusalOf(
   input: DecideInput,
   prior: LedgerEntry,
-): 'not-open' | 'stale-generation' | undefined {
+): 'not-open' | 'stale-revision' | undefined {
   if (input.onlyIfOpen === true && prior.status !== 'candidate') {
     return 'not-open'
   }
   const stale =
-    input.generation !== undefined && input.generation !== generationOf(prior)
-  return stale ? 'stale-generation' : undefined
+    input.revision !== undefined && input.revision !== revisionOf(prior)
+  return stale ? 'stale-revision' : undefined
 }
 
 /**
  * Record a decision on a ledger entry. It takes the lock, so a busy lock makes
  * it fail without writing, and rewrites the ledger by temp-and-rename. Both
  * statuses need a reason. With `onlyIfOpen`, an entry that is no longer a
- * candidate is left as it is and the answer is `not-open`. With `generation`,
- * an entry reopened since that generation is left as it is and the answer is
- * `stale-generation`.
+ * candidate is left as it is and the answer is `not-open`. With `revision`,
+ * an entry that has another revision is left as it is and the answer is
+ * `stale-revision`.
  */
 export function decideLedgerEntry(
   root: string,
@@ -2469,9 +2506,7 @@ export function decideLedgerEntry(
         ? {}
         : { mismatchReason: prior.mismatchReason }),
       ...(prior.evidence === undefined ? {} : { evidence: prior.evidence }),
-      ...(prior.generation === undefined
-        ? {}
-        : { generation: prior.generation }),
+      ...(prior.revision === undefined ? {} : { revision: prior.revision }),
       status: input.status,
       reason: input.reason.trim(),
       ...(input.status === 'promoted' && input.destination !== undefined

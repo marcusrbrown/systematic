@@ -7,8 +7,10 @@ import yaml from 'js-yaml'
 import { decisionLine, manifestMarker } from '../../src/lib/connect-ci.js'
 import { projectName } from '../../src/lib/connect-helper-core.js'
 import {
+  type LedgerEntry,
   prepareStateRoot,
   readCiRunMarker,
+  revisionOf,
 } from '../../src/lib/connect-state.js'
 
 // Script tests run real shell steps and the bundled helper, which can take
@@ -960,8 +962,8 @@ interface SeedOptions {
   marker?: string
   invocation?: Json | null
   candidates?: Json[]
-  /** Candidates (by number) the ledger has reopened, and the generation the run proposed them at. */
-  generations?: Record<number, number>
+  /** Candidates (by number) with a stored revision, which the run record proposes at too. */
+  revisions?: Record<number, string>
 }
 
 /** The files a run job hands to render: ledger, run record and invocation record. */
@@ -973,8 +975,10 @@ function seedHandoff(box: Box, options: SeedOptions = {}): string {
   writeJson(path.join(dir, 'ledger.json'), {
     version: 2,
     entries: numbers.map((n) => {
-      const generation = options.generations?.[n] ?? 0
-      return generation > 0 ? { ...entryOf(n), generation } : entryOf(n)
+      const revision = options.revisions?.[n]
+      return revision === undefined
+        ? entryOf(n)
+        : { ...entryOf(n), revision, reopened: 'sources changed' }
     }),
   })
   writeJson(path.join(dir, 'runs', CONNECT_RUN, 'run.json'), {
@@ -1000,8 +1004,8 @@ function seedHandoff(box: Box, options: SeedOptions = {}): string {
       candidates:
         options.candidates ??
         numbers.map((n) => {
-          const generation = options.generations?.[n] ?? 0
-          return blockCandidate(n, generation > 0 ? { generation } : {})
+          const revision = options.revisions?.[n]
+          return blockCandidate(n, revision === undefined ? {} : { revision })
         }),
     },
   })
@@ -1077,41 +1081,55 @@ function finalize(
   })
 }
 
-function tick(body: string, index: number, status: 'promoted' | 'rejected') {
-  const open = decisionLine(idOf(index), status, false)
-  if (!body.includes(open)) throw new Error(`no box for ${index} ${status}`)
-  return body.replace(open, decisionLine(idOf(index), status, true))
+/** The revision candidate `index`'s fixture entry has, unless a stored one is named. */
+function fixtureRevision(index: number): string {
+  return revisionOf(entryOf(index) as unknown as LedgerEntry)
 }
 
-/** Tick a box of the generation the report generated it for. */
-function tickAt(
+/** The generated line of candidate `index` at a revision (the fixture entry's unless named). */
+function boxLine(
+  index: number,
+  status: 'promoted' | 'rejected',
+  isTicked: boolean,
+  revision = fixtureRevision(index),
+): string {
+  return decisionLine(idOf(index), status, isTicked, revision)
+}
+
+function tick(
   body: string,
   index: number,
   status: 'promoted' | 'rejected',
-  generation: number,
-): string {
-  const open = decisionLine(idOf(index), status, false, generation)
+  revision = fixtureRevision(index),
+) {
+  const open = boxLine(index, status, false, revision)
   if (!body.includes(open)) throw new Error(`no box for ${index} ${status}`)
-  return body.replace(open, decisionLine(idOf(index), status, true, generation))
+  return body.replace(open, boxLine(index, status, true, revision))
 }
 
-/** The state the next run starts from, with a candidate reopened: the ledger and the run record that did it. */
-function reopenInState(box: Box, index: number, generation: number): void {
+const REV_A = 'aaaaaaaaaaaa'
+const REV_B = 'bbbbbbbbbbbb'
+const REV_OLD = 'cccccccccccc'
+
+/** The state the next run starts from, with a candidate's content changed: the ledger entry and the run record that did it. */
+function reopenInState(box: Box, index: number, revision: string): void {
   const root = stateRootOf(box)
   const ledgerFile = path.join(root, 'ledger.json')
   const ledger = JSON.parse(fs.readFileSync(ledgerFile, 'utf8')) as {
-    entries: Array<{ id: string; generation?: number }>
+    entries: Array<{ id: string; revision?: string; reopened?: string }>
   }
   for (const entry of ledger.entries) {
-    if (entry.id === idOf(index)) entry.generation = generation
+    if (entry.id !== idOf(index)) continue
+    entry.revision = revision
+    entry.reopened = 'sources changed'
   }
   fs.writeFileSync(ledgerFile, JSON.stringify(ledger))
   const recordFile = path.join(root, 'runs', CONNECT_RUN, 'run.json')
   const record = JSON.parse(fs.readFileSync(recordFile, 'utf8')) as {
-    candidateBlock: { candidates: Array<{ id: string; generation?: number }> }
+    candidateBlock: { candidates: Array<{ id: string; revision?: string }> }
   }
   for (const item of record.candidateBlock.candidates) {
-    if (item.id === idOf(index)) item.generation = generation
+    if (item.id === idOf(index)) item.revision = revision
   }
   fs.writeFileSync(recordFile, JSON.stringify(record))
 }
@@ -1419,8 +1437,8 @@ describe('prepare and render: ticks across days', () => {
     seedHandoff(box)
     const first = renderDay(box, DATE_ONE)
     expect(first.render.exitCode).toBe(0)
-    expect(first.body).toContain(decisionLine(idOf(1), 'rejected', false))
-    expect(first.body).toContain(decisionLine(idOf(2), 'promoted', false))
+    expect(first.body).toContain(boxLine(1, 'rejected', false))
+    expect(first.body).toContain(boxLine(2, 'promoted', false))
 
     openReport(box, 40, tick(first.body, 1, 'rejected'), DATE_ONE)
     const applied = recordTicks(box, 40)
@@ -1439,7 +1457,7 @@ describe('prepare and render: ticks across days', () => {
     const second = renderDay(box, DATE_TWO, { run: '556' })
     expect(second.render.exitCode).toBe(0)
     expect(second.body).not.toContain(idOf(1))
-    expect(second.body).toContain(decisionLine(idOf(2), 'rejected', false))
+    expect(second.body).toContain(boxLine(2, 'rejected', false))
   })
 
   it('leaves the ledger byte-identical when the same body is applied twice', () => {
@@ -1481,7 +1499,7 @@ describe('prepare and render: ticks across days', () => {
     const box = makeBox()
     seedHandoff(box)
     const { body } = renderDay(box, DATE_ONE)
-    const forged = `${body}\n${decisionLine(idOf(2), 'rejected', true)}\n`
+    const forged = `${body}\n${boxLine(2, 'rejected', true)}\n`
     const before = ledgerBytes(box)
     openReport(box, 40, forged, DATE_ONE)
     const applied = recordTicks(box, 40)
@@ -3078,15 +3096,15 @@ describe('post: ticks made while a run was executing', () => {
     setIssueBody(box, number, tick(body, 1, 'rejected'))
 
     const second = nextDay(box, DATE_ONE)
-    expect(second.body).toContain(decisionLine(idOf(1), 'rejected', false))
+    expect(second.body).toContain(boxLine(1, 'rejected', false))
     const out = publish(box, second.render, DATE_ONE)
     expect(out.settle.exitCode).toBe(0)
     expect(out.number).toBe(number)
 
     const posted = liveBody(box, number)
-    expect(posted).toContain(decisionLine(idOf(1), 'rejected', true))
-    expect(posted).toContain(decisionLine(idOf(1), 'promoted', false))
-    expect(posted).toContain(decisionLine(idOf(2), 'rejected', false))
+    expect(posted).toContain(boxLine(1, 'rejected', true))
+    expect(posted).toContain(boxLine(1, 'promoted', false))
+    expect(posted).toContain(boxLine(2, 'rejected', false))
     // Only checkbox characters differ from the body that was verified.
     expect(unticked(posted)).toBe(trimmed(second.body))
     expect(issuesOf(box)).toHaveLength(1)
@@ -3125,7 +3143,7 @@ describe('post: ticks made while a run was executing', () => {
     expect(out.number).not.toBe(number)
 
     const posted = liveBody(box, out.number)
-    expect(posted).toContain(decisionLine(idOf(2), 'promoted', true))
+    expect(posted).toContain(boxLine(2, 'promoted', true))
     expect(unticked(posted)).toBe(trimmed(second.body))
     expect(issuesOf(box).find((i) => i.number === number)?.state).toBe('closed')
 
@@ -3143,14 +3161,14 @@ describe('post: ticks made while a run was executing', () => {
     })
     expect(out.close.exitCode).toBe(0)
     const posted = liveBody(box, out.number)
-    expect(posted).toContain(decisionLine(idOf(1), 'rejected', true))
+    expect(posted).toContain(boxLine(1, 'rejected', true))
     expect(unticked(posted)).toBe(trimmed(second.body))
     expect(issuesOf(box).find((i) => i.number === number)?.state).toBe('closed')
   })
 
-  describe('a candidate that was reopened', () => {
-    function firstDayAt(box: Box, generations: Record<number, number>) {
-      seedHandoff(box, { generations })
+  describe('a candidate whose content changed', () => {
+    function firstDayAt(box: Box, revisions: Record<number, string>) {
+      seedHandoff(box, { revisions })
       const day = renderDay(box, DATE_ONE)
       expect(day.render.exitCode).toBe(0)
       const out = publish(box, day.render, DATE_ONE)
@@ -3160,14 +3178,14 @@ describe('post: ticks made while a run was executing', () => {
 
     it('keeps a tick on its box across a same-date edit and is recorded next time', () => {
       const box = makeBox()
-      const { number, body } = firstDayAt(box, { 1: 1 })
-      expect(body).toContain(decisionLine(idOf(1), 'rejected', false, 1))
-      setIssueBody(box, number, tickAt(body, 1, 'rejected', 1))
+      const { number, body } = firstDayAt(box, { 1: REV_A })
+      expect(body).toContain(boxLine(1, 'rejected', false, REV_A))
+      setIssueBody(box, number, tick(body, 1, 'rejected', REV_A))
 
       const second = nextDay(box, DATE_ONE)
       publish(box, second.render, DATE_ONE)
       const posted = liveBody(box, number)
-      expect(posted).toContain(decisionLine(idOf(1), 'rejected', true, 1))
+      expect(posted).toContain(boxLine(1, 'rejected', true, REV_A))
       expect(unticked(posted)).toBe(trimmed(second.body))
 
       runStep(box, 'prepare', 'Find the open report', FOUND)
@@ -3177,29 +3195,29 @@ describe('post: ticks made while a run was executing', () => {
 
     it('keeps a tick on its box when the report rotates to a new date', () => {
       const box = makeBox()
-      const { number, body } = firstDayAt(box, { 1: 1 })
-      setIssueBody(box, number, tickAt(body, 1, 'rejected', 1))
+      const { number, body } = firstDayAt(box, { 1: REV_A })
+      setIssueBody(box, number, tick(body, 1, 'rejected', REV_A))
 
       const second = nextDay(box, DATE_TWO)
       const out = publish(box, second.render, DATE_TWO)
       expect(out.number).not.toBe(number)
       expect(liveBody(box, out.number)).toContain(
-        decisionLine(idOf(1), 'rejected', true, 1),
+        boxLine(1, 'rejected', true, REV_A),
       )
       runStep(box, 'prepare', 'Find the open report', FOUND)
       expect(recordTicks(box, out.number).stdout).toContain('accepted 1')
       expect(statusOf(box, 1)).toBe('rejected')
     })
 
-    it('does not carry a tick on generation 1 into the box of generation 2', () => {
+    it('does not carry a tick on one revision into the box of another', () => {
       const box = makeBox()
-      const { number, body } = firstDayAt(box, { 1: 1 })
-      setIssueBody(box, number, tickAt(body, 1, 'rejected', 1))
-      // A later run reopens the candidate again, while the tick waits on the report.
-      reopenInState(box, 1, 2)
+      const { number, body } = firstDayAt(box, { 1: REV_A })
+      setIssueBody(box, number, tick(body, 1, 'rejected', REV_A))
+      // A later run changes the candidate's content, while the tick waits on the report.
+      reopenInState(box, 1, REV_B)
 
       const second = nextDay(box, DATE_ONE)
-      expect(second.body).toContain(decisionLine(idOf(1), 'rejected', false, 2))
+      expect(second.body).toContain(boxLine(1, 'rejected', false, REV_B))
       publish(box, second.render, DATE_ONE)
       const posted = liveBody(box, number)
       expect(posted).not.toContain('- [x]')
@@ -3209,18 +3227,44 @@ describe('post: ticks made while a run was executing', () => {
       expect(recordTicks(box, number).stdout).toContain('accepted 0')
       expect(statusOf(box, 1)).toBe('candidate')
     })
+
+    it('neither carries nor records a tick on revision A after a cache rollback publishes revision B', () => {
+      const box = makeBox()
+      // Revision A is posted although its ledger cache was never saved.
+      const { number, body } = firstDayAt(box, { 1: REV_A })
+      setIssueBody(box, number, tick(body, 1, 'rejected', REV_A))
+
+      // The next run restores the cache from before A: the entry is at an older revision.
+      reopenInState(box, 1, REV_OLD)
+      runStep(box, 'prepare', 'Find the open report', FOUND)
+      expect(recordTicks(box, number).stdout).toContain('accepted 0')
+      expect(statusOf(box, 1)).toBe('candidate')
+
+      // It then reopens the same candidate with different evidence as revision B.
+      reopenInState(box, 1, REV_B)
+      const second = nextDay(box, DATE_ONE)
+      publish(box, second.render, DATE_ONE)
+      const posted = liveBody(box, number)
+      expect(posted).toContain(boxLine(1, 'rejected', false, REV_B))
+      expect(posted).not.toContain('- [x]')
+
+      // The following run has nothing to settle.
+      runStep(box, 'prepare', 'Find the open report', FOUND)
+      expect(recordTicks(box, number).stdout).toContain('accepted 0')
+      expect(statusOf(box, 1)).toBe('candidate')
+    })
   })
 
   it('carries no tick onto a candidate the run reopened, and the next run records none', () => {
     const box = makeBox()
     const { number, body } = firstDay(box)
-    // The operator ticks Rejected while the run executes, and the run reopens
-    // that candidate: its learning changed, so the entry is a generation on.
+    // The operator ticks Rejected while the run executes, and the run changes
+    // that candidate's content.
     setIssueBody(box, number, tick(body, 1, 'rejected'))
-    reopenInState(box, 1, 1)
+    reopenInState(box, 1, REV_B)
 
     const second = nextDay(box, DATE_ONE)
-    expect(second.body).toContain(decisionLine(idOf(1), 'rejected', false, 1))
+    expect(second.body).toContain(boxLine(1, 'rejected', false, REV_B))
     const out = publish(box, second.render, DATE_ONE)
     expect(out.settle.exitCode).toBe(0)
 
@@ -3232,15 +3276,15 @@ describe('post: ticks made while a run was executing', () => {
     expect(statusOf(box, 1)).toBe('candidate')
   })
 
-  it('records, as stale, a tick left on the old body of a candidate that reopened', () => {
+  it('records, as stale, a tick left on the old body of a candidate whose content changed', () => {
     const box = makeBox()
     const { number, body } = firstDay(box)
     setIssueBody(box, number, tick(body, 1, 'rejected'))
     const ledger = JSON.parse(ledgerBytes(box)) as {
-      entries: Array<{ id: string; generation?: number }>
+      entries: Array<{ id: string; revision?: string }>
     }
     for (const entry of ledger.entries) {
-      if (entry.id === idOf(1)) entry.generation = 1
+      if (entry.id === idOf(1)) entry.revision = REV_B
     }
     fs.writeFileSync(
       path.join(stateRootOf(box), 'ledger.json'),
@@ -3262,12 +3306,10 @@ describe('post: ticks made while a run was executing', () => {
     )
     const second = nextDay(box, DATE_ONE)
     publish(box, second.render, DATE_ONE)
-    expect(liveBody(box, number)).toContain(
-      decisionLine(idOf(1), 'rejected', true),
-    )
+    expect(liveBody(box, number)).toContain(boxLine(1, 'rejected', true))
   })
 
-  const forged = decisionLine(idOf(1), 'rejected', true)
+  const forged = boxLine(1, 'rejected', true)
   const begin = '<!-- connect-decisions:begin -->'
   const notCarried: Array<[string, (body: string) => string]> = [
     [
@@ -3283,10 +3325,7 @@ describe('post: ticks made while a run was executing', () => {
     [
       'an id the new body does not list',
       (body) =>
-        body.replace(
-          begin,
-          `${begin}\n${decisionLine(idOf(9), 'rejected', true)}`,
-        ),
+        body.replace(begin, `${begin}\n${boxLine(9, 'rejected', true)}`),
     ],
   ]
   for (const [label, forge] of notCarried) {
@@ -3315,7 +3354,7 @@ describe('post: ticks made while a run was executing', () => {
     publish(box, second.render, DATE_ONE)
     const posted = liveBody(box, number)
     expect(posted).not.toContain(idOf(1))
-    expect(posted).toContain(decisionLine(idOf(2), 'promoted', true))
+    expect(posted).toContain(boxLine(2, 'promoted', true))
     expect(unticked(posted)).toBe(trimmed(second.body))
   })
 
@@ -3364,7 +3403,7 @@ describe('post: a report is edited in place across the day', () => {
     expect(issues[0]?.state).toBe('open')
     const posted = liveBody(box, number)
     expect(posted).not.toContain(idOf(1))
-    expect(posted).toContain(decisionLine(idOf(2), 'rejected', false))
+    expect(posted).toContain(boxLine(2, 'rejected', false))
     expect(posted).toBe(trimmed(second.body))
     const creates = calls(box).filter((entry) =>
       /-X POST repos\/[^ ]+\/issues /.test(entry),

@@ -33,6 +33,8 @@ import {
   readLedger,
   recordsEvidenceOf,
   releaseLock,
+  revisionOf,
+  revisionOfCandidate,
   rewriteRunFiles,
   writeInvocationRecord,
 } from '../../src/lib/connect-state.js'
@@ -2286,7 +2288,7 @@ describe('decideLedgerEntry', () => {
   })
 })
 
-describe('the decision generation of a ledger entry', () => {
+describe('the revision of a ledger entry', () => {
   const changed = candidate({
     sources: [
       { role: 'solution', path: 'docs/solutions/a.md', fingerprint: 'bbb' },
@@ -2297,6 +2299,7 @@ describe('the decision generation of a ledger entry', () => {
       { role: 'solution', path: 'docs/solutions/a.md', fingerprint: 'ccc' },
     ],
   })
+  const HEX12 = /^[0-9a-f]{12}$/
 
   let runNumber = 0
 
@@ -2322,100 +2325,227 @@ describe('the decision generation of a ledger entry', () => {
       options(s),
     )
     runNumber += 1
-    s.publish(`run-g${runNumber}`, [again])
+    s.publish(`run-r${runNumber}`, [again])
     s.clock.now += MINUTE
   }
 
-  it('leaves a new entry without a generation, which reads as generation 0', () => {
+  const revisionIn = (s: Session) => ledgerEntries(s.root)[0]?.revision
+
+  it('stores the revision of what a new entry was proposed with, 12 lowercase hex characters', () => {
     const { s } = opened()
-    expect(ledgerEntries(s.root)[0]).not.toHaveProperty('generation')
-    const text = readFileText(path.join(s.root, 'ledger.json'))
-    expect(text).not.toContain('generation')
+    expect(revisionIn(s)).toMatch(HEX12)
+    expect(revisionIn(s)).toBe(revisionOfCandidate(candidate()))
   })
 
-  it('bumps the generation by one on every reopen, whatever the reason', () => {
-    const { s, id } = opened()
-    reopen(s, id, changed)
-    expect(ledgerEntries(s.root)[0]).toMatchObject({
-      status: 'candidate',
-      reopened: 'sources changed',
-      generation: 1,
-    })
-    reopen(s, id, changedAgain)
-    expect(ledgerEntries(s.root)[0]).toMatchObject({ generation: 2 })
-
-    // A target-evidence reopen counts the same way.
-    decide(s, id, 'rejected')
-    s.publish('run-t', [
-      {
-        ...changedAgain,
-        targetEvidence: [{ path: 'src/x.ts', fingerprint: 't2' }],
-      },
-    ])
-    expect(ledgerEntries(s.root)[0]).toMatchObject({
-      reopened: 'target changed',
-      generation: 3,
-    })
+  it('hashes the source, target-evidence and recorded-evidence fingerprints, and nothing else', () => {
+    const base = revisionOfCandidate(candidate())
+    // Each of the three reviewed inputs changes it.
+    expect(
+      revisionOfCandidate(
+        candidate({
+          sources: [
+            {
+              role: 'solution',
+              path: 'docs/solutions/a.md',
+              fingerprint: 'zzz',
+            },
+          ],
+        }),
+      ),
+    ).not.toBe(base)
+    expect(
+      revisionOfCandidate(
+        candidate({
+          targetEvidence: [{ path: 'src/x.ts', fingerprint: 't9' }],
+        }),
+      ),
+    ).not.toBe(base)
+    expect(
+      revisionOfCandidate(
+        candidate({
+          evidence: [{ project: 'bbbbbbbbbbbb', path: 'f', fingerprint: 'E1' }],
+        }),
+      ),
+    ).not.toBe(base)
+    // What is not reviewed does not: the title-side fields, the rule, the order.
+    expect(revisionOfCandidate(candidate({ ruleId: 'rule-other' }))).toBe(base)
+    expect(
+      revisionOfCandidate(
+        candidate({
+          sources: [
+            { role: 'solution', path: 'docs/solutions/b.md', fingerprint: 'q' },
+            {
+              role: 'solution',
+              path: 'docs/solutions/a.md',
+              fingerprint: 'aaa',
+            },
+          ],
+        }),
+      ),
+    ).toBe(
+      revisionOfCandidate(
+        candidate({
+          sources: [
+            {
+              role: 'solution',
+              path: 'docs/solutions/a.md',
+              fingerprint: 'aaa',
+            },
+            { role: 'solution', path: 'docs/solutions/b.md', fingerprint: 'q' },
+          ],
+        }),
+      ),
+    )
   })
 
-  it('keeps the generation through a decision, and when a run publishes the entry unchanged', () => {
+  it('gives a reopened entry the revision of its new content, and the same content the same revision', () => {
+    const { s, id } = opened()
+    const first = revisionIn(s)
+    reopen(s, id, changed)
+    const second = revisionIn(s)
+    expect(second).toBe(revisionOfCandidate(changed))
+    expect(second).not.toBe(first)
+    // Back to the first content: the first revision, not a new number.
+    reopen(s, id, candidate())
+    expect(revisionIn(s)).toBe(first)
+  })
+
+  it('keeps the revision through a decision and when a run publishes the entry unchanged', () => {
     const { s, id } = opened()
     reopen(s, id, changed)
+    const revision = revisionIn(s)
     expect(
       publishedOutcomes(s.publish('run-same', [changed])).map(
         (o) => o.standing,
       ),
     ).toEqual(['suppressed'])
-    expect(ledgerEntries(s.root)[0]).toMatchObject({ generation: 1 })
+    expect(revisionIn(s)).toBe(revision)
     decide(s, id, 'promoted', { destination: 'docs/solutions/x.md' })
     expect(ledgerEntries(s.root)[0]).toMatchObject({
       status: 'promoted',
-      generation: 1,
+      revision,
     })
   })
 
-  it('applies a decision made against the current generation', () => {
+  it('keeps the revision when an open entry takes the evidence a later run cites', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const before = ledgerEntries(s.root)[0]
+    // The same files, cited differently: the entry takes the new set and stays suppressed.
+    const other = mismatch({
+      evidence: [
+        { project: EVIDENCE_PROJECT, path: 'Caddyfile', fingerprint: 'E1' },
+        { project: EVIDENCE_PROJECT, path: 'Extra', fingerprint: 'X1' },
+      ],
+    })
+    expect(
+      publishedOutcomes(
+        s.publish(
+          'run-2',
+          [other],
+          undefined,
+          inventory({ [EVIDENCE_KEY]: present('E1') }),
+        ),
+      ).map((o) => o.standing),
+    ).toEqual(['suppressed'])
+    const after = ledgerEntries(s.root)[0]
+    expect(after?.evidence).toHaveLength(2)
+    expect(after?.revision).toBe(before?.revision)
+  })
+
+  it('pins an entry written before revisions to its own revision when a run re-cites its evidence', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const file = path.join(s.root, 'ledger.json')
+    const ledger = JSON.parse(readFileText(file)) as {
+      entries: Array<Record<string, unknown>>
+    }
+    for (const entry of ledger.entries) delete entry.revision
+    fs.writeFileSync(file, JSON.stringify(ledger))
+    const [before] = ledgerEntries(s.root)
+    if (before === undefined) throw new Error('no entry')
+    const reviewed = revisionOf(before)
+    s.publish(
+      'run-2',
+      [
+        mismatch({
+          evidence: [
+            { project: EVIDENCE_PROJECT, path: 'Caddyfile', fingerprint: 'E1' },
+            { project: EVIDENCE_PROJECT, path: 'Extra', fingerprint: 'X1' },
+          ],
+        }),
+      ],
+      undefined,
+      inventory({ [EVIDENCE_KEY]: present('E1') }),
+    )
+    const [after] = ledgerEntries(s.root)
+    expect(after?.evidence).toHaveLength(2)
+    // The digest a decision came from described the evidence the entry had.
+    expect(after?.revision).toBe(reviewed)
+  })
+
+  it('reads an entry with no stored revision as the revision of its fields', () => {
+    const { s, id } = opened()
+    const file = path.join(s.root, 'ledger.json')
+    const ledger = JSON.parse(readFileText(file)) as {
+      entries: Array<Record<string, unknown>>
+    }
+    for (const entry of ledger.entries) delete entry.revision
+    fs.writeFileSync(file, JSON.stringify(ledger))
+    const [entry] = ledgerEntries(s.root)
+    if (entry === undefined) throw new Error('no entry')
+    expect(revisionOf(entry)).toBe(revisionOfCandidate(candidate()))
+    expect(
+      decideLedgerEntry(
+        s.root,
+        {
+          id,
+          status: 'rejected',
+          reason: 'now',
+          revision: revisionOfCandidate(candidate()),
+        },
+        options(s),
+      ),
+    ).toMatchObject({ status: 'decided' })
+  })
+
+  it('applies a decision made against the current revision', () => {
     const { s, id } = opened()
     reopen(s, id, changed)
     expect(
       decideLedgerEntry(
         s.root,
-        { id, status: 'rejected', reason: 'now', generation: 1 },
+        {
+          id,
+          status: 'rejected',
+          reason: 'now',
+          revision: revisionOfCandidate(changed),
+        },
         options(s),
       ),
     ).toMatchObject({ status: 'decided', entry: { id, status: 'rejected' } })
   })
 
-  it('refuses a decision made against an earlier generation and writes nothing', () => {
+  it('refuses a decision made against another revision and writes nothing', () => {
     const { s, id } = opened()
+    const first = revisionOfCandidate(candidate())
     reopen(s, id, changed)
     const before = readFileText(path.join(s.root, 'ledger.json'))
-    for (const generation of [0, 2]) {
+    for (const revision of [first, revisionOfCandidate(changedAgain)]) {
       expect(
         decideLedgerEntry(
           s.root,
-          { id, status: 'rejected', reason: 'old', generation },
+          { id, status: 'rejected', reason: 'old', revision },
           options(s),
         ),
-      ).toEqual({ status: 'failed', reason: 'stale-generation' })
+      ).toEqual({ status: 'failed', reason: 'stale-revision' })
     }
     expect(readFileText(path.join(s.root, 'ledger.json'))).toBe(before)
     expect(ledgerEntries(s.root)[0]).toMatchObject({ status: 'candidate' })
     expect(fs.existsSync(path.join(s.root, 'lock'))).toBe(false)
   })
 
-  it('reads an entry with no generation as generation 0', () => {
-    const { s, id } = opened()
-    expect(
-      decideLedgerEntry(
-        s.root,
-        { id, status: 'rejected', reason: 'now', generation: 0 },
-        options(s),
-      ),
-    ).toMatchObject({ status: 'decided' })
-  })
-
-  it('decides regardless of generation when the caller names none', () => {
+  it('decides regardless of revision when the caller names none', () => {
     const { s, id } = opened()
     reopen(s, id, changed)
     expect(
@@ -2427,57 +2557,50 @@ describe('the decision generation of a ledger entry', () => {
     ).toMatchObject({ status: 'decided' })
   })
 
-  it('refuses a ledger whose generation is not a positive integer', () => {
+  it('refuses a revision that is not 12 lowercase hex characters', () => {
     const { s, id } = opened()
-    reopen(s, id, changed)
+    for (const revision of [
+      '',
+      'abc',
+      'ABCDEF123456',
+      'abcdef12345g',
+      'abcdef1234567',
+    ]) {
+      expect(
+        decideLedgerEntry(
+          s.root,
+          { id, status: 'rejected', reason: 'x', revision },
+          options(s),
+        ),
+      ).toEqual({ status: 'failed', reason: 'invalid-input' })
+    }
+  })
+
+  it('refuses a ledger whose revision is not 12 lowercase hex characters', () => {
+    const { s } = opened()
     const file = path.join(s.root, 'ledger.json')
     const ledger = JSON.parse(readFileText(file)) as {
       entries: Array<Record<string, unknown>>
     }
-    for (const bad of [0, -1, 1.5, '1', null]) {
+    for (const bad of ['', 'ABCDEF123456', 'abc', 7, null]) {
       const [entry] = ledger.entries
       if (entry === undefined) throw new Error('no entry')
       fs.writeFileSync(
         file,
-        JSON.stringify({
-          ...ledger,
-          entries: [{ ...entry, generation: bad }],
-        }),
+        JSON.stringify({ ...ledger, entries: [{ ...entry, revision: bad }] }),
       )
       expect(readLedger(s.root).status).toBe('unreadable')
     }
   })
 
-  it('names the generation a reopen will give in the standing it returns', () => {
+  it('writes a ledger the shipped reader still loads, new and after a reopen', () => {
     const { s, id } = opened()
-    const ledger = () => {
-      const read = readLedger(s.root)
-      if (read.status !== 'ok') throw new Error('ledger unreadable')
-      return read.ledger
-    }
-    expect(classifyCandidate(ledger(), candidate())).toMatchObject({
-      standing: 'suppressed',
-    })
-    expect(classifyCandidate(ledger(), candidate())).not.toHaveProperty(
-      'generation',
-    )
-
-    reopen(s, id, changed)
-    expect(classifyCandidate(ledger(), changedAgain)).toMatchObject({
-      standing: 'reopened',
-      generation: 2,
-    })
-    // What the standing names is what the ledger then holds.
-    reopen(s, id, changedAgain)
-    expect(ledgerEntries(s.root)[0]).toMatchObject({ generation: 2 })
-  })
-
-  it('writes a ledger the shipped reader still loads after a reopen', () => {
-    const { s, id } = opened()
+    const file = path.join(s.root, 'ledger.json')
+    expect(shippedReaderAccepts(readFileText(file))).toBe(true)
     reopen(s, id, changed)
     reopen(s, id, changedAgain)
-    const written = readFileText(path.join(s.root, 'ledger.json'))
-    expect(JSON.parse(written).entries[0].generation).toBe(2)
+    const written = readFileText(file)
+    expect(JSON.parse(written).entries[0].revision).toMatch(HEX12)
     expect(shippedReaderAccepts(written)).toBe(true)
   })
 })

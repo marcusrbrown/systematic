@@ -24,7 +24,7 @@ The `ce:connect` helper (`src/ce-connect-helper.ts`) is a Node script that a ski
 
 ### 1. The lock holder is the host, not the shell
 
-Each helper call is a short process, and the shell that launched it exits right away. A lock that records the helper's pid, or the shell's, would look dead the moment the call returned. `findHolderPid` walks up the process tree and records the nearest ancestor that is not a shell (`src/ce-connect-helper.ts:289-310`); the host outlives the run. If the host dies, the lock is reclaimable. If it lives on after a crashed run, `ledger unlock` is the manual escape.
+Each helper call is a short process, and the shell that launched it exits right away. A lock that records the helper's pid, or the shell's, would look dead the moment the call returned. `findHolderPid` walks up the process tree and records the nearest ancestor that is not a shell (`src/ce-connect-helper.ts:311-325`); the host outlives the run. If the host dies, the lock is reclaimable. If it lives on after a crashed run, `ledger unlock` is the manual escape.
 
 The lock itself is a directory with a holder file (`src/lib/connect-state.ts:407-446`, `createLock`). The holder records pid, the process start time, and a `randomUUID` nonce. `judgeLock` decides what to do with an existing lock (`src/lib/connect-state.ts:457-495`):
 
@@ -68,7 +68,7 @@ Three choices keep a nondeterministic researcher from re-proposing what a person
 - **Identity excludes fingerprints.** For the original kinds (contradiction and transferable-lesson), `candidateIdentity` hashes kind, target, rule id and the normalized (role, path) of each source (`src/lib/connect-state.ts:860-881`). A changed file is the same entry. A `code-mismatch` also hashes its reason and a claim fingerprint, so two claims in one learning, or two reasons on one claim, are separate entries. Its evidence files are still not part of its identity.
 - **Reopen only on a change both runs can see.** For the original kinds, `classifyCandidate` compares source fingerprints, and compares target-evidence fingerprints only for paths that both the stored entry and the new candidate cite (`sameTargetEvidence`, `src/lib/connect-state.ts:1265-1273`). If nothing the two runs share changed, the standing is `suppressed` whatever the prior status (promoted, rejected or candidate). A changed source reopens as "sources changed" with a refresh pointer when the prior entry was promoted. A source with no fingerprint is `unresolved`, not `changed` (`src/lib/connect-state.ts:1352-1404`). A `code-mismatch` entry also reopens, as "evidence changed", when a file it recorded as evidence has changed or is gone in the run's inventory, or when evidence arrives for an entry decided with none. An evidence file in a project the run did not read changes nothing, and an import judges only the files it re-cites (`evidenceChanged` and `evidenceArrived`, `src/lib/connect-state.ts`).
 
-`ledger show` pages the ledger 500 entries at a time with `total` and `nextOffset` (`MAX_LEDGER_ENTRIES_SHOWN`, `src/ce-connect-helper.ts:2652-2652`).
+`ledger show` pages the ledger 500 entries at a time with `total` and `nextOffset` (`MAX_LEDGER_ENTRIES_SHOWN`, `src/ce-connect-helper.ts:2634-2634`).
 
 ## Why This Matters
 

@@ -2524,74 +2524,61 @@ describe('renderDigest: project lines', () => {
   })
 })
 
-describe('the decision generation of a candidate', () => {
+describe('the revision of a candidate', () => {
   const DIGEST = '/state/runs/20261107T000000Z-abcd1234/digest.md'
   const RUN_RECORD = '/state/runs/20261107T000000Z-abcd1234/run.json'
   const ID = 'a'.repeat(64)
+  const REVISION = '0123456789ab'
 
-  function candidates(generation?: number): DigestModel['candidates'] {
+  function candidates(revision?: string): DigestModel['candidates'] {
     const world = buildWorld()
     const base = valid(checkCandidate(lesson(world), world.ctx))
     return [
       {
         id: ID,
-        standing: generation === undefined ? 'new' : 'sources changed',
+        standing: 'new',
         possibleMatches: [],
         candidate: base,
-        ...(generation === undefined ? {} : { generation }),
+        ...(revision === undefined ? {} : { revision }),
       },
     ]
   }
 
-  it('shows the generation of a reopened candidate in its digest block', () => {
-    const text = renderDigest(digestModel({ candidates: candidates(2) }))
-    expect(text.split('\n')).toContain('- Generation: 2')
-    // It sits with the facts the operator decides from, under the id.
+  it('shows the revision of a candidate in its digest block, under the id', () => {
+    const text = renderDigest(digestModel({ candidates: candidates(REVISION) }))
     const lines = text.split('\n')
-    expect(lines.indexOf('- Generation: 2')).toBeGreaterThan(
+    expect(lines).toContain(`- Revision: ${REVISION}`)
+    expect(lines.indexOf(`- Revision: ${REVISION}`)).toBeGreaterThan(
       lines.findIndex((line) => line.startsWith('- Id: ')),
     )
   })
 
-  it('leaves the digest as it was for a candidate at generation 0', () => {
-    const [item] = candidates()
-    if (item === undefined) throw new Error('fixture has no candidate')
-    const plain = renderDigest(digestModel({ candidates: [item] }))
-    expect(plain).not.toContain('Generation')
-    const zero = renderDigest(
-      digestModel({ candidates: [{ ...item, generation: 0 }] }),
-    )
-    expect(zero).toBe(plain)
+  it('leaves the digest as it was for a candidate that carries no revision', () => {
+    expect(
+      renderDigest(digestModel({ candidates: candidates() })),
+    ).not.toContain('Revision')
   })
 
-  it('shows the generation of a reopened candidate under its title in the summary', () => {
+  it('shows the revision of a candidate under its title in the summary, after its handoff line', () => {
     const text = renderSummary(
-      digestModel({ candidates: candidates(3) }),
+      digestModel({ candidates: candidates(REVISION) }),
       DIGEST,
       RUN_RECORD,
     )
     const lines = text.split('\n')
     const token = lines.indexOf(`candidate:${RUN_RECORD} candidate-id:${ID}`)
     expect(token).toBeGreaterThan(0)
-    expect(lines[token + 1]).toBe('Generation: 3')
+    expect(lines[token + 1]).toBe(`Revision: ${REVISION}`)
   })
 
-  it('leaves the summary as it was for a candidate at generation 0', () => {
-    const [item] = candidates()
-    if (item === undefined) throw new Error('fixture has no candidate')
-    const plain = renderSummary(
-      digestModel({ candidates: [item] }),
-      DIGEST,
-      RUN_RECORD,
-    )
-    expect(plain).not.toContain('Generation')
+  it('leaves the summary as it was for a candidate that carries no revision', () => {
     expect(
       renderSummary(
-        digestModel({ candidates: [{ ...item, generation: 0 }] }),
+        digestModel({ candidates: candidates() }),
         DIGEST,
         RUN_RECORD,
       ),
-    ).toBe(plain)
+    ).not.toContain('Revision')
   })
 })
 

@@ -8,7 +8,7 @@ import {
   runConnectHelper,
   runHelperOp,
 } from '../../src/ce-connect-helper.js'
-import { decisionLine, parseReportBody } from '../../src/lib/connect-ci.js'
+import { parseReportBody } from '../../src/lib/connect-ci.js'
 import type { HostSupportRow } from '../../src/lib/connect-config.js'
 import { CONNECT_BOUNDS } from '../../src/lib/connect-evidence.js'
 import {
@@ -3736,11 +3736,14 @@ describe('the report operations at the helper entry', () => {
     return file
   }
 
+  /** Tick the generated box of a candidate, whatever revision it names. */
   function tick(body: string, index: number, status: 'promoted' | 'rejected') {
-    return body.replace(
-      decisionLine(candidateId(index), status, false),
-      decisionLine(candidateId(index), status, true),
+    const box = new RegExp(
+      `^- \\[ \\] (?=\\w+ <!-- connect-decision:${status}:${candidateId(index)}(?::r[0-9a-f]{12})? -->$)`,
+      'm',
     )
+    expect(body).toMatch(box)
+    return body.replace(box, '- [x] ')
   }
 
   it('names both operations in the usage line', () => {
@@ -4221,13 +4224,22 @@ describe('code-mismatch candidates in a run', () => {
   })
 })
 
-/** The generation each candidate of a run record was proposed at; none is 0. */
-function recordedGenerations(published: Json): unknown[] {
+/** The revision each candidate of a run record carries. */
+function recordedRevisions(published: Json): unknown[] {
   const block = readRunRecord(published).candidateBlock as Json
-  return (block.candidates as Json[]).map((item) => item.generation ?? 0)
+  return (block.candidates as Json[]).map((item) => item.revision)
 }
 
-describe('decide against the generation of a digest', () => {
+/** The revisions a digest shows, in order. */
+function digestRevisions(published: Json): string[] {
+  return [
+    ...readDigest(published).matchAll(/^- Revision: ([0-9a-f]{12})$/gm),
+  ].map((match) => String(match[1]))
+}
+
+const HEX12 = /^[0-9a-f]{12}$/
+
+describe('decide against the revision of a digest', () => {
   /** Run 1 proposes a candidate, it is rejected, and run 2 reopens it because its evidence changed. */
   function reopenedCandidate() {
     const { world, evidence } = mismatchWorld()
@@ -4259,65 +4271,67 @@ describe('decide against the generation of a digest', () => {
     return (shown.entries as Json[]).find((entry) => entry.id === id)?.status
   }
 
-  it('shows the generation of a reopened candidate in the digest, the summary and the validate answer', () => {
+  it('shows the revision of every candidate in the digest, the summary, the validate answer and the run record', () => {
     const { id, first, second } = reopenedCandidate()
-    expect(readDigest(second.published)).toContain('- Generation: 1')
-    expect(String(second.published.summary)).toContain('Generation: 1')
-    expect(accepted(second.validated)[0]).toMatchObject({ id, generation: 1 })
-    // The run record names it too, which the report pairs the text with its boxes by.
-    expect(recordedGenerations(second.published)).toEqual([1])
-    // The first digest is as it was: no generation to show or send.
-    expect(readDigest(first.published)).not.toContain('Generation')
-    expect(String(first.published.summary)).not.toContain('Generation')
-    expect(accepted(first.validated)[0]).not.toHaveProperty('generation')
+    const [one] = digestRevisions(first.published)
+    const [two] = digestRevisions(second.published)
+    expect(one).toMatch(HEX12)
+    expect(two).toMatch(HEX12)
+    // Other evidence is another revision.
+    expect(two).not.toBe(one)
+    expect(String(first.published.summary)).toContain(`Revision: ${one}`)
+    expect(String(second.published.summary)).toContain(`Revision: ${two}`)
+    expect(accepted(first.validated)[0]).toMatchObject({ id, revision: one })
+    expect(accepted(second.validated)[0]).toMatchObject({ id, revision: two })
+    expect(recordedRevisions(first.published)).toEqual([one])
+    expect(recordedRevisions(second.published)).toEqual([two])
   })
 
-  it('applies a decision that carries the generation the digest showed', () => {
-    const { world, id } = reopenedCandidate()
+  it('applies a decision that carries the revision the digest showed', () => {
+    const { world, id, second } = reopenedCandidate()
+    const [revision] = digestRevisions(second.published)
     const body = ok(
-      runHelperOp('decide', decision(id, { generation: 1 }), world.deps),
+      runHelperOp('decide', decision(id, { revision }), world.deps),
     )
     expect(body.status).toBe('decided')
     expect(statusIn(world, id)).toBe('rejected')
   })
 
-  it('refuses a decision made from a digest older than the reopen, and the candidate stays open', () => {
-    const { world, id } = reopenedCandidate()
+  it('refuses a decision made from a digest of other evidence, and the candidate stays open', () => {
+    const { world, id, first } = reopenedCandidate()
+    const [revision] = digestRevisions(first.published)
     const body = failed(
-      runHelperOp('decide', decision(id, { generation: 0 }), world.deps),
+      runHelperOp('decide', decision(id, { revision }), world.deps),
     )
     expect(body).toMatchObject({
       outcome: 'failed',
       op: 'decide',
-      reason: 'stale-generation',
+      reason: 'stale-revision',
     })
-    expect(String(body.hint)).toContain('reopened')
+    expect(String(body.hint)).toContain('Nothing was recorded')
     expect(statusIn(world, id)).toBe('candidate')
     expect(fs.existsSync(path.join(world.stateRoot, 'lock'))).toBe(false)
   })
 
-  it('takes the generation a digest without one means as 0', () => {
-    const { world, id, first } = reopenedCandidate()
-    // The digest of the first run names no generation, so a skill sends 0.
-    expect(readDigest(first.published)).not.toContain('Generation')
-    expect(
-      failed(runHelperOp('decide', decision(id, { generation: 0 }), world.deps))
-        .reason,
-    ).toBe('stale-generation')
-  })
-
-  it('still decides when no generation is sent', () => {
+  it('still decides when no revision is sent', () => {
     const { world, id } = reopenedCandidate()
     const body = ok(runHelperOp('decide', decision(id), world.deps))
     expect(body.status).toBe('decided')
     expect(statusIn(world, id)).toBe('rejected')
   })
 
-  it('refuses a generation that is not a non-negative integer', () => {
+  it('refuses a revision that is not 12 lowercase hex characters', () => {
     const { world, id } = reopenedCandidate()
-    for (const generation of [-1, 1.5, '1', null, true, Number.MAX_VALUE]) {
+    for (const revision of [
+      '',
+      'abc',
+      'ABCDEF123456',
+      7,
+      null,
+      'abcdef1234567',
+    ]) {
       expect(
-        failed(runHelperOp('decide', decision(id, { generation }), world.deps))
+        failed(runHelperOp('decide', decision(id, { revision }), world.deps))
           .reason,
       ).toBe('invalid-request')
     }
@@ -4354,21 +4368,15 @@ describe('a reopen whose ledger write failed', () => {
     return { ...built, broken, mend }
   }
 
-  it('prints no generation for a reopen that was not committed, and the later committed reopen is the one that has it', () => {
-    const { world, evidence, broken, mend } = brokenOnDemand()
+  /** Run 1 is rejected, revision A reopens it and the ledger write fails. */
+  function failedReopen() {
+    const built = brokenOnDemand()
+    const { world, evidence, broken, mend } = built
     const first = fullRun(world, [
       mismatchCandidate(world, [proxyEvidence(evidence)]),
     ])
     const id = String(accepted(first.validated)[0]?.id)
-    ok(
-      runHelperOp(
-        'decide',
-        { id, status: 'rejected', reason: 'Checked by hand; not needed.' },
-        world.deps,
-      ),
-    )
-
-    // Revision A reopens the candidate, and the ledger write fails.
+    decideRejected(world, id)
     const revisionA = `${PROXY_CONFIG}# revision A\n`
     fs.writeFileSync(path.join(evidence, 'Caddyfile'), revisionA)
     broken.on = true
@@ -4378,41 +4386,72 @@ describe('a reopen whose ledger write failed', () => {
     broken.on = false
     mend()
     expect((failedRun.published.ledger as Json).written).toBe(false)
-    // The candidate is still shown, but with nothing to decide against.
-    expect(readDigest(failedRun.published)).toContain(id)
-    expect(readDigest(failedRun.published)).not.toContain('Generation')
-    expect(String(failedRun.published.summary)).not.toContain('Generation')
-    // The record keeps what the run proposed, so a report cannot pair that
-    // text with the box of the generation the ledger still holds.
-    expect(recordedGenerations(failedRun.published)).toEqual([1])
+    return { ...built, id, first, failedRun, revisionA }
+  }
 
-    // Revision B reopens it and commits: that digest is the one with a generation.
+  const decideAt = (world: World, id: string, revision: string) =>
+    runHelperOp(
+      'decide',
+      {
+        id,
+        status: 'rejected',
+        reason: 'Checked by hand; not needed.',
+        revision,
+      },
+      world.deps,
+    )
+
+  function statusIn(world: World, id: string): unknown {
+    const shown = ok(runHelperOp('ledger-show', {}, world.deps))
+    return (shown.entries as Json[]).find((entry) => entry.id === id)?.status
+  }
+
+  it('shows the revision of the evidence it saw, and a decision from it is refused while nothing was committed', () => {
+    const { world, id, failedRun, first } = failedReopen()
+    const [seen] = digestRevisions(failedRun.published)
+    expect(seen).toMatch(HEX12)
+    expect(seen).not.toBe(digestRevisions(first.published)[0])
+    expect(String(failedRun.published.summary)).toContain(`Revision: ${seen}`)
+    // The ledger holds the entry as run 1 left it: another revision.
+    expect(failed(decideAt(world, id, String(seen))).reason).toBe(
+      'stale-revision',
+    )
+  })
+
+  it('applies a decision from the failed run when the same evidence later commits', () => {
+    const { world, evidence, id, failedRun, revisionA } = failedReopen()
+    const [seen] = digestRevisions(failedRun.published)
+    const committed = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence, revisionA)]),
+    ])
+    expect(digestRevisions(committed.published)).toEqual([String(seen)])
+    expect(ok(decideAt(world, id, String(seen))).status).toBe('decided')
+    expect(statusIn(world, id)).toBe('rejected')
+  })
+
+  it('refuses a decision from the failed run when different evidence commits, and the candidate stays open', () => {
+    const { world, evidence, id, failedRun } = failedReopen()
+    const [seen] = digestRevisions(failedRun.published)
     const revisionB = `${PROXY_CONFIG}# revision B\n`
     fs.writeFileSync(path.join(evidence, 'Caddyfile'), revisionB)
     const committed = fullRun(world, [
       mismatchCandidate(world, [proxyEvidence(evidence, revisionB)]),
     ])
-    expect(readDigest(committed.published)).toContain('- Generation: 1')
-
-    // What the failed run's digest shows (no line) is generation 0: refused.
-    const stale = failed(
-      runHelperOp(
-        'decide',
-        {
-          id,
-          status: 'rejected',
-          reason: 'Checked by hand; not needed.',
-          generation: 0,
-        },
-        world.deps,
-      ),
+    const [current] = digestRevisions(committed.published)
+    expect(current).not.toBe(seen)
+    expect(failed(decideAt(world, id, String(seen))).reason).toBe(
+      'stale-revision',
     )
-    expect(stale.reason).toBe('stale-generation')
-    const shown = ok(runHelperOp('ledger-show', {}, world.deps))
-    expect((shown.entries as Json[])[0]).toMatchObject({
-      id,
-      status: 'candidate',
-    })
+    expect(statusIn(world, id)).toBe('candidate')
+    // The digest that did commit is the one a decision applies from.
+    expect(ok(decideAt(world, id, String(current))).status).toBe('decided')
+  })
+
+  it('records the revision of the failed proposal in its run record, for the report to pair text with boxes', () => {
+    const { failedRun } = failedReopen()
+    expect(recordedRevisions(failedRun.published)).toEqual(
+      digestRevisions(failedRun.published),
+    )
   })
 })
 

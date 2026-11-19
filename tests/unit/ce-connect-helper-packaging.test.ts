@@ -27,7 +27,6 @@ import {
   generateHelperContent,
 } from '../../scripts/generate-ce-connect-helper.ts'
 import { generateRegistryContent } from '../../scripts/generate-registry.ts'
-import { decisionLine } from '../../src/lib/connect-ci.js'
 import { ruleIdFor } from '../../src/lib/connect-helper-core.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
@@ -675,8 +674,11 @@ function exerciseReportOps(scriptPath: string, label: string): void {
   const posted = fs
     .readFileSync(String(rendered.json?.bodyFile), 'utf8')
     .replace(
-      decisionLine(ids[0] ?? '', 'rejected', false),
-      decisionLine(ids[0] ?? '', 'rejected', true),
+      new RegExp(
+        `^- \\[ \\] (?=Rejected <!-- connect-decision:rejected:${ids[0]}(?::r[0-9a-f]{12})? -->$)`,
+        'm',
+      ),
+      '- [x] ',
     )
   const bodyFile = path.join(makeTempDir('connect-pack-body-'), 'body.md')
   fs.writeFileSync(bodyFile, posted)

@@ -614,7 +614,7 @@ function section(text: string, from: string, to: string): string {
   return text.slice(start, end)
 }
 
-describe('ce:connect decide binds a decision to the digest generation', () => {
+describe('ce:connect decide binds a decision to the digest revision', () => {
   const step7 = section(skillText, '## Step 7', '## Final line')
   const decideBlock =
     /connect\.mjs" decide <<'(JSON_[0-9a-f]+)'\n([\s\S]*?)\n\1\n/.exec(
@@ -622,40 +622,34 @@ describe('ce:connect decide binds a decision to the digest generation', () => {
     )?.[2] ?? ''
   const paragraph = step7
     .split('\n\n')
-    .find((text) => text.startsWith('Always send `generation`'))
+    .find((text) => text.startsWith('Always send `revision`'))
 
-  test('sends generation in the decide request, beside the id, status and reason', () => {
+  test('sends revision in the decide request, beside the id, status and reason', () => {
     expect(decideBlock).toContain('"id"')
     expect(decideBlock).toContain('"status"')
     expect(decideBlock).toContain('"reason"')
-    expect(decideBlock).toContain('"generation": <generation>')
+    expect(decideBlock).toContain('"revision": "<revision>"')
+    expect(decideBlock).not.toMatch(/generation/i)
   })
 
-  test('takes the number from the Generation line of the candidate, or 0 when it has none', () => {
-    if (paragraph === undefined) throw new Error('no generation paragraph')
-    expect(paragraph).toMatch(/number on the `Generation:` line/)
+  test('takes the value from the Revision line of the candidate, exactly as shown', () => {
+    if (paragraph === undefined) throw new Error('no revision paragraph')
+    expect(paragraph).toMatch(/12-character value on the `Revision:` line/)
     expect(paragraph).toMatch(/digest/)
-    expect(paragraph).toMatch(/no such line[^.]*send `0`/)
+    expect(paragraph).toMatch(/exactly as shown/)
     expect(paragraph).toMatch(/never one of your own/)
   })
 
-  test('offers no decision after a failed ledger write', () => {
-    const offer = step7
-      .split('\n\n')
-      .find((text) => text.startsWith('In interactive mode, offer to record'))
-    if (offer === undefined) throw new Error('no offer paragraph')
-    expect(offer).toMatch(/unless `ledger\.written` is `false`/)
-    expect(offer).toContain('`ledger-write-failed`')
-    expect(offer).toMatch(/offer none/)
-    expect(offer).toMatch(/run again/)
-  })
-
-  test('on stale-generation prints the hint and does not retry', () => {
-    if (paragraph === undefined) throw new Error('no generation paragraph')
-    expect(paragraph).toMatch(/`reason` `stale-generation`/)
+  test('on stale-revision prints the hint and does not retry', () => {
+    if (paragraph === undefined) throw new Error('no revision paragraph')
+    expect(paragraph).toMatch(/`reason` `stale-revision`/)
     expect(paragraph).toMatch(/nothing was recorded/i)
     expect(paragraph).toMatch(/Print its `hint`/)
     expect(paragraph).toMatch(/do not retry/i)
+  })
+
+  test('does not mention generations any more', () => {
+    expect(skillText).not.toMatch(/generation/i)
   })
 })
 

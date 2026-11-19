@@ -200,17 +200,17 @@ To stop a run that has begun but cannot go on (the user declines, the host fails
 
 In headless mode, print the `finalLine` now and stop. Offer nothing.
 
-In interactive mode, offer to record decisions before the final line, unless `ledger.written` is `false` in the `publish` answer (`degradeReasons` then holds `ledger-write-failed`). Then the ledger does not list this run's candidates, so a decision would settle something this digest cannot show: offer none, say that the ledger was not written, and tell the user to run again. For each candidate the user wants to settle, record it with `decide`: a `rejected` candidate with a reason, or a `promoted` one only after the learning was written, with its destination. A contradiction or a code mismatch is promoted through `ce:compound-refresh` in the target project; a transferable lesson through `ce:compound` in the target project, from the run record at `runRecordPath`. The reason is free text, so send it through a heredoc whose delimiter is a fresh token that does not occur in the text, and JSON-escape the reason:
+In interactive mode, offer to record decisions before the final line. For each candidate the user wants to settle, record it with `decide`: a `rejected` candidate with a reason, or a `promoted` one only after the learning was written, with its destination. A contradiction or a code mismatch is promoted through `ce:compound-refresh` in the target project; a transferable lesson through `ce:compound` in the target project, from the run record at `runRecordPath`. The reason is free text, so send it through a heredoc whose delimiter is a fresh token that does not occur in the text, and JSON-escape the reason:
 
 ```bash
 # Resolve helper scripts relative to this skill's directory.
 SKILL_DIR="<skill directory stated when this skill loads>";
 node "$SKILL_DIR/scripts/connect.mjs" decide <<'JSON_7f3a91'
-{"id": "<candidate id>", "status": "<promoted or rejected>", "reason": "<reason>", "destination": "<path, promoted only>", "generation": <generation>}
+{"id": "<candidate id>", "status": "<promoted or rejected>", "reason": "<reason>", "destination": "<path, promoted only>", "revision": "<revision>"}
 JSON_7f3a91
 ```
 
-Always send `generation`. It is the number on the `Generation:` line of that candidate in the digest (and under its title in the `summary`), the one the user decided from. A candidate with no such line was never reopened: send `0`. Send the number as shown, never one of your own. The helper refuses the decision when the candidate was reopened after that digest, because the user has not seen what changed. In that case the answer is `failed` with `reason` `stale-generation`: nothing was recorded. Print its `hint`, do not retry with another number, and tell the user to read the current digest (a new run writes one) before deciding again.
+Always send `revision`. It is the 12-character value on the `Revision:` line of that candidate in the digest (and under its title in the `summary`), the one the user decided from. Send it exactly as shown, never one of your own. The helper refuses the decision when the candidate's evidence is no longer the evidence that digest showed, because the user has not seen what changed. In that case the answer is `failed` with `reason` `stale-revision`: nothing was recorded. Print its `hint`, do not retry with another value, and tell the user to read the current digest (a new run writes one) before deciding again.
 
 Print the `finalLine` last, after any decisions.
 

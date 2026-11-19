@@ -28,6 +28,7 @@ import {
   pruneRuns,
   readLedger,
   releaseLock,
+  revisionOf,
 } from '../../src/lib/connect-state.js'
 import { cleanupTempDirs, makeDir } from './git-worktree-fixtures'
 
@@ -239,15 +240,25 @@ function manifestsOf(root: string): Array<{ hash: string; ids: string[] }> {
   }>
 }
 
+/** The generated line of candidate `index`, at its fixture entry's revision unless one is named. */
+function boxLine(
+  index: number,
+  status: 'promoted' | 'rejected',
+  isTicked: boolean,
+  revision = revisionOf(entryOf(index)),
+): string {
+  return decisionLine(idOf(index), status, isTicked, revision)
+}
+
 function ticked(
   body: string,
   ticks: ReadonlyArray<readonly [number, 'promoted' | 'rejected']>,
 ): string {
   let out = body
   for (const [index, status] of ticks) {
-    const open = decisionLine(idOf(index), status, false)
+    const open = boxLine(index, status, false)
     if (!out.includes(open)) throw new Error(`no box for ${index} ${status}`)
-    out = out.replace(open, decisionLine(idOf(index), status, true))
+    out = out.replace(open, boxLine(index, status, true))
   }
   return out
 }
@@ -389,8 +400,8 @@ describe('parseReportBody', () => {
     expect(parsed.section).toBe('ok')
     expect(parsed.manifest).toBe(MARKER)
     expect(parsed.boxes).toEqual([
-      { id: idOf(1), status: 'promoted', ticked: true, generation: 0 },
-      { id: idOf(1), status: 'rejected', ticked: false, generation: 0 },
+      { id: idOf(1), status: 'promoted', ticked: true, revision: undefined },
+      { id: idOf(1), status: 'rejected', ticked: false, revision: undefined },
     ])
   })
 
@@ -401,7 +412,7 @@ describe('parseReportBody', () => {
     )
     const parsed = parseReportBody(text.replaceAll('\n', '\r\n'))
     expect(parsed.boxes).toEqual([
-      { id: idOf(1), status: 'rejected', ticked: true, generation: 0 },
+      { id: idOf(1), status: 'rejected', ticked: true, revision: undefined },
     ])
   })
 
@@ -605,7 +616,7 @@ describe('renderReport', () => {
     settle(root, [1])
     writeInvocation(root, '901-1', {}, null)
     const second = rendered(root, { date: DAY_TWO, runId: '901' })
-    expect(second.body).toContain(decisionLine(idOf(2), 'rejected', false))
+    expect(second.body).toContain(boxLine(2, 'rejected', false))
     expect(second.body).not.toContain(idOf(1))
   })
 
@@ -642,7 +653,7 @@ describe('renderReport', () => {
     writeLedger(root, [entryOf(1), entryOf(2)])
     const { body } = rendered(root)
     expect(body).toContain(`Details unavailable for \`${idOf(2)}\``)
-    expect(body).toContain(decisionLine(idOf(2), 'rejected', false))
+    expect(body).toContain(boxLine(2, 'rejected', false))
   })
 
   it('notes a ledger that was not restored, with the sweep line and the fetch line', () => {
@@ -1864,8 +1875,8 @@ describe('applyTicks', () => {
     writeInvocation(root, '901-1', {}, null)
     const next = rendered(root, { date: DAY_TWO, runId: '901' })
     expect(next.body).not.toContain(idOf(1))
-    expect(next.body).toContain(decisionLine(idOf(2), 'promoted', false))
-    expect(next.body).toContain(decisionLine(idOf(2), 'rejected', false))
+    expect(next.body).toContain(boxLine(2, 'promoted', false))
+    expect(next.body).toContain(boxLine(2, 'rejected', false))
   })
 
   it('skips a candidate that another decision settled after the ticks were read', () => {
@@ -2190,31 +2201,45 @@ describe('applyTicks', () => {
 
 // ── Reading a body file ─────────────────────────────────────────────────────
 
-/** The generation the run record gives a candidate it proposes: what the run's digest was written against. */
-function stampProposal(root: string, index: number, generation: number): void {
+/** A variant of candidate `index`'s content: another learning fingerprint, so another revision. */
+function contentOf(index: number, variant: string): LedgerEntry {
+  const base = entryOf(index)
+  return {
+    ...base,
+    sources: base.sources.map((source) => ({
+      ...source,
+      fingerprint: sha(`${variant}-${index}`),
+    })),
+  }
+}
+
+const revisionOfContent = (index: number, variant: string): string =>
+  revisionOf(contentOf(index, variant))
+
+/** The revision the run record gives a candidate it proposes: what the run's digest was written against. */
+function stampProposal(
+  root: string,
+  index: number,
+  revision: string | undefined,
+): void {
   const file = path.join(root, 'runs', CONNECT_RUN, 'run.json')
   const record = JSON.parse(fs.readFileSync(file, 'utf8')) as {
     candidateBlock: { candidates: Array<Record<string, unknown>> }
   }
   for (const item of record.candidateBlock.candidates) {
     if (item.id !== idOf(index)) continue
-    if (generation > 0) item.generation = generation
-    else delete item.generation
+    if (revision === undefined) delete item.revision
+    else item.revision = revision
   }
   fs.writeFileSync(file, JSON.stringify(record))
 }
 
-describe('the decision generation of a report', () => {
-  /** The ledger as the state module leaves it after a reopen: still a candidate, one generation on. */
-  function reopen(
-    root: string,
-    index: number,
-    generation: number,
-    proposedAt = generation,
-  ): void {
-    stampProposal(root, index, proposedAt)
+describe('the revision of a report', () => {
+  /** The ledger as the state module leaves it when a candidate's content changes: still a candidate, with a reopen on it. */
+  function reopen(root: string, index: number, variant: string): string {
     const read = readLedger(root)
     if (read.status !== 'ok') throw new Error('ledger unreadable in a test')
+    const changed = contentOf(index, variant)
     writeLedger(
       root,
       read.ledger.entries.map((entry) =>
@@ -2222,21 +2247,20 @@ describe('the decision generation of a report', () => {
           ? {
               ...entry,
               status: 'candidate',
-              generation,
+              sources: changed.sources,
               reopened: 'sources changed',
+              history: [
+                ...entry.history,
+                { ...entry, history: undefined } as never,
+              ],
             }
           : entry,
       ),
     )
-  }
-
-  /** A tick the way the report generated it, or the way an older report did when the generation is left out. */
-  function tickLine(
-    index: number,
-    status: 'promoted' | 'rejected',
-    generation = 0,
-  ): string {
-    return decisionLine(idOf(index), status, true, generation)
+    const revision = revisionOfContent(index, variant)
+    // The run that reopened it proposed that content.
+    stampProposal(root, index, revision)
+    return revision
   }
 
   function withTick(body: string, line: string): string {
@@ -2247,77 +2271,106 @@ describe('the decision generation of a report', () => {
     return rendered(root).body
   }
 
-  it('writes a generation 0 line exactly as a report did before generations', () => {
+  const boxesOf = (body: string, index: number): string[] =>
+    body
+      .split('\n')
+      .filter((line) => line.includes(idOf(index)) && line.startsWith('- ['))
+
+  it('writes a line without a revision exactly as a report did before revisions', () => {
     expect(decisionLine(idOf(1), 'rejected', false)).toBe(
       `- [ ] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`,
     )
-    expect(decisionLine(idOf(1), 'rejected', true, 0)).toBe(
-      `- [x] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`,
+  })
+
+  it('writes the revision into the line', () => {
+    expect(decisionLine(idOf(1), 'promoted', false, 'a1b2c3d4e5f6')).toBe(
+      `- [ ] Promoted <!-- connect-decision:promoted:${idOf(1)}:ra1b2c3d4e5f6 -->`,
     )
   })
 
-  it('writes a later generation into the line', () => {
-    expect(decisionLine(idOf(1), 'promoted', false, 3)).toBe(
-      `- [ ] Promoted <!-- connect-decision:promoted:${idOf(1)}:g3 -->`,
-    )
-  })
-
-  it('reads the generation of a line, and reads a line without one as generation 0', () => {
+  it('reads the revision of a line, and reads a line without one as from before revisions', () => {
     const body = [
       manifestMarker('0123456789abcdef'),
       DECISIONS_BEGIN,
       decisionLine(idOf(1), 'promoted', true),
-      decisionLine(idOf(2), 'rejected', true, 7),
+      decisionLine(idOf(2), 'rejected', true, 'a1b2c3d4e5f6'),
       DECISIONS_END,
     ].join('\n')
     expect(parseReportBody(body).boxes).toEqual([
-      { id: idOf(1), status: 'promoted', ticked: true, generation: 0 },
-      { id: idOf(2), status: 'rejected', ticked: true, generation: 7 },
+      { id: idOf(1), status: 'promoted', ticked: true, revision: undefined },
+      {
+        id: idOf(2),
+        status: 'rejected',
+        ticked: true,
+        revision: 'a1b2c3d4e5f6',
+      },
     ])
   })
 
-  it('ignores a generation that is zero, has a leading zero or is not a number', () => {
-    for (const text of ['g0', 'g01', 'g', 'gx', 'g-1', 'g1.5', '2']) {
+  it('ignores a line whose revision is not 12 lowercase hex characters', () => {
+    for (const text of [
+      'r',
+      'rA1B2C3D4E5F6',
+      'ra1b2c3d4e5',
+      'ra1b2c3d4e5f67',
+      'g1',
+      'a1b2c3d4e5f6',
+    ]) {
       const line = `- [x] Rejected <!-- connect-decision:rejected:${idOf(1)}:${text} -->`
       const body = [DECISIONS_BEGIN, line, DECISIONS_END].join('\n')
       expect(parseReportBody(body).boxes).toEqual([])
     }
   })
 
-  it('lists a reopened candidate again with both boxes unticked and the new generation', () => {
+  it('writes every box with the revision of its candidate, unticked', () => {
     const root = seeded(2)
-    const before = bodyOf(root)
+    const body = bodyOf(root)
+    for (const index of [1, 2]) {
+      expect(boxesOf(body, index)).toEqual([
+        boxLine(index, 'promoted', false),
+        boxLine(index, 'rejected', false),
+      ])
+    }
+    expect(boxLine(1, 'promoted', false)).not.toBe(
+      boxLine(2, 'promoted', false).replace(idOf(2), idOf(1)),
+    )
+    expect(body).not.toContain('(reopened)')
+    expect(body).not.toContain('- [x]')
+  })
+
+  it('lists a reopened candidate again with its new revision, unticked, and says so', () => {
+    const root = seeded(2)
     applyTicks(root, {
-      body: ticked(before, [[1, 'rejected']]),
+      body: ticked(bodyOf(root), [[1, 'rejected']]),
       issue: 5,
     })
     expect(statusOf(root, 1)).toBe('rejected')
 
-    // The learning changed: the candidate is open again at generation 1.
-    reopen(root, 1, 1)
+    const revision = reopen(root, 1, 'edited')
     writeInvocation(root, '901-1')
     const after = rendered(root, { runId: '901', date: DAY_TWO }).body
 
-    expect(after).toContain(decisionLine(idOf(1), 'promoted', false, 1))
-    expect(after).toContain(decisionLine(idOf(1), 'rejected', false, 1))
-    expect(after).not.toContain(decisionLine(idOf(1), 'rejected', false))
+    expect(boxesOf(after, 1)).toEqual([
+      boxLine(1, 'promoted', false, revision),
+      boxLine(1, 'rejected', false, revision),
+    ])
+    expect(revision).not.toBe(revisionOf(entryOf(1)))
     expect(after).not.toContain('- [x]')
-    // Only the reopened candidate says so; the one that never reopened keeps the line it always had.
     expect(after.match(/\(reopened\)/g)).toHaveLength(1)
-    expect(after).toContain(decisionLine(idOf(2), 'rejected', false))
+    expect(boxesOf(after, 2)).toEqual([
+      boxLine(2, 'promoted', false),
+      boxLine(2, 'rejected', false),
+    ])
   })
 
-  it('skips a tick made before a reopen as stale and leaves the candidate open', () => {
+  it('skips a tick made before the content changed as stale and leaves the candidate open', () => {
     const root = seeded(2)
     const ticks = ticked(bodyOf(root), [
       [1, 'rejected'],
       [2, 'rejected'],
     ])
-    reopen(root, 1, 1)
-    const before = ledgerBytes(root)
-
+    reopen(root, 1, 'edited')
     const result = applyTicks(root, { body: ticks, issue: 8 })
-
     expect(result).toMatchObject({
       status: 'applied',
       accepted: [{ id: idOf(2), status: 'rejected' }],
@@ -2326,43 +2379,31 @@ describe('the decision generation of a report', () => {
     })
     expect(statusOf(root, 1)).toBe('candidate')
     expect(statusOf(root, 2)).toBe('rejected')
-    const read = readLedger(root)
-    if (read.status !== 'ok') throw new Error('ledger')
-    expect(read.ledger.entries[0]).toMatchObject({ generation: 1 })
-    expect(ledgerBytes(root)).not.toBe(before)
   })
 
-  it('applies a tick made against the current generation', () => {
+  it('applies a tick made against the current revision', () => {
     const root = seeded(2)
-    reopen(root, 1, 2)
+    const revision = reopen(root, 1, 'edited')
     const body = bodyOf(root)
-
-    const open = decisionLine(idOf(1), 'rejected', false, 2)
+    const open = boxLine(1, 'rejected', false, revision)
     expect(body).toContain(open)
     const result = applyTicks(root, {
-      body: body.replace(open, tickLine(1, 'rejected', 2)),
+      body: body.replace(open, boxLine(1, 'rejected', true, revision)),
       issue: 11,
     })
-
     expect(result).toMatchObject({
       status: 'applied',
       accepted: [{ id: idOf(1), status: 'rejected' }],
       skipped: [],
     })
     expect(statusOf(root, 1)).toBe('rejected')
-    const read = readLedger(root)
-    if (read.status !== 'ok') throw new Error('ledger')
-    // Settling a generation keeps it, so the same body read again is already recorded.
-    expect(read.ledger.entries[0]).toMatchObject({ generation: 2 })
   })
 
-  it('applies an old-format tick to an entry that never reopened', () => {
+  it('applies a line from before revisions to a candidate that never reopened', () => {
     const root = seeded(1)
-    const body = bodyOf(root)
     const old = `- [x] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`
-    expect(body).toContain(old.replace('[x]', '[ ]'))
     const result = applyTicks(root, {
-      body: body.replace(old.replace('[x]', '[ ]'), old),
+      body: withTick(bodyOf(root), old),
       issue: 12,
     })
     expect(result).toMatchObject({
@@ -2371,16 +2412,12 @@ describe('the decision generation of a report', () => {
     })
   })
 
-  it('skips an old-format tick as stale once the entry has reopened', () => {
+  it('skips a line from before revisions as stale once the candidate has reopened', () => {
     const root = seeded(1)
-    const body = bodyOf(root)
-    const open = `- [ ] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`
-    expect(body).toContain(open)
-    reopen(root, 1, 1)
-    const result = applyTicks(root, {
-      body: body.replace(open, open.replace('[ ]', '[x]')),
-      issue: 12,
-    })
+    const old = `- [x] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`
+    const body = withTick(bodyOf(root), old)
+    reopen(root, 1, 'edited')
+    const result = applyTicks(root, { body, issue: 12 })
     expect(result).toMatchObject({
       accepted: [],
       skipped: [{ id: idOf(1), status: 'rejected', reason: 'stale' }],
@@ -2388,34 +2425,55 @@ describe('the decision generation of a report', () => {
     expect(statusOf(root, 1)).toBe('candidate')
   })
 
-  it('skips a tick for a generation the ledger has not reached', () => {
+  it('skips a line from before revisions when the reopen is only in the entry history', () => {
     const root = seeded(1)
-    const forged = withTick(bodyOf(root), tickLine(1, 'rejected', 4))
-    const result = applyTicks(root, { body: forged, issue: 3 })
-    expect(result).toMatchObject({
+    const old = `- [x] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`
+    const body = withTick(bodyOf(root), old)
+    reopen(root, 1, 'edited')
+    // It was settled since, so `reopened` is gone; the history still says it reopened.
+    const read = readLedger(root)
+    if (read.status !== 'ok') throw new Error('ledger')
+    writeLedger(
+      root,
+      read.ledger.entries.map((entry) => {
+        const { reopened: _gone, ...rest } = entry
+        return { ...rest, status: 'candidate' }
+      }),
+    )
+    expect(applyTicks(root, { body, issue: 12 })).toMatchObject({
+      accepted: [],
+      skipped: [{ id: idOf(1), reason: 'stale' }],
+    })
+  })
+
+  it('skips a tick for a revision the ledger does not hold', () => {
+    const root = seeded(1)
+    const forged = withTick(
+      bodyOf(root),
+      boxLine(1, 'rejected', true, 'ffffffffffff'),
+    )
+    expect(applyTicks(root, { body: forged, issue: 3 })).toMatchObject({
       accepted: [],
       skipped: [{ id: idOf(1), status: 'rejected', reason: 'stale' }],
     })
     expect(statusOf(root, 1)).toBe('candidate')
   })
 
-  it('treats two ticks for one candidate from different generations as a conflict', () => {
+  it('treats two ticks for one candidate at different revisions as a conflict', () => {
     const root = seeded(1)
-    reopen(root, 1, 1)
     const body = bodyOf(root)
     const forged = withTick(
-      withTick(body, tickLine(1, 'rejected', 1)),
-      tickLine(1, 'rejected', 0),
+      withTick(body, boxLine(1, 'rejected', true)),
+      boxLine(1, 'rejected', true, 'ffffffffffff'),
     )
-    const result = applyTicks(root, { body: forged, issue: 3 })
-    expect(result).toMatchObject({
+    expect(applyTicks(root, { body: forged, issue: 3 })).toMatchObject({
       accepted: [],
       skipped: [{ id: idOf(1), reason: 'conflict' }],
     })
     expect(statusOf(root, 1)).toBe('candidate')
   })
 
-  it('skips a tick as stale when the candidate reopens after the ticks were read', () => {
+  it('skips a tick as stale when the content changes after the ticks were read', () => {
     const root = seeded(2)
     const body = ticked(bodyOf(root), [
       [1, 'rejected'],
@@ -2424,7 +2482,7 @@ describe('the decision generation of a report', () => {
     const result = applyTicks(
       root,
       { body, issue: 14 },
-      { hooks: { afterTriage: () => reopen(root, 1, 1) } },
+      { hooks: { afterTriage: () => reopen(root, 1, 'edited') } },
     )
     expect(result).toMatchObject({
       status: 'applied',
@@ -2434,17 +2492,15 @@ describe('the decision generation of a report', () => {
     expect(statusOf(root, 1)).toBe('candidate')
   })
 
-  it('reports an old tick as stale, not as already recorded, once the new generation was settled with the same reason', () => {
+  it('reports an old tick as stale, not as already recorded, once the new revision was settled with the same reason', () => {
     const root = seeded(1)
     const old = ticked(bodyOf(root), [[1, 'rejected']])
-    reopen(root, 1, 1)
-    const fresh = withTick(bodyOf(root), tickLine(1, 'rejected', 1))
+    const revision = reopen(root, 1, 'edited')
+    const fresh = withTick(bodyOf(root), boxLine(1, 'rejected', true, revision))
     applyTicks(root, { body: fresh, issue: 16 })
     expect(statusOf(root, 1)).toBe('rejected')
     const bytes = ledgerBytes(root)
-
-    const result = applyTicks(root, { body: old, issue: 16 })
-    expect(result).toMatchObject({
+    expect(applyTicks(root, { body: old, issue: 16 })).toMatchObject({
       accepted: [],
       skipped: [{ id: idOf(1), status: 'rejected', reason: 'stale' }],
     })
@@ -2453,12 +2509,11 @@ describe('the decision generation of a report', () => {
 
   it('does nothing the second time for a reopened candidate it settled', () => {
     const root = seeded(1)
-    reopen(root, 1, 1)
-    const body = withTick(bodyOf(root), tickLine(1, 'rejected', 1))
+    const revision = reopen(root, 1, 'edited')
+    const body = withTick(bodyOf(root), boxLine(1, 'rejected', true, revision))
     applyTicks(root, { body, issue: 15 })
     const bytes = ledgerBytes(root)
-    const again = applyTicks(root, { body, issue: 15 })
-    expect(again).toMatchObject({
+    expect(applyTicks(root, { body, issue: 15 })).toMatchObject({
       accepted: [],
       skipped: [{ id: idOf(1), reason: 'already-recorded' }],
     })
@@ -2466,144 +2521,172 @@ describe('the decision generation of a report', () => {
   })
 })
 
-describe("a report binds a candidate's text to the generation of its boxes", () => {
-  function boxesFor(body: string, index: number): string[] {
-    return body
+describe("a report binds a candidate's text to the revision of its boxes", () => {
+  const refreshing = (index: number) =>
+    `Details for \`${idOf(index)}\` are being refreshed, so there is nothing to tick yet.`
+
+  const boxesOf = (body: string, index: number): string[] =>
+    body
       .split('\n')
       .filter((line) => line.includes(idOf(index)) && line.startsWith('- ['))
-  }
 
-  /** Run 1 lists candidate 1 at generation 0; the ledger then reopens it while the run that did so proposed another generation. */
-  function mismatched(ledgerGeneration: number, proposedGeneration: number) {
-    const root = seeded(2)
-    rendered(root)
+  /** Move candidate 1's ledger entry to other content, as a committed reopen does. */
+  function commit(root: string, index: number, variant: string): string {
     const read = readLedger(root)
     if (read.status !== 'ok') throw new Error('ledger')
+    const changed = contentOf(index, variant)
     writeLedger(
       root,
       read.ledger.entries.map((entry) =>
-        entry.id === idOf(1) && ledgerGeneration > 0
-          ? { ...entry, generation: ledgerGeneration }
+        entry.id === idOf(index)
+          ? { ...entry, sources: changed.sources, reopened: 'sources changed' }
           : entry,
       ),
     )
-    stampProposal(root, 1, proposedGeneration)
-    // The candidate's text in the next run is a different revision.
+    return revisionOf(changed)
+  }
+
+  /** A run record whose candidate 1 has a different title, proposed at `revision`. */
+  function propose(root: string, index: number, revision: string | undefined) {
+    stampProposal(root, index, revision)
     const file = path.join(root, 'runs', CONNECT_RUN, 'run.json')
     const record = JSON.parse(fs.readFileSync(file, 'utf8')) as {
       candidateBlock: { candidates: Array<Record<string, unknown>> }
     }
     for (const item of record.candidateBlock.candidates) {
-      if (item.id === idOf(1)) item.title = 'Revision B'
+      if (item.id === idOf(index)) item.title = 'Revision B'
     }
     fs.writeFileSync(file, JSON.stringify(record))
     writeInvocation(root, '901-1')
-    return root
   }
 
-  it('renders boxes with the generation when the text and the ledger are at the same one', () => {
-    const root = mismatched(2, 2)
-    const body = rendered(root, { runId: '901', date: DAY_TWO }).body
-    expect(body).toContain('Title: Revision B')
-    expect(boxesFor(body, 1)).toEqual([
-      decisionLine(idOf(1), 'promoted', false, 2),
-      decisionLine(idOf(1), 'rejected', false, 2),
-    ])
-  })
-
-  it('keeps the committed revision and its own boxes when the text a run proposes is for another generation', () => {
-    // A ledger write failed: the run proposed generation 1, and the ledger is still at 0.
-    const root = mismatched(0, 1)
-    const body = rendered(root, { runId: '901', date: DAY_TWO }).body
-    // The committed revision (stored at generation 0) is still the one listed, with its own boxes.
-    expect(body).toContain('Title: Lesson 1')
-    expect(body).not.toContain('Revision B')
-    expect(boxesFor(body, 1)).toEqual([
-      decisionLine(idOf(1), 'promoted', false),
-      decisionLine(idOf(1), 'rejected', false),
-    ])
-  })
-
-  it('renders no boxes, and says so, for a payload from an older generation than the ledger holds', () => {
-    // A stored payload from generation 0 and no new text: the ledger has moved on.
+  it('renders boxes with the revision when the text and the ledger are at the same one', () => {
     const root = seeded(2)
     rendered(root)
-    const read = readLedger(root)
-    if (read.status !== 'ok') throw new Error('ledger')
-    writeLedger(
-      root,
-      read.ledger.entries.map((entry) =>
-        entry.id === idOf(1) ? { ...entry, generation: 1 } : entry,
-      ),
-    )
-    writeInvocation(root, '901-1', {}, null)
+    const revision = commit(root, 1, 'edited')
+    propose(root, 1, revision)
     const body = rendered(root, { runId: '901', date: DAY_TWO }).body
-    expect(body).toContain(
-      `Details for \`${idOf(1)}\` are being refreshed, so there is nothing to tick yet.`,
-    )
-    expect(boxesFor(body, 1)).toEqual([])
-    expect(body).not.toContain('Title: Lesson 1')
-    // The candidate that never reopened is untouched.
-    expect(boxesFor(body, 2)).toEqual([
-      decisionLine(idOf(2), 'promoted', false),
-      decisionLine(idOf(2), 'rejected', false),
+    expect(body).toContain('Title: Revision B')
+    expect(boxesOf(body, 1)).toEqual([
+      boxLine(1, 'promoted', false, revision),
+      boxLine(1, 'rejected', false, revision),
     ])
   })
 
-  it('renders no boxes when the text is for a newer generation than the ledger and no text for the live one is held', () => {
-    // A ledger write failed on a reopen: the run proposed generation 1, the
-    // ledger is still at 0, and the store holds no earlier text to fall back on.
+  it('keeps the committed revision and its own boxes when the text a run proposes is for other content', () => {
+    // A ledger write failed: the run proposed other content, and the ledger still holds the first.
     const root = seeded(2)
-    stampProposal(root, 1, 1)
+    rendered(root)
+    propose(root, 1, revisionOfContent(1, 'proposed-only'))
+    const body = rendered(root, { runId: '901', date: DAY_TWO }).body
+    expect(body).toContain('Title: Lesson 1')
+    expect(body).not.toContain('Revision B')
+    expect(boxesOf(body, 1)).toEqual([
+      boxLine(1, 'promoted', false),
+      boxLine(1, 'rejected', false),
+    ])
+  })
+
+  it('renders no boxes, and says so, when the text is for other content and no text for the live content is held', () => {
+    const root = seeded(2)
+    propose(root, 1, revisionOfContent(1, 'proposed-only'))
     expect(fs.existsSync(path.join(root, PAYLOAD_FILE))).toBe(false)
-    const body = rendered(root).body
-    expect(body).toContain(
-      `Details for \`${idOf(1)}\` are being refreshed, so there is nothing to tick yet.`,
-    )
-    expect(boxesFor(body, 1)).toEqual([])
+    const body = rendered(root, { runId: '901' }).body
+    expect(body).toContain(refreshing(1))
+    expect(boxesOf(body, 1)).toEqual([])
+    expect(body).not.toContain('Revision B')
+    expect(boxesOf(body, 2)).toEqual([
+      boxLine(2, 'promoted', false),
+      boxLine(2, 'rejected', false),
+    ])
+  })
+
+  it('keeps a hidden proposal non-actionable when the ledger later commits other content, after the store is reloaded', () => {
+    const root = seeded(2)
+    // The failed proposal is hidden, and stored under the revision it describes.
+    propose(root, 1, revisionOfContent(1, 'proposed-only'))
+    rendered(root, { runId: '901' })
+    expect(payloadsOf(root).find((item) => item.id === idOf(1))).toMatchObject({
+      revision: revisionOfContent(1, 'proposed-only'),
+    })
+
+    // A different revision commits, and the next render has no fresh details.
+    commit(root, 1, 'committed-other')
+    writeInvocation(root, '902-1', {}, null)
+    const body = rendered(root, { runId: '902', date: DAY_TWO }).body
+    expect(body).toContain(refreshing(1))
+    expect(boxesOf(body, 1)).toEqual([])
+    expect(body).not.toContain('Revision B')
+    expect(applyTicks(root, { body, issue: 9 })).toMatchObject({
+      accepted: [],
+      skipped: [],
+    })
+  })
+
+  it('shows the proposal once the ledger commits the content it describes', () => {
+    const root = seeded(2)
+    const proposedRevision = revisionOfContent(1, 'proposed-only')
+    propose(root, 1, proposedRevision)
+    rendered(root, { runId: '901' })
+    commit(root, 1, 'proposed-only')
+    writeInvocation(root, '902-1', {}, null)
+    const body = rendered(root, { runId: '902', date: DAY_TWO }).body
+    expect(body).toContain('Title: Revision B')
+    expect(boxesOf(body, 1)).toEqual([
+      boxLine(1, 'promoted', false, proposedRevision),
+      boxLine(1, 'rejected', false, proposedRevision),
+    ])
+  })
+
+  it('renders no boxes for a payload from other content than the ledger holds', () => {
+    const root = seeded(2)
+    rendered(root)
+    commit(root, 1, 'edited')
+    writeInvocation(root, '901-1', {}, null)
+    const body = rendered(root, { runId: '901', date: DAY_TWO }).body
+    expect(body).toContain(refreshing(1))
+    expect(boxesOf(body, 1)).toEqual([])
     expect(body).not.toContain('Title: Lesson 1')
-    expect(body).not.toContain(`${idOf(1)}:g`)
-    // The candidate that never reopened is untouched.
-    expect(boxesFor(body, 2)).toEqual([
-      decisionLine(idOf(2), 'promoted', false),
-      decisionLine(idOf(2), 'rejected', false),
+    expect(boxesOf(body, 2)).toEqual([
+      boxLine(2, 'promoted', false),
+      boxLine(2, 'rejected', false),
     ])
   })
 
   it('records no tick from a report whose candidate has no boxes', () => {
     const root = seeded(1)
     rendered(root)
-    const read = readLedger(root)
-    if (read.status !== 'ok') throw new Error('ledger')
-    writeLedger(
-      root,
-      read.ledger.entries.map((entry) => ({ ...entry, generation: 1 })),
-    )
+    commit(root, 1, 'edited')
     writeInvocation(root, '901-1', {}, null)
     const body = rendered(root, { runId: '901', date: DAY_TWO }).body
     expect(body).not.toContain('connect-decision:')
-    const result = applyTicks(root, { body, issue: 5 })
-    expect(result).toMatchObject({ accepted: [], skipped: [], unresolved: [] })
+    expect(applyTicks(root, { body, issue: 5 })).toMatchObject({
+      accepted: [],
+      skipped: [],
+      unresolved: [],
+    })
   })
 
-  it('keeps the generation of a payload in the store, and reads a store without one as generation 0', () => {
-    const root = mismatched(2, 2)
-    rendered(root, { runId: '901', date: DAY_TWO })
-    const stored = payloadsOf(root)
-    expect(stored.find((item) => item.id === idOf(1))).toMatchObject({
-      generation: 2,
+  it('keeps the revision of a payload in the store, and takes a store from before revisions for the revision of its entry', () => {
+    const root = seeded(1)
+    rendered(root)
+    expect(payloadsOf(root)[0]).toMatchObject({
+      revision: revisionOf(entryOf(1)),
     })
-    expect(stored.find((item) => item.id === idOf(2))).not.toHaveProperty(
-      'generation',
-    )
-    // The store written before generations had none: it reads as 0, so it
-    // matches an entry that never reopened and not one that did.
-    const legacy = seeded(1)
-    rendered(legacy)
-    expect(payloadsOf(legacy)[0]).not.toHaveProperty('generation')
-    expect(rendered(legacy, { date: DAY_TWO }).body).toContain(
-      decisionLine(idOf(1), 'rejected', false),
-    )
+    // A store written before revisions has none: it describes the entry as it stands.
+    const file = path.join(root, PAYLOAD_FILE)
+    const store = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      payloads: Array<Record<string, unknown>>
+    }
+    for (const item of store.payloads) delete item.revision
+    fs.writeFileSync(file, JSON.stringify(store))
+    writeInvocation(root, '901-1', {}, null)
+    const body = rendered(root, { runId: '901', date: DAY_TWO }).body
+    expect(body).toContain('Title: Lesson 1')
+    expect(boxesOf(body, 1)).toEqual([
+      boxLine(1, 'promoted', false),
+      boxLine(1, 'rejected', false),
+    ])
   })
 })
 
