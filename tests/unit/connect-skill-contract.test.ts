@@ -639,6 +639,17 @@ describe('ce:connect decide binds a decision to the digest generation', () => {
     expect(paragraph).toMatch(/never one of your own/)
   })
 
+  test('offers no decision after a failed ledger write', () => {
+    const offer = step7
+      .split('\n\n')
+      .find((text) => text.startsWith('In interactive mode, offer to record'))
+    if (offer === undefined) throw new Error('no offer paragraph')
+    expect(offer).toMatch(/unless `ledger\.written` is `false`/)
+    expect(offer).toContain('`ledger-write-failed`')
+    expect(offer).toMatch(/offer none/)
+    expect(offer).toMatch(/run again/)
+  })
+
   test('on stale-generation prints the hint and does not retry', () => {
     if (paragraph === undefined) throw new Error('no generation paragraph')
     expect(paragraph).toMatch(/`reason` `stale-generation`/)

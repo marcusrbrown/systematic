@@ -4221,6 +4221,12 @@ describe('code-mismatch candidates in a run', () => {
   })
 })
 
+/** The generation each candidate of a run record was proposed at; none is 0. */
+function recordedGenerations(published: Json): unknown[] {
+  const block = readRunRecord(published).candidateBlock as Json
+  return (block.candidates as Json[]).map((item) => item.generation ?? 0)
+}
+
 describe('decide against the generation of a digest', () => {
   /** Run 1 proposes a candidate, it is rejected, and run 2 reopens it because its evidence changed. */
   function reopenedCandidate() {
@@ -4258,6 +4264,8 @@ describe('decide against the generation of a digest', () => {
     expect(readDigest(second.published)).toContain('- Generation: 1')
     expect(String(second.published.summary)).toContain('Generation: 1')
     expect(accepted(second.validated)[0]).toMatchObject({ id, generation: 1 })
+    // The run record names it too, which the report pairs the text with its boxes by.
+    expect(recordedGenerations(second.published)).toEqual([1])
     // The first digest is as it was: no generation to show or send.
     expect(readDigest(first.published)).not.toContain('Generation')
     expect(String(first.published.summary)).not.toContain('Generation')
@@ -4314,6 +4322,97 @@ describe('decide against the generation of a digest', () => {
       ).toBe('invalid-request')
     }
     expect(statusIn(world, id)).toBe('candidate')
+  })
+})
+
+describe('a reopen whose ledger write failed', () => {
+  /** A world whose ledger write fails while `broken.on` is set, and leaves the ledger as it was. */
+  function brokenOnDemand() {
+    const broken = { on: false }
+    const holder: { world?: World } = {}
+    const built = mismatchWorld({
+      deps: {
+        publishHooks: {
+          afterCommit: () => {
+            if (!broken.on) return
+            const ledger = path.join(
+              holder.world?.stateRoot ?? '',
+              'ledger.json',
+            )
+            fs.renameSync(ledger, `${ledger}.kept`)
+            fs.mkdirSync(path.join(ledger, 'x'), { recursive: true })
+          },
+        },
+      },
+    })
+    holder.world = built.world
+    const mend = () => {
+      const ledger = path.join(built.world.stateRoot, 'ledger.json')
+      fs.rmSync(ledger, { recursive: true, force: true })
+      fs.renameSync(`${ledger}.kept`, ledger)
+    }
+    return { ...built, broken, mend }
+  }
+
+  it('prints no generation for a reopen that was not committed, and the later committed reopen is the one that has it', () => {
+    const { world, evidence, broken, mend } = brokenOnDemand()
+    const first = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence)]),
+    ])
+    const id = String(accepted(first.validated)[0]?.id)
+    ok(
+      runHelperOp(
+        'decide',
+        { id, status: 'rejected', reason: 'Checked by hand; not needed.' },
+        world.deps,
+      ),
+    )
+
+    // Revision A reopens the candidate, and the ledger write fails.
+    const revisionA = `${PROXY_CONFIG}# revision A\n`
+    fs.writeFileSync(path.join(evidence, 'Caddyfile'), revisionA)
+    broken.on = true
+    const failedRun = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence, revisionA)]),
+    ])
+    broken.on = false
+    mend()
+    expect((failedRun.published.ledger as Json).written).toBe(false)
+    // The candidate is still shown, but with nothing to decide against.
+    expect(readDigest(failedRun.published)).toContain(id)
+    expect(readDigest(failedRun.published)).not.toContain('Generation')
+    expect(String(failedRun.published.summary)).not.toContain('Generation')
+    // The record keeps what the run proposed, so a report cannot pair that
+    // text with the box of the generation the ledger still holds.
+    expect(recordedGenerations(failedRun.published)).toEqual([1])
+
+    // Revision B reopens it and commits: that digest is the one with a generation.
+    const revisionB = `${PROXY_CONFIG}# revision B\n`
+    fs.writeFileSync(path.join(evidence, 'Caddyfile'), revisionB)
+    const committed = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence, revisionB)]),
+    ])
+    expect(readDigest(committed.published)).toContain('- Generation: 1')
+
+    // What the failed run's digest shows (no line) is generation 0: refused.
+    const stale = failed(
+      runHelperOp(
+        'decide',
+        {
+          id,
+          status: 'rejected',
+          reason: 'Checked by hand; not needed.',
+          generation: 0,
+        },
+        world.deps,
+      ),
+    )
+    expect(stale.reason).toBe('stale-generation')
+    const shown = ok(runHelperOp('ledger-show', {}, world.deps))
+    expect((shown.entries as Json[])[0]).toMatchObject({
+      id,
+      status: 'candidate',
+    })
   })
 })
 

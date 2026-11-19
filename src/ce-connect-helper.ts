@@ -2212,6 +2212,7 @@ function buildCandidateBlock(accepted: readonly AcceptedCandidate[]): Json {
       sources: item.candidate.sources,
       targetEvidence: item.candidate.targetEvidence,
       counterevidence: item.candidate.counterevidence,
+      ...(item.generation === undefined ? {} : { generation: item.generation }),
     })),
   }
 }
@@ -2361,8 +2362,20 @@ function runFiles(
   state: ValidatedState,
   outcome: 'complete' | 'degraded',
   degradeReasons: readonly string[],
+  decidable = true,
 ): { model: DigestModel; files: Record<string, string> } {
-  const model = digestModel(snapshot, state, outcome, degradeReasons)
+  // The run record keeps the generation each candidate was proposed at: the
+  // report needs it to pair a candidate's text with its boxes. Only the digest
+  // an operator decides from leaves it out when nothing was committed.
+  const shown = decidable
+    ? state
+    : {
+        ...state,
+        accepted: state.accepted.map(
+          ({ generation: _predicted, ...item }) => item,
+        ),
+      }
+  const model = digestModel(snapshot, shown, outcome, degradeReasons)
   return {
     model,
     files: {
@@ -2442,11 +2455,14 @@ function commitRun(
   let recordsCurrent = true
   if (!ledgerWritten) {
     addUnique(degradeReasons, 'ledger-write-failed')
+    // A reopen that was not written has no generation to decide against: the
+    // number shown here could be given to a different revision later.
     final = runFiles(
       snapshot,
       { ...state, unread: [...state.unread, LEDGER_NOT_WRITTEN] },
       'degraded',
       degradeReasons,
+      false,
     )
     recordsCurrent =
       rewriteRunFiles(root, handle, snapshot.runId, final.files) === 'rewritten'

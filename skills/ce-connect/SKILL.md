@@ -200,7 +200,7 @@ To stop a run that has begun but cannot go on (the user declines, the host fails
 
 In headless mode, print the `finalLine` now and stop. Offer nothing.
 
-In interactive mode, offer to record decisions before the final line. For each candidate the user wants to settle, record it with `decide`: a `rejected` candidate with a reason, or a `promoted` one only after the learning was written, with its destination. A contradiction or a code mismatch is promoted through `ce:compound-refresh` in the target project; a transferable lesson through `ce:compound` in the target project, from the run record at `runRecordPath`. The reason is free text, so send it through a heredoc whose delimiter is a fresh token that does not occur in the text, and JSON-escape the reason:
+In interactive mode, offer to record decisions before the final line, unless `ledger.written` is `false` in the `publish` answer (`degradeReasons` then holds `ledger-write-failed`). Then the ledger does not list this run's candidates, so a decision would settle something this digest cannot show: offer none, say that the ledger was not written, and tell the user to run again. For each candidate the user wants to settle, record it with `decide`: a `rejected` candidate with a reason, or a `promoted` one only after the learning was written, with its destination. A contradiction or a code mismatch is promoted through `ce:compound-refresh` in the target project; a transferable lesson through `ce:compound` in the target project, from the run record at `runRecordPath`. The reason is free text, so send it through a heredoc whose delimiter is a fresh token that does not occur in the text, and JSON-escape the reason:
 
 ```bash
 # Resolve helper scripts relative to this skill's directory.

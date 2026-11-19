@@ -960,6 +960,8 @@ interface SeedOptions {
   marker?: string
   invocation?: Json | null
   candidates?: Json[]
+  /** Candidates (by number) the ledger has reopened, and the generation the run proposed them at. */
+  generations?: Record<number, number>
 }
 
 /** The files a run job hands to render: ledger, run record and invocation record. */
@@ -970,7 +972,10 @@ function seedHandoff(box: Box, options: SeedOptions = {}): string {
   const numbers = Array.from({ length: count }, (_, i) => i + 1)
   writeJson(path.join(dir, 'ledger.json'), {
     version: 2,
-    entries: numbers.map(entryOf),
+    entries: numbers.map((n) => {
+      const generation = options.generations?.[n] ?? 0
+      return generation > 0 ? { ...entryOf(n), generation } : entryOf(n)
+    }),
   })
   writeJson(path.join(dir, 'runs', CONNECT_RUN, 'run.json'), {
     schemaVersion: 1,
@@ -992,7 +997,12 @@ function seedHandoff(box: Box, options: SeedOptions = {}): string {
     sweep: { total: 40, covered: 12, coveredThisRun: 8, runsLeft: 4 },
     candidateBlock: {
       schemaVersion: 1,
-      candidates: options.candidates ?? numbers.map((n) => blockCandidate(n)),
+      candidates:
+        options.candidates ??
+        numbers.map((n) => {
+          const generation = options.generations?.[n] ?? 0
+          return blockCandidate(n, generation > 0 ? { generation } : {})
+        }),
     },
   })
   if (options.invocation !== null) {
@@ -1071,6 +1081,39 @@ function tick(body: string, index: number, status: 'promoted' | 'rejected') {
   const open = decisionLine(idOf(index), status, false)
   if (!body.includes(open)) throw new Error(`no box for ${index} ${status}`)
   return body.replace(open, decisionLine(idOf(index), status, true))
+}
+
+/** Tick a box of the generation the report generated it for. */
+function tickAt(
+  body: string,
+  index: number,
+  status: 'promoted' | 'rejected',
+  generation: number,
+): string {
+  const open = decisionLine(idOf(index), status, false, generation)
+  if (!body.includes(open)) throw new Error(`no box for ${index} ${status}`)
+  return body.replace(open, decisionLine(idOf(index), status, true, generation))
+}
+
+/** The state the next run starts from, with a candidate reopened: the ledger and the run record that did it. */
+function reopenInState(box: Box, index: number, generation: number): void {
+  const root = stateRootOf(box)
+  const ledgerFile = path.join(root, 'ledger.json')
+  const ledger = JSON.parse(fs.readFileSync(ledgerFile, 'utf8')) as {
+    entries: Array<{ id: string; generation?: number }>
+  }
+  for (const entry of ledger.entries) {
+    if (entry.id === idOf(index)) entry.generation = generation
+  }
+  fs.writeFileSync(ledgerFile, JSON.stringify(ledger))
+  const recordFile = path.join(root, 'runs', CONNECT_RUN, 'run.json')
+  const record = JSON.parse(fs.readFileSync(recordFile, 'utf8')) as {
+    candidateBlock: { candidates: Array<{ id: string; generation?: number }> }
+  }
+  for (const item of record.candidateBlock.candidates) {
+    if (item.id === idOf(index)) item.generation = generation
+  }
+  fs.writeFileSync(recordFile, JSON.stringify(record))
 }
 
 function ledgerBytes(box: Box): string {
@@ -3105,20 +3148,76 @@ describe('post: ticks made while a run was executing', () => {
     expect(issuesOf(box).find((i) => i.number === number)?.state).toBe('closed')
   })
 
+  describe('a candidate that was reopened', () => {
+    function firstDayAt(box: Box, generations: Record<number, number>) {
+      seedHandoff(box, { generations })
+      const day = renderDay(box, DATE_ONE)
+      expect(day.render.exitCode).toBe(0)
+      const out = publish(box, day.render, DATE_ONE)
+      expect(out.settle.exitCode).toBe(0)
+      return { number: out.number, body: day.body }
+    }
+
+    it('keeps a tick on its box across a same-date edit and is recorded next time', () => {
+      const box = makeBox()
+      const { number, body } = firstDayAt(box, { 1: 1 })
+      expect(body).toContain(decisionLine(idOf(1), 'rejected', false, 1))
+      setIssueBody(box, number, tickAt(body, 1, 'rejected', 1))
+
+      const second = nextDay(box, DATE_ONE)
+      publish(box, second.render, DATE_ONE)
+      const posted = liveBody(box, number)
+      expect(posted).toContain(decisionLine(idOf(1), 'rejected', true, 1))
+      expect(unticked(posted)).toBe(trimmed(second.body))
+
+      runStep(box, 'prepare', 'Find the open report', FOUND)
+      expect(recordTicks(box, number).stdout).toContain('accepted 1')
+      expect(statusOf(box, 1)).toBe('rejected')
+    })
+
+    it('keeps a tick on its box when the report rotates to a new date', () => {
+      const box = makeBox()
+      const { number, body } = firstDayAt(box, { 1: 1 })
+      setIssueBody(box, number, tickAt(body, 1, 'rejected', 1))
+
+      const second = nextDay(box, DATE_TWO)
+      const out = publish(box, second.render, DATE_TWO)
+      expect(out.number).not.toBe(number)
+      expect(liveBody(box, out.number)).toContain(
+        decisionLine(idOf(1), 'rejected', true, 1),
+      )
+      runStep(box, 'prepare', 'Find the open report', FOUND)
+      expect(recordTicks(box, out.number).stdout).toContain('accepted 1')
+      expect(statusOf(box, 1)).toBe('rejected')
+    })
+
+    it('does not carry a tick on generation 1 into the box of generation 2', () => {
+      const box = makeBox()
+      const { number, body } = firstDayAt(box, { 1: 1 })
+      setIssueBody(box, number, tickAt(body, 1, 'rejected', 1))
+      // A later run reopens the candidate again, while the tick waits on the report.
+      reopenInState(box, 1, 2)
+
+      const second = nextDay(box, DATE_ONE)
+      expect(second.body).toContain(decisionLine(idOf(1), 'rejected', false, 2))
+      publish(box, second.render, DATE_ONE)
+      const posted = liveBody(box, number)
+      expect(posted).not.toContain('- [x]')
+      expect(posted).toBe(trimmed(second.body))
+
+      runStep(box, 'prepare', 'Find the open report', FOUND)
+      expect(recordTicks(box, number).stdout).toContain('accepted 0')
+      expect(statusOf(box, 1)).toBe('candidate')
+    })
+  })
+
   it('carries no tick onto a candidate the run reopened, and the next run records none', () => {
     const box = makeBox()
     const { number, body } = firstDay(box)
     // The operator ticks Rejected while the run executes, and the run reopens
     // that candidate: its learning changed, so the entry is a generation on.
     setIssueBody(box, number, tick(body, 1, 'rejected'))
-    const ledgerFile = path.join(stateRootOf(box), 'ledger.json')
-    const ledger = JSON.parse(ledgerBytes(box)) as {
-      entries: Array<{ id: string; generation?: number }>
-    }
-    for (const entry of ledger.entries) {
-      if (entry.id === idOf(1)) entry.generation = 1
-    }
-    fs.writeFileSync(ledgerFile, JSON.stringify(ledger))
+    reopenInState(box, 1, 1)
 
     const second = nextDay(box, DATE_ONE)
     expect(second.body).toContain(decisionLine(idOf(1), 'rejected', false, 1))

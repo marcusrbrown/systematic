@@ -505,6 +505,12 @@ interface Payload {
   /** The GitHub run and attempt whose artifact holds the candidate's evidence. */
   readonly runId: string
   readonly attempt: string
+  /**
+   * The generation of the ledger entry this text describes: what the run that
+   * proposed it recorded. Absent in the store means 0. A box is rendered only
+   * when it equals the entry's current generation.
+   */
+  readonly generation: number
 }
 
 type PayloadText = Pick<
@@ -627,6 +633,13 @@ function payloadText(
   }
 }
 
+/** A generation read from a store or a run record: a positive integer, else 0. */
+function generationFrom(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : 0
+}
+
 function payloadFromStore(raw: unknown): Payload | undefined {
   if (!isRecord(raw) || !isCandidateId(raw.id)) return undefined
   const text = payloadText(raw, new Map(), new Map())
@@ -642,6 +655,7 @@ function payloadFromStore(raw: unknown): Payload | undefined {
       : {}),
     runId: raw.runId,
     attempt: raw.attempt,
+    generation: generationFrom(raw.generation),
   }
 }
 
@@ -679,6 +693,7 @@ function payloadStoreText(payloads: readonly Payload[]): string {
       : { firstShown: payload.firstShown }),
     runId: payload.runId,
     attempt: payload.attempt,
+    ...(payload.generation > 0 ? { generation: payload.generation } : {}),
   }))
   return `${JSON.stringify({ version: 1, payloads: stored }, null, 2)}\n`
 }
@@ -1011,6 +1026,7 @@ function blockOf(
   generation: number,
   payload: Payload | undefined,
   isNew: boolean,
+  refreshing = false,
 ): string {
   const marks = [
     ...(isNew ? ['new'] : []),
@@ -1020,6 +1036,13 @@ function blockOf(
     `### Candidate ${position}${marks.length === 0 ? '' : ` (${marks.join(', ')})`}`,
     '',
   ]
+  if (refreshing) {
+    lines.push(
+      `Details for \`${id}\` are being refreshed, so there is nothing to tick yet.`,
+      '',
+    )
+    return lines.join('\n')
+  }
   if (payload === undefined) {
     lines.push(`Details unavailable for \`${id}\`.`)
   } else {
@@ -1173,6 +1196,7 @@ function proposed(
       ...(repo === undefined ? {} : { repo }),
       runId: request.runId,
       attempt: request.attempt,
+      generation: generationFrom(raw.generation),
     })
   }
   return out
@@ -1180,7 +1204,9 @@ function proposed(
 
 /**
  * The payload of each open candidate: this run's text when it proposes the
- * candidate, otherwise the stored text. A settled candidate has none.
+ * candidate, otherwise the stored text. A text for the generation the ledger
+ * holds wins over one for another, so a run whose ledger write failed cannot
+ * replace the committed revision with its own. A settled candidate has none.
  */
 function mergedPayloads(
   open: readonly LedgerEntry[],
@@ -1190,7 +1216,12 @@ function mergedPayloads(
   const out = new Map<string, Payload>()
   for (const entry of open) {
     const earlier = stored.get(entry.id)
-    const current = fresh.get(entry.id)
+    const proposedNow = fresh.get(entry.id)
+    const live = generationOf(entry)
+    const current =
+      earlier?.generation === live && proposedNow?.generation !== live
+        ? undefined
+        : proposedNow
     const merged =
       current === undefined
         ? earlier
@@ -1226,15 +1257,26 @@ function rowsOf(
   date: string,
 ): Row[] {
   return open.map((entry, index) => {
-    const payload = payloads.get(entry.id)
-    const isNew = payload !== undefined && (payload.firstShown ?? date) === date
+    const held = payloads.get(entry.id)
     const generation = generationOf(entry)
+    // Text for another generation than the ledger holds is not shown above a
+    // box for this one, and no box is shown until matching text is.
+    const refreshing = held !== undefined && held.generation !== generation
+    const payload = refreshing ? undefined : held
+    const isNew = payload !== undefined && (payload.firstShown ?? date) === date
     return {
       id: entry.id,
       generation,
       payload,
       isNew,
-      block: blockOf(index + 1, entry.id, generation, payload, isNew),
+      block: blockOf(
+        index + 1,
+        entry.id,
+        generation,
+        payload,
+        isNew,
+        refreshing,
+      ),
     }
   })
 }
