@@ -321,7 +321,7 @@ function batchJson(world: World, runId: string, over: Json = {}): Json {
     family: 'locking',
     ruleIds: allRuleIds(world),
     projects: [world.source, world.target],
-    files: ['docs/solutions/lock-reclaim.md'],
+    files: ['docs/solutions/lock-reclaim.md', 'docs/solutions/lock-now.md'],
     searches: ['reclaim lock'],
     complete: true,
     candidates: [],
@@ -1732,6 +1732,87 @@ describe('validate and publish', () => {
     expect((validated.coverage as Json).uncoveredRuleIds).toEqual([
       ruleIdFor(world.target, 'docs/solutions/lock-now.md'),
     ])
+  })
+
+  it('does not count a rule as covered when a complete batch names it but never lists its learning', () => {
+    const world = buildWorld()
+    const unread = ruleIdFor(world.target, 'docs/solutions/lock-now.md')
+    const { validated, published } = fullRun(world, [], {
+      batch: { files: ['docs/solutions/lock-reclaim.md'] },
+    })
+    expect(validated.pendingOutcome).toBe('degraded')
+    expect(validated.degradeReasons).toContain('uncovered-rules')
+    expect((validated.coverage as Json).uncoveredRuleIds).toEqual([unread])
+    expect((validated.coverage as Json).learningUnreadRuleIds).toEqual([unread])
+    expect(published.outcome).toBe('degraded')
+    expect(readDigest(published)).toContain(
+      `rule ${unread} was not covered: its learning was not among the files the family read`,
+    )
+  })
+
+  it('ends complete when the batch lists the learning of every rule it names', () => {
+    const world = buildWorld()
+    const { validated } = fullRun(world, [])
+    expect(validated.pendingOutcome).toBe('complete')
+    expect((validated.coverage as Json).learningUnreadRuleIds).toEqual([])
+  })
+
+  describe('when two projects hold a learning at one relative path', () => {
+    const SHARED = 'docs/solutions/lock-reclaim.md'
+
+    function sharedPathRun(files: (world: World) => string[]) {
+      const world = buildWorld({ targetFiles: { [SHARED]: LOCK_LEARNING } })
+      const rules = [
+        world.ruleId,
+        ruleIdFor(world.target, SHARED),
+        ruleIdFor(world.target, 'docs/solutions/lock-now.md'),
+      ]
+      const { validated } = fullRun(world, [], {
+        batch: { ruleIds: rules, files: files(world) },
+      })
+      return { world, validated, targetRule: rules[1] as string }
+    }
+
+    it("leaves the other project's rule uncovered when the batch lists the read of only one", () => {
+      const { validated, targetRule } = sharedPathRun((world) => [
+        `${world.source}/${SHARED}`,
+        'docs/solutions/lock-now.md',
+      ])
+      expect(validated.pendingOutcome).toBe('degraded')
+      expect((validated.coverage as Json).uncoveredRuleIds).toEqual([
+        targetRule,
+      ])
+      expect((validated.coverage as Json).learningUnreadRuleIds).toEqual([
+        targetRule,
+      ])
+    })
+
+    it("covers both when each project's read is listed under its own root", () => {
+      const { validated } = sharedPathRun((world) => [
+        `${world.source}/${SHARED}`,
+        `${world.target}/${SHARED}`,
+        'docs/solutions/lock-now.md',
+      ])
+      expect(validated.pendingOutcome).toBe('complete')
+    })
+  })
+
+  it('owes no read for a run begun before learning paths were kept', () => {
+    const world = buildWorld()
+    const run = start(world)
+    const snapshotFile = path.join(run.workDir, 'begin.json')
+    const snapshot = JSON.parse(fs.readFileSync(snapshotFile, 'utf8')) as {
+      ruleVersions: Array<Record<string, unknown>>
+    }
+    for (const rule of snapshot.ruleVersions) delete rule.path
+    fs.writeFileSync(snapshotFile, JSON.stringify(snapshot))
+    const file = writeBatch(
+      run.workDir,
+      'batch-1.json',
+      batchJson(world, run.runId, { files: [] }),
+    )
+    const validated = ok(validate(world, run, [file]))
+    expect(validated.pendingOutcome).toBe('complete')
   })
 
   it('degrades when a project is never touched', () => {
@@ -3953,3 +4034,574 @@ describe('the report operations at the helper entry', () => {
     ).toBe(invocationBefore)
   })
 })
+
+// ── code-mismatch: identity, reopen and coverage ────────────────────────────
+
+const PROXY_CONFIG = [
+  'example.com {',
+  '  handle { respond "served as is, no path rewriting" }',
+  '}',
+  '',
+].join('\n')
+
+const LOADER_FILE = [
+  'export function loadConfig(raw: Config): string[] {',
+  '  return raw.plugin ?? []',
+  '}',
+  '',
+].join('\n')
+
+const CLAIM = 'Always reclaim a stale lock immediately after the timeout'
+
+interface MismatchWorld {
+  readonly world: World
+  /** An allowed project with no `docs/solutions`: read only as evidence. */
+  readonly evidence: string
+}
+
+function mismatchWorld(options: WorldOptions = {}): MismatchWorld {
+  let evidence = ''
+  const world = buildWorld({
+    ...options,
+    allow: (source, target) => {
+      evidence = createProject({
+        Caddyfile: PROXY_CONFIG,
+        Dockerfile: 'FROM scratch\n',
+        'src/loader.ts': LOADER_FILE,
+      })
+      return [source, target, evidence]
+    },
+  })
+  return { world, evidence }
+}
+
+function evidenceItem(
+  evidence: string,
+  rel: string,
+  content: string,
+  excerpt: string,
+): Json {
+  return {
+    project: evidence,
+    path: rel,
+    start: 1,
+    end: 3,
+    fingerprint: sha256(content),
+    excerpt,
+  }
+}
+
+function proxyEvidence(evidence: string, content = PROXY_CONFIG): Json {
+  return evidenceItem(
+    evidence,
+    'Caddyfile',
+    content,
+    'handle { respond "served as is, no path rewriting" }',
+  )
+}
+
+function mismatchCandidate(
+  world: World,
+  counterevidence: Json[],
+  over: Json = {},
+  learning: string = NOW_LEARNING,
+): Json {
+  return {
+    kind: 'code-mismatch',
+    reason: 'stale',
+    ruleId: ruleIdFor(world.target, 'docs/solutions/lock-now.md'),
+    target: world.target,
+    title: 'The lock learning no longer matches the proxy',
+    summary:
+      'The learning claims an immediate reclaim; the config serves as is.',
+    nextStep: 'refresh-learning',
+    overlapCheck: { queries: ['reclaim lock'], result: 'none-found' },
+    sources: [
+      {
+        project: world.target,
+        path: 'docs/solutions/lock-now.md',
+        fingerprint: sha256(learning),
+        excerpt: CLAIM,
+      },
+    ],
+    targetEvidence: [],
+    counterevidence,
+    ...over,
+  }
+}
+
+function decideRejected(world: World, id: string): void {
+  ok(
+    runHelperOp(
+      'decide',
+      { id, status: 'rejected', reason: 'Checked by hand; not needed.' },
+      world.deps,
+    ),
+  )
+}
+
+function accepted(validated: Json): Json[] {
+  return validated.accepted as Json[]
+}
+
+describe('code-mismatch candidates in a run', () => {
+  it('reads a project with no learnings as evidence only, and does not degrade the run for it', () => {
+    const { world, evidence } = mismatchWorld()
+    const { validated, published } = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence)]),
+    ])
+    // The evidence project has files the candidate could cite, and no batch names it.
+    expect(accepted(validated)).toHaveLength(1)
+    expect(validated.droppedTotal).toBe(0)
+    expect((validated.coverage as Json).untouchedProjects).toEqual([])
+    expect(validated.degradeReasons).not.toContain('untouched-project')
+    expect(validated.pendingOutcome).toBe('complete')
+    expect(published.outcome).toBe('complete')
+  })
+
+  it('still degrades for a project with learnings that no batch names', () => {
+    const { world, evidence } = mismatchWorld()
+    const { validated } = fullRun(world, [], {
+      batch: { projects: [world.source, evidence] },
+    })
+    expect((validated.coverage as Json).untouchedProjects).toEqual([
+      world.target,
+    ])
+    expect(validated.degradeReasons).toContain('untouched-project')
+    expect(validated.pendingOutcome).toBe('degraded')
+  })
+
+  it('does not call the candidate already recorded because a sibling learning names its rule id', () => {
+    const { world, evidence } = mismatchWorld()
+    const ruleId = ruleIdFor(world.target, 'docs/solutions/lock-now.md')
+    fs.writeFileSync(
+      path.join(world.target, 'docs/solutions/sibling.md'),
+      `${extraLearning(7)}\nSee ${ruleId} and ${world.ruleId}.\n`,
+    )
+    git(world.target, ['add', '-f', '--', 'docs/solutions/sibling.md'])
+
+    const mismatch = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence)]),
+    ]).validated
+    expect(accepted(mismatch)).toHaveLength(1)
+    expect(mismatch.recorded).toEqual([])
+
+    // The other kinds still use the shortcut.
+    const lesson = fullRun(world, [lessonCandidate(world)]).validated
+    expect(accepted(lesson)).toHaveLength(0)
+    expect(lesson.recorded as unknown[]).toHaveLength(1)
+  })
+
+  it('drops the second of one claim found by two rule families as a duplicate', () => {
+    const { world, evidence } = mismatchWorld()
+    const run = start(world)
+    const candidate = mismatchCandidate(world, [proxyEvidence(evidence)])
+    const files = ['a', 'b'].map((family) =>
+      writeBatch(
+        run.workDir,
+        `batch-${family}.json`,
+        batchJson(world, run.runId, { family, candidates: [candidate] }),
+      ),
+    )
+    const validated = ok(validate(world, run, files))
+    expect(accepted(validated)).toHaveLength(1)
+    expect(validated.dropped).toEqual({ 'duplicate-candidate': 1 })
+  })
+
+  it('keeps two reasons on one claim as two candidates', () => {
+    const { world, evidence } = mismatchWorld()
+    const { validated } = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence)]),
+      mismatchCandidate(world, [proxyEvidence(evidence)], {
+        reason: 'unscoped',
+      }),
+    ])
+    expect(accepted(validated)).toHaveLength(2)
+    expect(validated.dropped).toEqual({})
+  })
+})
+
+describe('a decided code-mismatch candidate across runs', () => {
+  function firstRun(): MismatchWorld & { id: string } {
+    const built = mismatchWorld()
+    const { validated } = fullRun(built.world, [
+      mismatchCandidate(built.world, [proxyEvidence(built.evidence)]),
+    ])
+    const [item] = accepted(validated)
+    expect(item?.standing).toBe('new')
+    const id = String(item?.id)
+    decideRejected(built.world, id)
+    return { ...built, id }
+  }
+
+  it('reopens when an evidence file changes, is suppressed while it does not, and reopens when it is gone', () => {
+    const { world, evidence, id } = firstRun()
+
+    const changed = `${PROXY_CONFIG}# edited\n`
+    fs.writeFileSync(path.join(evidence, 'Caddyfile'), changed)
+    const second = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence, changed)]),
+    ]).validated
+    expect(accepted(second)).toMatchObject([
+      { id, standing: 'evidence changed', kind: 'code-mismatch' },
+    ])
+
+    const third = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence, changed)]),
+    ]).validated
+    expect(accepted(third)).toHaveLength(0)
+    expect(third.suppressed).toBe(1)
+
+    git(evidence, ['rm', '-q', '-f', '--', 'Caddyfile'])
+    const fourth = fullRun(world, [
+      mismatchCandidate(world, [
+        evidenceItem(
+          evidence,
+          'src/loader.ts',
+          LOADER_FILE,
+          'export function loadConfig(raw: Config): string[] {',
+        ),
+      ]),
+    ]).validated
+    expect(accepted(fourth)).toMatchObject([
+      { id, standing: 'evidence changed' },
+    ])
+
+    const shown = ok(runHelperOp('ledger-show', {}, world.deps))
+    expect((shown.entries as Json[])[0]).toMatchObject({
+      id,
+      status: 'candidate',
+      reopened: 'target changed',
+      reopenedFor: 'evidence changed',
+      mismatchReason: 'stale',
+    })
+  })
+
+  it('reopens as "sources changed" when the learning changed and the evidence is gone', () => {
+    const { world, evidence, id } = firstRun()
+    const edited = `${NOW_LEARNING}\nKeep the timeout short.\n`
+    fs.writeFileSync(
+      path.join(world.target, 'docs/solutions/lock-now.md'),
+      edited,
+    )
+    git(evidence, ['rm', '-q', '-f', '--', 'Caddyfile'])
+    const validated = fullRun(world, [
+      mismatchCandidate(
+        world,
+        [
+          evidenceItem(
+            evidence,
+            'src/loader.ts',
+            LOADER_FILE,
+            'export function loadConfig(raw: Config): string[] {',
+          ),
+        ],
+        {},
+        edited,
+      ),
+    ]).validated
+    expect(accepted(validated)).toMatchObject([
+      { id, standing: 'sources changed' },
+    ])
+  })
+
+  it('reopens when only the second of two recorded evidence files changes, and again when it is gone', () => {
+    const { world, evidence } = mismatchWorld()
+    const loaderItem = (content: string): Json =>
+      evidenceItem(
+        evidence,
+        'src/loader.ts',
+        content,
+        'export function loadConfig(raw: Config): string[] {',
+      )
+    const both = (loader: string): Json[] => [
+      proxyEvidence(evidence),
+      loaderItem(loader),
+    ]
+    const first = fullRun(world, [
+      mismatchCandidate(world, both(LOADER_FILE)),
+    ]).validated
+    const id = String(accepted(first)[0]?.id)
+    decideRejected(world, id)
+
+    // Caddyfile sorts first, so src/loader.ts is the second recorded ref.
+    const edited = `${LOADER_FILE}// edited\n`
+    fs.writeFileSync(path.join(evidence, 'src/loader.ts'), edited)
+    const second = fullRun(world, [
+      mismatchCandidate(world, both(edited)),
+    ]).validated
+    expect(accepted(second)).toMatchObject([
+      { id, standing: 'evidence changed' },
+    ])
+
+    git(evidence, ['rm', '-q', '-f', '--', 'src/loader.ts'])
+    const third = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence)]),
+    ]).validated
+    expect(accepted(third)).toMatchObject([
+      { id, standing: 'evidence changed' },
+    ])
+  })
+
+  it('does not reopen for a recorded file in a project this run did not select', () => {
+    const { world, evidence, id } = firstRun()
+    git(evidence, ['rm', '-q', '-f', '--', 'Caddyfile'])
+    const picks = [projectName(world.source), projectName(world.target)]
+    const { validated } = fullRun(
+      world,
+      [mismatchCandidate(world, [], { nextStep: 'investigate' })],
+      { begin: { selection: [`projects:${picks.join(',')}`] } },
+    )
+    expect(accepted(validated)).toHaveLength(0)
+    expect(validated.suppressed).toBe(1)
+    const entry = (
+      ok(runHelperOp('ledger-show', {}, world.deps)).entries as Json[]
+    ).find((item) => item.id === id)
+    expect(entry?.status).toBe('rejected')
+  })
+
+  it('does not reopen for a recorded file in a project whose inventory was cut short', () => {
+    const built = mismatchWorld()
+    const { world, evidence } = built
+    const loader = evidenceItem(
+      evidence,
+      'src/loader.ts',
+      LOADER_FILE,
+      'export function loadConfig(raw: Config): string[] {',
+    )
+    const first = fullRun(world, [mismatchCandidate(world, [loader])]).validated
+    decideRejected(world, String(accepted(first)[0]?.id))
+
+    // One file per project: the evidence project keeps its Dockerfile (config
+    // sorts before code) and cannot say whether loader.ts is gone.
+    const cut: World = {
+      ...world,
+      deps: { ...world.deps, bounds: { maxFilesPerProject: 1 } },
+    }
+    const run = start(cut)
+    const file = writeBatch(
+      run.workDir,
+      'batch-1.json',
+      batchJson(cut, run.runId, {
+        candidates: [mismatchCandidate(world, [], { nextStep: 'investigate' })],
+      }),
+    )
+    const validated = ok(validate(cut, run, [file]))
+    expect(accepted(validated)).toHaveLength(0)
+    expect(validated.suppressed).toBe(1)
+  })
+
+  /** Decide a mismatch that recorded src/loader.ts as evidence. */
+  function decidedOnLoader(): MismatchWorld {
+    const built = mismatchWorld()
+    const loader = evidenceItem(
+      built.evidence,
+      'src/loader.ts',
+      LOADER_FILE,
+      'export function loadConfig(raw: Config): string[] {',
+    )
+    const first = fullRun(built.world, [
+      mismatchCandidate(built.world, [loader]),
+    ]).validated
+    decideRejected(built.world, String(accepted(first)[0]?.id))
+    return built
+  }
+
+  function laterInvestigate(world: World): Json {
+    return fullRun(world, [
+      mismatchCandidate(world, [], { nextStep: 'investigate' }),
+    ]).validated
+  }
+
+  it('reopens an evidence-free investigate when a later refresh brings verified evidence, and not for another investigate', () => {
+    const { world, evidence } = mismatchWorld()
+    const first = fullRun(world, [
+      mismatchCandidate(world, [], { nextStep: 'investigate' }),
+    ]).validated
+    const id = String(accepted(first)[0]?.id)
+    decideRejected(world, id)
+
+    const again = laterInvestigate(world)
+    expect(accepted(again)).toHaveLength(0)
+    expect(again.suppressed).toBe(1)
+
+    const refresh = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence)]),
+    ])
+    expect(accepted(refresh.validated)).toMatchObject([
+      { id, standing: 'evidence changed' },
+    ])
+    expect(readDigest(refresh.published)).toContain('evidence changed')
+  })
+
+  it('accepts one code-mismatch candidate per claim of a learning, and drops only a repeat of the same claim', () => {
+    const { world, evidence } = mismatchWorld()
+    const first = mismatchCandidate(world, [proxyEvidence(evidence)])
+    const otherClaim = mismatchCandidate(world, [proxyEvidence(evidence)], {
+      title: 'The lock learning claims the wrong prevention',
+      sources: [
+        {
+          project: world.target,
+          path: 'docs/solutions/lock-now.md',
+          fingerprint: sha256(NOW_LEARNING),
+          excerpt: 'Keep the timeout short.',
+        },
+      ],
+    })
+    const { validated } = fullRun(world, [first, otherClaim, first])
+    const ids = accepted(validated).map((item) => item.id)
+    expect(ids).toHaveLength(2)
+    expect(new Set(ids).size).toBe(2)
+    expect(validated.droppedTotal).toBe(1)
+    expect(validated.dropped).toEqual({ 'duplicate-candidate': 1 })
+  })
+
+  it('does not reopen when a recorded file is skipped as oversize', () => {
+    const { world, evidence } = decidedOnLoader()
+    fs.writeFileSync(
+      path.join(evidence, 'src/loader.ts'),
+      'x'.repeat(256 * 1024 + 1),
+    )
+    const validated = laterInvestigate(world)
+    expect(accepted(validated)).toHaveLength(0)
+    expect(validated.suppressed).toBe(1)
+  })
+
+  it('does not reopen when a recorded file is skipped as unreadable', () => {
+    const { world, evidence } = decidedOnLoader()
+    const target = path.join(evidence, 'src/loader.ts')
+    fs.chmodSync(target, 0o000)
+    try {
+      const validated = laterInvestigate(world)
+      expect(accepted(validated)).toHaveLength(0)
+      expect(validated.suppressed).toBe(1)
+    } finally {
+      fs.chmodSync(target, 0o644)
+    }
+  })
+
+  it('does not reopen for an absent recorded file when more files were skipped than the inventory can name', () => {
+    const { world, evidence } = decidedOnLoader()
+    // The inventory names at most 100 skipped files. A path with a `$` cannot
+    // be cited, so each of these is skipped, and the 101st goes unnamed:
+    // src/loader.ts is absent, and may be that one.
+    for (let n = 0; n < 101; n++) {
+      fs.writeFileSync(path.join(evidence, `src/junk$${n}.ts`), 'x\n')
+    }
+    git(evidence, ['add', '-f', '--', 'src'])
+    git(evidence, ['rm', '-q', '-f', '--', 'src/loader.ts'])
+    const validated = laterInvestigate(world)
+    expect(accepted(validated)).toHaveLength(0)
+    expect(validated.suppressed).toBe(1)
+  })
+
+  it('still reopens when a recorded file is deleted from the tracked inventory', () => {
+    const { world, evidence } = decidedOnLoader()
+    git(evidence, ['rm', '-q', '-f', '--', 'src/loader.ts'])
+    const validated = laterInvestigate(world)
+    expect(accepted(validated)).toHaveLength(1)
+    expect(accepted(validated)[0]).toMatchObject({
+      standing: 'evidence changed',
+    })
+  })
+})
+
+// ── code-mismatch: digest, summary and handoff ──────────────────────────────
+
+describe('a code-mismatch run, validated and published', () => {
+  function loaderEvidence(evidence: string): Json {
+    return evidenceItem(
+      evidence,
+      'src/loader.ts',
+      LOADER_FILE,
+      'export function loadConfig(raw: Config): string[] {',
+    )
+  }
+
+  it('writes a digest that shows the reason, the evidence with its HEAD and the evidence-only project', () => {
+    const { world, evidence } = mismatchWorld()
+    const { validated, published } = fullRun(world, [
+      mismatchCandidate(world, [loaderEvidence(evidence)]),
+    ])
+    expect(accepted(validated)).toHaveLength(1)
+    const head = git(evidence, ['rev-parse', 'HEAD'])
+    const digest = readDigest(published)
+    expect(digest).toContain('### Candidate 1: code-mismatch (new)')
+    expect(digest).toContain('- Reason: stale')
+    expect(digest).toContain(CLAIM)
+    expect(digest).toMatch(
+      new RegExp(
+        `\`src/loader\\.ts:1-3\` fingerprint \`${sha256(LOADER_FILE)}\` HEAD \`${head}\``,
+      ),
+    )
+    // The project lines carry each HEAD and mark the project that holds no learning.
+    expect(digest).toContain(
+      `${inlineOf(projectName(evidence))} ${inlineOf(evidence)}`,
+    )
+    const line = digest
+      .split('\n')
+      .find((text) => text.includes(`\`${evidence}\`: `))
+    expect(line).toContain(`HEAD \`${head}\``)
+    expect(line).toContain('read only as evidence')
+    const learningLine = digest
+      .split('\n')
+      .find((text) => text.includes(`\`${world.target}\`: `))
+    expect(learningLine).not.toContain('read only as evidence')
+  })
+
+  it('prints the refresh command in the learning project and lists the evidence beside it', () => {
+    const { world, evidence } = mismatchWorld()
+    const { published } = fullRun(world, [
+      mismatchCandidate(world, [loaderEvidence(evidence)]),
+    ])
+    const lines = String(published.summary).split('\n')
+    const title = lines.findIndex((line) => line.startsWith('> code-mismatch'))
+    expect(lines[title]).toStartWith('> code-mismatch (stale): ')
+    expect(lines[title + 1]).toBe(
+      `Review in \`${projectName(world.target)}\`: /ce:compound-refresh path:docs/solutions/lock-now.md`,
+    )
+    expect(lines[title + 2]).toStartWith(
+      'Give ce:compound-refresh the lines below as context',
+    )
+    expect(lines[title + 3]).toBe(
+      '  Claim (stale): `Always reclaim a stale lock immediately after the timeout`',
+    )
+    expect(lines[title + 4]).toBe(
+      `  Evidence to recheck before you confirm: \`${projectName(evidence)}\` \`src/loader.ts:1-3\``,
+    )
+    expect(String(published.summary)).not.toContain('candidate-id:')
+  })
+
+  it('keeps the mismatch reason in the ledger entry the digest points at', () => {
+    const { world, evidence } = mismatchWorld()
+    const { validated } = fullRun(world, [
+      mismatchCandidate(world, [loaderEvidence(evidence)]),
+    ])
+    const [item] = accepted(validated)
+    const shown = ok(runHelperOp('ledger-show', {}, world.deps))
+    expect((shown.entries as Json[])[0]).toMatchObject({
+      id: item?.id,
+      kind: 'code-mismatch',
+      status: 'candidate',
+      mismatchReason: 'stale',
+    })
+  })
+
+  it('gives an investigate candidate with no evidence no command and no token', () => {
+    const { world } = mismatchWorld()
+    const { published } = fullRun(world, [
+      mismatchCandidate(world, [], { nextStep: 'investigate' }),
+    ])
+    const summary = String(published.summary)
+    expect(summary).toContain('Investigate first')
+    expect(summary).not.toContain('/ce:compound-refresh')
+    expect(summary).not.toContain('candidate-id:')
+    const digest = readDigest(published)
+    expect(digest).toContain('- Reason: stale')
+    expect(digest).not.toContain('\nEvidence:')
+  })
+})
+
+function inlineOf(text: string): string {
+  return `\`${text}\``
+}

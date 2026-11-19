@@ -97,7 +97,7 @@ Full workflow from plan to execution:
 
 ### Research Agents
 - `best-practices-researcher` — External research for any technology
-- `connections-researcher` — Read-only cross-project search for contradictions and transferable lessons, used by `ce:connect`
+- `connections-researcher` — Read-only cross-project search for contradictions, transferable lessons and learnings the code no longer supports, used by `ce:connect`
 - `framework-docs-researcher` — Framework documentation and examples
 - `git-history-analyzer` — Git archaeology and pattern discovery
 - `learnings-researcher` — Institutional knowledge from past solutions

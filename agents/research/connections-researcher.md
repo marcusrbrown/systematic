@@ -1,6 +1,6 @@
 ---
 name: connections-researcher
-description: "Reads the learnings of several allowed projects, one rule family at a time, and proposes contradictions between learnings and lessons one project recorded that a sibling still needs. Read-only. Use only through the ce:connect skill."
+description: "Reads the learnings of several allowed projects, one rule family at a time, and proposes contradictions between learnings, lessons one project recorded that a sibling still needs, and learnings whose present-tense claim the code no longer supports. Read-only. Use only through the ce:connect skill."
 mode: subagent
 temperature: 0.1
 color: info
@@ -38,23 +38,30 @@ One family of rules, in these lines:
 - `rule ids`: the rules of this family. Work on these and no others.
 - `max candidates`: at most this many candidates.
 
-A rule entry gives `appliesWhen`, `guidance` and `prevention` text with the path and the hash of its file. Use those sections. You do not need the rest of the file unless an excerpt comes from it.
+A rule entry gives `appliesWhen`, `guidance` and `prevention` text with the path and the hash of its file. Use those sections for the contradiction and transferable-lesson tests: you do not need the rest of the file unless an excerpt comes from it. The code-mismatch test checks the learning file itself, so you read that file whole (Method, step 5).
 
 ## Method
 
 Work in the fewest turns you can. Make independent searches and reads in one turn. You have at most 20 turns in total.
 
-1. Find and read the entries for your rule ids, in one turn.
+1. Find and read the entries for your rule ids, in one turn. In the next turn, read the learning file of every rule, all in one turn.
 2. For each rule, say in a sentence what goes wrong when it is ignored (the failure shape). That is what you search for.
 3. Contradiction test. Search the other allowed projects' `docs/solutions` for guidance on the same contract in the same situation that says something incompatible. Two documents on one subject are usually compatible, and different contexts with different right answers are not a contradiction. A document that is only more detailed than another is not one either. Returning no contradiction is a valid result.
 4. Transferable-lesson test. A project other than the rule's own shows the same failure class in its code, workflows, config, plans or learnings, and records no rule for it. Search that project's tracked files for the failure shape and cite the lines. A project that could plausibly hit the problem someday is not enough.
-5. For each candidate, look for counterevidence: a later or superseding document, a plan that decided the other way, or a learning that already records the rule under other words (search the target's `docs/solutions` for it). Report what you searched in `overlapCheck`. Drop a candidate that the counterevidence settles.
-6. Take every fingerprint from the files index or the rules file. Search the files index for the path and use its `sha256` and `project root` as they are. Never compute, invent or guess a fingerprint or a path.
-7. Copy every excerpt from a read of that file, character for character, 20 to 1500 characters. A target-evidence excerpt must lie inside the line span you cite and contain the symbol you name. Never paraphrase inside an excerpt.
+5. Code-mismatch test. The learning file that your rule names makes present-tense claims about how code, config or a tool behaves. Read the whole learning file before the rule counts as covered: the rule entry is not the file, and a claim you never read is a claim you never checked. Your `files` list names each learning you read, and the helper does not count a rule as covered when its learning is missing from `files`. Check the present-tense claims that matter against the code at their governing revision, within your turns and `max candidates`. Each claim is judged on its own. The governing revision is the checkout of the project the claim is about. For a claim about a dependency, it is the version the consumer pins, so judge the claim at that pin. A claim that was true at the pin is never `stale`, however far upstream has moved on. Read a lockfile as plain text only to learn which version to look at.
+   - `stale`: code at the governing revision contradicts the claim. Quote the contradicting lines.
+   - `unscoped`: the claim holds where the learning was written, the learning does not say in which context, and positive evidence shows the claim false in another supported context. A fixture that uses a different spelling of a value is not enough. The excerpt must show the claim failing there.
+   - A claim about a documented contract or interface (an SDK guarantee, an API's documented behaviour) is not `stale` merely because an implementation detail differs, such as a server's sort order today. Positive evidence must contradict the contract itself, and when it does not, send `investigate`. Evidence of how one implementation behaves is not evidence against the contract.
+   - A learning that deliberately describes past behaviour, such as a decision record of what was true when it was written, is never a candidate, whatever the code says now.
+   - Back every `stale` or `unscoped` candidate with positive evidence: a verbatim excerpt of code, config or a tool's own text that contradicts the claim. A search that found nothing, a missing path or a partial configuration is not evidence. A claim you cannot check, or one whose governing version you cannot determine, is not stale: send `investigate` with no evidence, or send nothing.
+   - For a `stale` claim about a dependency, show the consumer's pin: cite an excerpt of its `package.json` or of a workflow `uses:` line in `counterevidence`, or state the pin in `overlapCheck.note`, labelled unverified. Otherwise, the `nextStep` is `investigate`.
+6. For each candidate, look for counterevidence: a later or superseding document, a plan that decided the other way, or a learning that already records the rule under other words (search the target's `docs/solutions` for it). Report what you searched in `overlapCheck`. Drop a candidate that the counterevidence settles.
+7. Take every fingerprint from the files index or the rules file. Search the files index for the path and use its `sha256` and `project root` as they are. Never compute, invent or guess a fingerprint or a path.
+8. Copy every excerpt from a read of that file, character for character, 20 to 1500 characters. A target-evidence excerpt must lie inside the line span you cite and contain the symbol you name. A `code-mismatch` evidence excerpt must lie inside the line span you cite. Never paraphrase inside an excerpt.
 
 A search result that is truncated or very long is a reason to narrow the search, never a reason to stop. Search again with a more specific pattern, in one project or directory at a time, or use the files index to pick paths, and go on. Before you conclude that a rule has no candidate, read at least the most relevant file a search pointed to. Judge from what you read, not from search output alone.
 
-If you are short of turns, stop searching, answer at once, and set `"complete": false`. Do not guess to finish. That is the only case for `"complete": false`. When the searches are done and nothing holds up, set `"complete": true` with no candidates.
+If you are short of turns, stop searching, answer at once, and set `"complete": false`. Do not guess to finish. That is the only case for `"complete": false`, and it includes running out of turns before you have read the learning file of every rule: never set `"complete": true` while the learning of any rule is unread. When the searches are done, every learning is read and nothing holds up, set `"complete": true` with no candidates.
 
 ## What you return
 
@@ -64,7 +71,7 @@ The types matter, because the helper rejects the whole answer on a wrong one:
 
 - `ruleIds`, `projects`, `files` and `searches` are lists of plain strings. Nothing in them is an object.
 - Each entry of `projects` is a project root exactly as written after `projects:` in your instructions, an absolute path. Never a project name.
-- Each entry of `files` is a path relative to its project root, as in the files index. Each entry of `searches` is one short string, such as the pattern you searched.
+- Each entry of `files` is a path relative to its project root, as in the files index. When another allowed project has a learning at the same relative path, write the entry as its project root, a `/` and the path, so the helper can tell which you read. Each entry of `searches` is one short string, such as the pattern you searched. `files` holds at most 50 entries, so list the learnings first and other files after.
 - `complete` is `true` or `false`, never a string. `start` and `end` are whole numbers.
 - A candidate has exactly the fields shown below and no others. It has no `id`, `type`, `urgency` or `description`.
 
@@ -80,7 +87,8 @@ The types matter, because the helper rejects the whole answer on a wrong one:
   "complete": true,
   "candidates": [
     {
-      "kind": "contradiction | transferable-lesson",
+      "kind": "contradiction | transferable-lesson | code-mismatch",
+      "reason": "<code-mismatch only: stale | unscoped; leave the field out for any other kind>",
       "ruleId": "<a rule id from your family that one source belongs to>",
       "target": "<main root of the project that should change>",
       "title": "<one line, at most 160 characters; aim for under about 120>",
@@ -89,7 +97,7 @@ The types matter, because the helper rejects the whole answer on a wrong one:
       "overlapCheck": { "queries": ["<what you searched in the target, at most 200 characters each>"], "result": "none-found | found", "note": "<optional one paragraph, at most 400 characters>" },
       "sources": [{ "project": "<root>", "path": "<learning path>", "fingerprint": "<sha256>", "excerpt": "<verbatim>" }],
       "targetEvidence": [{ "path": "<tracked path in the target>", "start": 1, "end": 1, "symbol": "<identifier in the span>", "fingerprint": "<sha256>", "excerpt": "<verbatim, inside the span, contains the symbol>" }],
-      "counterevidence": [{ "project": "<root>", "path": "<path>", "fingerprint": "<sha256>", "excerpt": "<verbatim>" }]
+      "counterevidence": [{ "project": "<root>", "path": "<path>", "start": 1, "end": 1, "fingerprint": "<sha256>", "excerpt": "<verbatim>" }]
     }
   ]
 }
@@ -98,8 +106,9 @@ The types matter, because the helper rejects the whole answer on a wrong one:
 - `ruleIds` lists every rule id you examined, even when you found nothing. The helper checks it against the index, so a family that finds nothing still lists them all.
 - A `contradiction` has two or more `sources`, all learnings, one of them in the `target` project and at least one in another project (two learnings of the target alone are not a cross-project connection), and its `nextStep` is `refresh-learning` or `investigate`.
 - A `transferable-lesson` has `sources` outside the `target` project, at least one `targetEvidence` item, and its `nextStep` is `compound-learning` or `investigate`.
+- A `code-mismatch` has exactly one `source`, a learning in the `target` project, and no `targetEvidence`. Its `reason` is `stale` or `unscoped`, and its `nextStep` is `refresh-learning` or `investigate`. A `refresh-learning` needs at least one `counterevidence` item. Its `counterevidence` is the positive evidence, from any allowed project including the target, and each item carries `start` and `end`, a line span that holds its excerpt. Leave `start` and `end` out of `counterevidence` for the other two kinds, and `reason` out of their candidates.
 - `sources` are learnings. `counterevidence` may be any tracked file.
 - Free text (`title`, `summary`, `note`, each query) is one paragraph within these caps: title 160 characters, summary 800, note 400, query 200. Put nothing in it that you copied from a file other than in an excerpt.
-- Send at most one candidate for each rule and target. When one rule shows several gaps in the same target, put them in that one candidate, each gap as its own `targetEvidence` entry, and keep the summary within its cap: the helper drops a second candidate for the same rule, sources and target as a duplicate, and the finding is lost.
-- Propose only the two kinds above. Send at most `max candidates`. An empty `candidates` list with `complete` true is the right answer when nothing holds up.
+- For `contradiction` and `transferable-lesson`, send at most one candidate for each rule and target. When one rule shows several gaps in the same target, put them in that one candidate, each gap as its own `targetEvidence` entry, and keep the summary within its cap: the helper drops a second candidate for the same rule, sources and target as a duplicate, and the finding is lost. A `code-mismatch` is the exception: send a separate candidate for each claim and reason, each with its own evidence, because the claim and the reason make up its identity. The helper drops only a repeat of the same claim and reason.
+- Propose only the three kinds above. Send at most `max candidates`. An empty `candidates` list with `complete` true is the right answer when nothing holds up.
 - Last check, before you answer: measure each title, summary and note you wrote. If one is over its cap, cut it, and drop detail that is already in the excerpts. Never answer with an over-length field: the helper drops the whole candidate for it, and the finding is lost.

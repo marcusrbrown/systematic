@@ -870,6 +870,240 @@ describe('renderReport', () => {
     expect(fs.existsSync(path.join(root, REPORT_FILE))).toBe(true)
   })
 
+  describe('a code-mismatch candidate', () => {
+    const INFRA_ROOT = '/runner/work/connect/checkouts/acme__infra'
+    const DEP_ROOT = '/runner/work/connect/checkouts/acme__dependency'
+    const INFRA_COMMIT = 'b'.repeat(40)
+    const EXCERPT_TEXT = 'handle /app/* { try_files {path} /index.html }'
+
+    function evidenceItem(over: Json = {}): Json {
+      return {
+        project: INFRA_ROOT,
+        projectName: 'infra',
+        path: 'caddy/Caddyfile',
+        start: 3,
+        end: 9,
+        fingerprint: sha('caddyfile'),
+        excerpt: EXCERPT_TEXT,
+        cite: 'x',
+        ...over,
+      }
+    }
+
+    function mismatch(over: Json = {}): Json {
+      return blockCandidate(1, {
+        kind: 'code-mismatch',
+        nextStep: 'refresh-learning',
+        reason: 'stale',
+        counterevidence: [evidenceItem()],
+        ...over,
+      })
+    }
+
+    const PROJECTS = [
+      {
+        name: 'target',
+        root: PROJECT_ROOT,
+        key: PROJECT_KEY,
+        repo: 'acme/target',
+        commit: 'a'.repeat(40),
+      },
+      {
+        name: 'infra',
+        root: INFRA_ROOT,
+        key: 'abcdefabcdef',
+        repo: 'acme/infra',
+        commit: INFRA_COMMIT,
+      },
+      {
+        name: 'dependency',
+        root: DEP_ROOT,
+        key: 'fedcbafedcba',
+        repo: 'acme/dependency',
+      },
+    ]
+
+    function seededMismatch(candidate: Json = mismatch()): string {
+      const root = makeRoot()
+      writeLedger(root, [
+        entryOf(1, { kind: 'code-mismatch', status: 'candidate' }),
+      ])
+      writeRunRecord(root, [candidate], { projects: PROJECTS })
+      writeInvocation(root, '900-1')
+      return root
+    }
+
+    it('shows the reason and each evidence as project:path:span:HEAD, and no excerpt', () => {
+      const { body } = rendered(seededMismatch())
+      expect(body).toContain('Kind: code-mismatch')
+      expect(body).toContain('Reason: stale')
+      expect(body).toContain(`- infra:caddy/Caddyfile:3-9:${INFRA_COMMIT}`)
+      expect(body).not.toContain(EXCERPT_TEXT)
+    })
+
+    it('names a missing HEAD as unavailable rather than leaving it out', () => {
+      const root = seededMismatch(
+        mismatch({
+          reason: 'unscoped',
+          counterevidence: [
+            evidenceItem({
+              project: DEP_ROOT,
+              projectName: 'dependency',
+              path: 'src/loader.ts',
+              start: 12,
+              end: 14,
+            }),
+          ],
+        }),
+      )
+      const { body } = rendered(root)
+      expect(body).toContain('Reason: unscoped')
+      expect(body).toContain('- dependency:src/loader.ts:12-14:unavailable')
+    })
+
+    it('lists every evidence in the order the candidate gave them', () => {
+      const root = seededMismatch(
+        mismatch({
+          counterevidence: [
+            evidenceItem(),
+            evidenceItem({ path: 'caddy/other.conf', start: 1, end: 2 }),
+          ],
+        }),
+      )
+      const { body } = rendered(root)
+      const first = body.indexOf('infra:caddy/Caddyfile:3-9')
+      const second = body.indexOf('infra:caddy/other.conf:1-2')
+      expect(first).toBeGreaterThan(-1)
+      expect(second).toBeGreaterThan(first)
+    })
+
+    it('keeps the reason and the evidence, with their HEADs, after the run record is gone', () => {
+      const root = seededMismatch()
+      rendered(root)
+      const [stored] = payloadsOf(root)
+      expect(stored).toMatchObject({
+        reason: 'stale',
+        evidence: [
+          {
+            projectName: 'infra',
+            repo: 'acme/infra',
+            path: 'caddy/Caddyfile',
+            start: 3,
+            end: 9,
+            head: INFRA_COMMIT,
+          },
+        ],
+      })
+      expect(JSON.stringify(stored)).not.toContain(EXCERPT_TEXT)
+
+      writeInvocation(root, '901-1', {}, null)
+      const { body } = rendered(root, { date: DAY_TWO, runId: '901' })
+      expect(body).toContain('Reason: stale')
+      expect(body).toContain(`- infra:caddy/Caddyfile:3-9:${INFRA_COMMIT}`)
+    })
+
+    it('stores no repository for evidence in a project the run record does not list, so the recheck fails closed on it', () => {
+      const root = seededMismatch(
+        mismatch({
+          counterevidence: [
+            evidenceItem({
+              project: '/runner/work/connect/checkouts/unlisted',
+            }),
+          ],
+        }),
+      )
+      rendered(root)
+      const [stored] = payloadsOf(root)
+      const evidence = (stored?.evidence ?? []) as Json[]
+      expect(evidence).toHaveLength(1)
+      expect(evidence[0]).not.toHaveProperty('repo')
+    })
+
+    it('prints no reason or evidence for a kind that has none', () => {
+      const { body } = rendered(seeded(1))
+      expect(body).not.toContain('Reason:')
+      expect(body).not.toContain('Evidence:')
+    })
+
+    it('still renders a stored payload written before these fields existed', () => {
+      const root = makeRoot()
+      writeLedger(root, [
+        entryOf(1, { kind: 'code-mismatch', status: 'candidate' }),
+      ])
+      fs.writeFileSync(
+        path.join(root, PAYLOAD_FILE),
+        `${JSON.stringify({
+          version: 1,
+          payloads: [
+            {
+              id: idOf(1),
+              title: 'Old',
+              summary: 'Written by an earlier helper.',
+              kind: 'transferable-lesson',
+              nextStep: 'compound-learning',
+              targetName: 'target',
+              sources: [],
+              runId: '800',
+              attempt: '1',
+            },
+          ],
+        })}\n`,
+      )
+      writeInvocation(root, '900-1', {}, null)
+      const { body } = rendered(root)
+      expect(body).toContain('Title: Old')
+      expect(body).not.toContain('Reason:')
+    })
+
+    it('drops a reason that is not one of the two, and evidence on a kind that cannot carry it', () => {
+      const bogus = seededMismatch(mismatch({ reason: 'bogus' }))
+      expect(rendered(bogus).body).not.toContain('Reason:')
+
+      const other = seededMismatch(
+        mismatch({ kind: 'contradiction', reason: undefined }),
+      )
+      const { body } = rendered(other)
+      expect(body).not.toContain('Evidence:')
+      expect(body).not.toContain('caddy/Caddyfile')
+    })
+
+    it('bounds the evidence list and makes its text inert', () => {
+      const many = Array.from({ length: 12 }, (_, i) =>
+        evidenceItem({ path: `f${i}.conf`, start: 1, end: 2 }),
+      )
+      const root = seededMismatch(mismatch({ counterevidence: many }))
+      const { body } = rendered(root)
+      expect(body.match(/- infra:f\d+\.conf:1-2/g)).toHaveLength(8)
+
+      const hostile = seededMismatch(
+        mismatch({
+          counterevidence: [
+            evidenceItem({ projectName: 'infra @octocat', path: 'a#12.conf' }),
+          ],
+        }),
+      )
+      const hostileBody = rendered(hostile).body
+      expect(hostileBody).not.toMatch(/@[A-Za-z0-9_]/)
+      expect(hostileBody).not.toMatch(/#\d/)
+    })
+
+    it('names an unusable span with a question mark and skips an item with no path', () => {
+      const root = seededMismatch(
+        mismatch({
+          counterevidence: [
+            evidenceItem({ path: 'bad-span.conf', start: 'x' }),
+            evidenceItem({ path: undefined }),
+            evidenceItem({ path: 'ok.conf', start: 4, end: 6 }),
+          ],
+        }),
+      )
+      const { body } = rendered(root)
+      expect(body).toContain('- infra:bad-span.conf:?:')
+      expect(body).toContain('- infra:ok.conf:4-6:')
+      expect(body.match(/^- infra:/gm)).toHaveLength(2)
+    })
+  })
+
   describe('the outcome', () => {
     it('says a complete run is complete and is not red', () => {
       const result = rendered(seeded(1))

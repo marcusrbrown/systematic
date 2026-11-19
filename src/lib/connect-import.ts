@@ -23,9 +23,11 @@ import { readContainedFile } from './connect-evidence.js'
 import {
   CANDIDATE_LIMITS,
   checkCandidate,
+  claimFingerprint,
   type DigestCandidate,
   handoffLine,
   inline,
+  isMismatchReason,
   isPasteablePath,
   nameDropped,
   type ProjectFacts,
@@ -315,6 +317,12 @@ export const REFUSAL_TEXT: Readonly<Record<RefusalReason, string>> =
     'check-failed': 'the candidate failed a check against the local files',
   })
 
+/** What to do about an evidence project of a code-mismatch candidate that has no allowed checkout. */
+export function evidenceRemedy(repo: string | undefined): string {
+  const named = repo === undefined ? 'that repository' : repo
+  return `allow-list a checkout of ${named} (at the pinned ref for a dependency), then import again`
+}
+
 export interface ImportRefusal {
   /** The recorded id, when it is well formed. */
   readonly id: string | null
@@ -328,12 +336,20 @@ export interface ImportRefusal {
   readonly file?: string
   readonly keys?: readonly string[]
   readonly repo?: string
+  /** One line on how to get the candidate imported, when the refusal has a known fix. */
+  readonly remedy?: string
 }
 
 export interface ImportAccepted {
   readonly recordedId: string
   /** The candidate with local roots, checked against local files. */
   readonly candidate: ValidCandidate
+  /**
+   * The checkout HEAD each `counterevidence` item was recorded at, by the root
+   * the run recorded it under. A local root cannot key it: two recorded
+   * checkouts can map to one local root.
+   */
+  readonly evidenceHeads: ReadonlyArray<string | undefined>
   readonly record: CandidateRecord
   /** The id computed from local roots. */
   readonly id: string
@@ -370,6 +386,8 @@ interface Shape {
   readonly title: unknown
   readonly summary: unknown
   readonly nextStep: unknown
+  /** Why a `code-mismatch` learning is a candidate. Absent for every other kind. */
+  readonly reason: unknown
   readonly overlapCheck: unknown
   readonly sources: readonly FileRef[]
   readonly counterevidence: readonly FileRef[]
@@ -449,6 +467,7 @@ function shapeOf(raw: unknown): Shape | undefined {
     title: raw.title,
     summary: raw.summary,
     nextStep: raw.nextStep,
+    reason: raw.reason,
     overlapCheck: raw.overlapCheck,
     sources,
     counterevidence,
@@ -456,9 +475,32 @@ function shapeOf(raw: unknown): Shape | undefined {
   }
 }
 
+/**
+ * The reason and the claim fingerprint a `code-mismatch` candidate adds to its
+ * identity: the reason as recorded and a hash of its one learning's excerpt.
+ * Every other kind adds nothing, so its id stays what it always was.
+ */
+function mismatchIdentity(
+  shape: Shape,
+): { mismatchReason: string; claim: string } | undefined {
+  const [claim] = shape.sources
+  if (
+    shape.kind !== 'code-mismatch' ||
+    !isMismatchReason(shape.reason) ||
+    claim === undefined
+  ) {
+    return undefined
+  }
+  return {
+    mismatchReason: shape.reason,
+    claim: claimFingerprint(claim.excerpt),
+  }
+}
+
 /** The identity the producer would have written, from the recorded roots. */
 function recordedIdentity(shape: Shape): string {
   return candidateIdentity({
+    ...mismatchIdentity(shape),
     kind: shape.kind,
     target: shape.target,
     ruleId: shape.ruleId,
@@ -537,6 +579,20 @@ function createLandings(
   }
 }
 
+/** The fix for an evidence project of a code-mismatch candidate that has no allowed checkout. */
+function unmappedRemedy(
+  shape: Shape,
+  root: string,
+  reason: MappingRefusal,
+  repo: string | undefined,
+): { remedy: string } | Record<string, never> {
+  const evidenceProject =
+    shape.kind === 'code-mismatch' &&
+    reason === 'repo-not-allowed' &&
+    shape.counterevidence.some((source) => source.project === root)
+  return evidenceProject ? { remedy: evidenceRemedy(repo) } : {}
+}
+
 /** Every recorded root a candidate depends on must map to one local checkout. */
 function land(shape: Shape, landings: Landings): Check<Map<string, Landing>> {
   const roots = new Set([
@@ -555,6 +611,7 @@ function land(shape: Shape, landings: Landings): Check<Map<string, Landing>> {
       return refuse(mapping.reason, {
         ...(mapping.keys === undefined ? {} : { keys: mapping.keys }),
         ...(project.repo === undefined ? {} : { repo: project.repo }),
+        ...unmappedRemedy(shape, root, mapping.reason, project.repo),
       })
     }
     const facts = landings.factsOf(mapping.local)
@@ -656,6 +713,12 @@ function localRaw(
     fingerprint: ref.fingerprint,
     excerpt: ref.excerpt,
   })
+  // Evidence of a code-mismatch candidate names the span it was read from.
+  const evidence = (ref: FileRef): Record<string, unknown> => ({
+    ...source(ref),
+    ...(ref.rest.start === undefined ? {} : { start: ref.rest.start }),
+    ...(ref.rest.end === undefined ? {} : { end: ref.rest.end }),
+  })
   return {
     kind: shape.kind,
     ruleId,
@@ -663,6 +726,7 @@ function localRaw(
     title: shape.title,
     summary: shape.summary,
     nextStep: shape.nextStep,
+    ...(shape.reason === undefined ? {} : { reason: shape.reason }),
     overlapCheck: shape.overlapCheck,
     sources: shape.sources.map(source),
     targetEvidence: shape.targetEvidence.map((item) => ({
@@ -673,7 +737,7 @@ function localRaw(
       fingerprint: item.fingerprint,
       excerpt: item.excerpt,
     })),
-    counterevidence: shape.counterevidence.map(source),
+    counterevidence: shape.counterevidence.map(evidence),
   }
 }
 
@@ -727,6 +791,9 @@ function verifyOne(
   return {
     recordedId: shape.id,
     candidate: checked.candidate,
+    evidenceHeads: shape.counterevidence.map(
+      (ref) => landings.projectOf(ref.project)?.commit,
+    ),
     record,
     id: candidateIdentity(record),
   }
@@ -874,9 +941,10 @@ function refusalLines(refused: readonly ImportRefusal[]): string[] {
       item.keys === undefined
         ? ''
         : ` Local project keys: ${item.keys.map(inline).join(', ')}.`
+    const remedy = item.remedy === undefined ? '' : ` Fix: ${item.remedy}.`
     out.push(
       quote(item.title),
-      `  ${item.reason}${detail}: ${item.reasonText}.${where}${keys}`,
+      `  ${item.reason}${detail}: ${item.reasonText}.${where}${keys}${remedy}`,
     )
   }
   return out
@@ -966,6 +1034,7 @@ export function renderImportDigest(
     '',
   ]
   if (written.length === 0) out.push('None.', '')
+  // Each candidate brings the HEADs its evidence was recorded at.
   written.forEach((item, index) => {
     out.push(...renderCandidate(item, index))
   })

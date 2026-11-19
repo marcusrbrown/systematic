@@ -35,7 +35,12 @@ import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { readContainedFile } from './connect-evidence.js'
-import { renderSweepLine, sanitizeText } from './connect-helper-core.js'
+import {
+  CANDIDATE_LIMITS,
+  MISMATCH_REASONS,
+  renderSweepLine,
+  sanitizeText,
+} from './connect-helper-core.js'
 import {
   acquireLock,
   decideLedgerEntry,
@@ -79,6 +84,7 @@ const DIGITS = /^[0-9]{1,20}$/
 const DATE = /^\d{4}-\d{2}-\d{2}$/
 const REPO = /^[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9._-]{1,100}$/
 const TOKEN = /^[a-z][a-z0-9-]{0,39}$/
+const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 
 /** `<!-- connect-manifest:<hash> -->`: which stored manifest this body was rendered with. */
 export function manifestMarker(hash: string): string {
@@ -443,6 +449,24 @@ interface PayloadSource {
   readonly excerpt?: string
 }
 
+/**
+ * A file a `code-mismatch` candidate cites as evidence: where it is and the
+ * checkout HEAD its project had when the run read it. The excerpt is not kept;
+ * `fetch:` brings it in.
+ */
+interface PayloadEvidence {
+  readonly projectName: string
+  /**
+   * The `owner/repo` the file belongs to, so the visibility rechecks can name
+   * a repository only this candidate cites. Absent when it could not be named.
+   */
+  readonly repo?: string
+  readonly path: string
+  readonly start?: number
+  readonly end?: number
+  readonly head?: string
+}
+
 /** The text of one open candidate, kept bounded and display-safe. */
 interface Payload {
   readonly id: string
@@ -453,6 +477,10 @@ interface Payload {
   readonly targetName: string
   readonly repo?: string
   readonly sources: readonly PayloadSource[]
+  /** Why a `code-mismatch` learning is a candidate. Absent for every other kind. */
+  readonly reason?: string
+  /** The evidence a `code-mismatch` candidate cites. Absent for every other kind. */
+  readonly evidence?: readonly PayloadEvidence[]
   /** The UTC date the candidate was first listed. Absent until it is listed. */
   readonly firstShown?: string
   /** The GitHub run and attempt whose artifact holds the candidate's evidence. */
@@ -462,8 +490,21 @@ interface Payload {
 
 type PayloadText = Pick<
   Payload,
-  'title' | 'summary' | 'kind' | 'nextStep' | 'targetName' | 'sources'
+  | 'title'
+  | 'summary'
+  | 'kind'
+  | 'nextStep'
+  | 'targetName'
+  | 'sources'
+  | 'reason'
+  | 'evidence'
 >
+
+/** Each project's recorded checkout HEAD, by the root a candidate names it by. */
+type Heads = ReadonlyMap<string, string>
+
+/** Each project's `owner/repo`, by the same root. */
+type Repos = ReadonlyMap<string, string>
 
 function sourceOf(item: unknown): PayloadSource | undefined {
   if (!isRecord(item)) return undefined
@@ -477,8 +518,77 @@ function sourceOf(item: unknown): PayloadSource | undefined {
   }
 }
 
+function spanOf(
+  start: unknown,
+  end: unknown,
+): { start: number; end: number } | undefined {
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) {
+    return undefined
+  }
+  const from = start as number
+  const to = end as number
+  return from >= 1 && to >= from ? { start: from, end: to } : undefined
+}
+
+function evidenceItemOf(
+  item: unknown,
+  heads: Heads,
+  repos: Repos,
+): PayloadEvidence | undefined {
+  if (!isRecord(item)) return undefined
+  const evidencePath = lineOf(item.path, LIMITS.path)
+  if (evidencePath === undefined) return undefined
+  const span = spanOf(item.start, item.end)
+  // A stored item carries its HEAD; an item of a run record names its project by root.
+  const head =
+    typeof item.head === 'string' && OBJECT_ID.test(item.head)
+      ? item.head
+      : typeof item.project === 'string'
+        ? heads.get(item.project)
+        : undefined
+  const repo =
+    typeof item.repo === 'string' && REPO.test(item.repo)
+      ? item.repo
+      : typeof item.project === 'string'
+        ? repos.get(item.project)
+        : undefined
+  return {
+    projectName: lineOf(item.projectName, LIMITS.name) ?? 'unknown',
+    ...(repo === undefined ? {} : { repo }),
+    path: evidencePath,
+    ...(span === undefined ? {} : span),
+    ...(head === undefined ? {} : { head }),
+  }
+}
+
+/** The reason and evidence of a `code-mismatch` candidate. Another kind has neither. */
+function mismatchFields(
+  raw: Record<string, unknown>,
+  kind: string,
+  heads: Heads,
+  repos: Repos,
+): Pick<PayloadText, 'reason' | 'evidence'> {
+  if (kind !== 'code-mismatch') return {}
+  const reason = MISMATCH_REASONS.find((known) => known === raw.reason)
+  // A run record names its evidence `counterevidence`; the store names it `evidence`.
+  const list = Array.isArray(raw.evidence) ? raw.evidence : raw.counterevidence
+  const evidence = Array.isArray(list)
+    ? (list as unknown[])
+        .slice(0, CANDIDATE_LIMITS.counterevidence)
+        .flatMap((item) => evidenceItemOf(item, heads, repos) ?? [])
+    : []
+  return {
+    ...(reason === undefined ? {} : { reason }),
+    ...(evidence.length === 0 ? {} : { evidence }),
+  }
+}
+
 /** The display fields of a candidate, from a run record or from the store. */
-function payloadText(raw: unknown): PayloadText | undefined {
+function payloadText(
+  raw: unknown,
+  heads: Heads,
+  repos: Repos,
+): PayloadText | undefined {
   if (!isRecord(raw) || !Array.isArray(raw.sources)) return undefined
   const title = lineOf(raw.title, LIMITS.title)
   const summary = paragraphOf(raw.summary, LIMITS.summary)
@@ -486,19 +596,21 @@ function payloadText(raw: unknown): PayloadText | undefined {
   const sources = (raw.sources as unknown[])
     .slice(0, LIMITS.sources)
     .flatMap((item) => sourceOf(item) ?? [])
+  const kind = tokenOf(raw.kind)
   return {
     title,
     summary,
-    kind: tokenOf(raw.kind),
+    kind,
     nextStep: tokenOf(raw.nextStep),
     targetName: lineOf(raw.targetName, LIMITS.name) ?? 'unknown',
     sources,
+    ...mismatchFields(raw, kind, heads, repos),
   }
 }
 
 function payloadFromStore(raw: unknown): Payload | undefined {
   if (!isRecord(raw) || !isCandidateId(raw.id)) return undefined
-  const text = payloadText(raw)
+  const text = payloadText(raw, new Map(), new Map())
   if (text === undefined) return undefined
   if (!isDigits(raw.runId) || !isDigits(raw.attempt)) return undefined
   const { repo, firstShown } = raw
@@ -541,6 +653,8 @@ function payloadStoreText(payloads: readonly Payload[]): string {
     targetName: payload.targetName,
     ...(payload.repo === undefined ? {} : { repo: payload.repo }),
     sources: payload.sources,
+    ...(payload.reason === undefined ? {} : { reason: payload.reason }),
+    ...(payload.evidence === undefined ? {} : { evidence: payload.evidence }),
     ...(payload.firstShown === undefined
       ? {}
       : { firstShown: payload.firstShown }),
@@ -624,6 +738,8 @@ interface RunSummary {
   readonly sweep?: string
   /** The `owner/repo` of each project, by the root the candidates name. */
   readonly repoByRoot: ReadonlyMap<string, string>
+  /** The checkout HEAD of each project, by the same root. */
+  readonly commitByRoot: Heads
   readonly candidates: readonly unknown[]
 }
 
@@ -684,6 +800,23 @@ function repoMap(value: unknown): Map<string, string> {
   return out
 }
 
+function commitMap(value: unknown): Map<string, string> {
+  const out = new Map<string, string>()
+  if (!Array.isArray(value)) return out
+  for (const item of (value as unknown[]).slice(0, MAX_PROJECTS)) {
+    if (!isRecord(item)) continue
+    const { root, commit } = item
+    if (
+      typeof root === 'string' &&
+      typeof commit === 'string' &&
+      OBJECT_ID.test(commit)
+    ) {
+      out.set(root, commit)
+    }
+  }
+  return out
+}
+
 function candidatesOf(value: unknown): unknown[] {
   if (!isRecord(value) || !Array.isArray(value.candidates)) return []
   return (value.candidates as unknown[]).slice(0, MAX_CANDIDATES)
@@ -704,6 +837,7 @@ function readRunSummary(root: string, runId: string): RunSummary | undefined {
     ...(selection === undefined ? {} : { selection }),
     ...(sweep === undefined ? {} : { sweep }),
     repoByRoot: repoMap(record.projects),
+    commitByRoot: commitMap(record.projects),
     candidates: candidatesOf(record.candidateBlock),
   }
 }
@@ -821,6 +955,7 @@ function factsOf(id: string, payload: Payload): string {
   const lines = [
     `Id: ${id}`,
     `Kind: ${payload.kind}`,
+    ...(payload.reason === undefined ? [] : [`Reason: ${payload.reason}`]),
     `Target: ${target}`,
     `Title: ${payload.title}`,
     `Summary: ${payload.summary}`,
@@ -830,6 +965,16 @@ function factsOf(id: string, payload: Payload): string {
   for (const source of payload.sources) {
     lines.push(`- ${source.projectName} ${source.path}`)
     if (source.excerpt !== undefined) lines.push(`  Excerpt: ${source.excerpt}`)
+  }
+  if (payload.evidence !== undefined) lines.push('Evidence:')
+  for (const item of payload.evidence ?? []) {
+    const span =
+      item.start === undefined || item.end === undefined
+        ? '?'
+        : `${item.start}-${item.end}`
+    lines.push(
+      `- ${item.projectName}:${item.path}:${span}:${item.head ?? 'unavailable'}`,
+    )
   }
   return lines.join('\n')
 }
@@ -985,7 +1130,11 @@ function proposed(
   const out = new Map<string, Payload>()
   for (const raw of run?.candidates ?? []) {
     if (!isRecord(raw) || !isCandidateId(raw.id) || !open.has(raw.id)) continue
-    const text = payloadText(raw)
+    const text = payloadText(
+      raw,
+      run?.commitByRoot ?? new Map(),
+      run?.repoByRoot ?? new Map(),
+    )
     if (text === undefined) continue
     const target = typeof raw.target === 'string' ? raw.target : undefined
     const repo = target === undefined ? undefined : run?.repoByRoot.get(target)

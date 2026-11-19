@@ -251,7 +251,7 @@ function publishLocalLesson(
       family: 'locking',
       ruleIds: [ruleId, ruleIdFor(world.target, 'docs/solutions/lock-now.md')],
       projects: [world.source, world.target],
-      files: ['docs/solutions/lock-reclaim.md'],
+      files: ['docs/solutions/lock-reclaim.md', 'docs/solutions/lock-now.md'],
       searches: ['reclaim lock'],
       complete: true,
       candidates: [
@@ -1337,7 +1337,7 @@ describe('import: a record the helper itself published', () => {
         ruleIdFor(ci.target, 'docs/solutions/lock-now.md'),
       ],
       projects: [ci.source, ci.target],
-      files: ['docs/solutions/lock-reclaim.md'],
+      files: ['docs/solutions/lock-reclaim.md', 'docs/solutions/lock-now.md'],
       searches: ['reclaim lock'],
       complete: true,
       candidates: [
@@ -1451,5 +1451,627 @@ describe('import: a record the helper itself published', () => {
       ),
     )
     expect(sources[0]?.fingerprint).toBe(sha256(LESSON))
+  })
+})
+
+// ── A code-mismatch candidate ───────────────────────────────────────────────
+
+describe('import: a code-mismatch candidate carries its reason and evidence', () => {
+  const LEARNING = fixtureFiles('target')['docs/solutions/lock-now.md'] ?? ''
+  const EVIDENCE_FILE =
+    fixtureFiles('source')['docs/solutions/lock-reclaim.md'] ?? ''
+  const CLAIM = 'Always reclaim a stale lock immediately after the timeout'
+  const EVIDENCE = 'Never reclaim a lock without verifying the holder identity'
+
+  function mismatchRecord(): Json {
+    return JSON.parse(
+      fs.readFileSync(path.join(FIXTURES, 'code-mismatch', 'run.json'), 'utf8'),
+    ) as Json
+  }
+
+  function candidateOf(record: Json): Json {
+    const [only] = list((record.candidateBlock as Json).candidates)
+    if (only === undefined) throw new Error('the fixture has no candidate')
+    return only
+  }
+
+  /** The candidate with local roots, as import should write it. */
+  function localCandidate(world: World, over: Json = {}): never {
+    return {
+      kind: 'code-mismatch',
+      ruleId: ruleIdFor(world.target, 'docs/solutions/lock-now.md'),
+      target: world.target,
+      sources: [
+        {
+          project: world.target,
+          path: 'docs/solutions/lock-now.md',
+          fingerprint: sha256(LEARNING),
+          excerpt: CLAIM,
+        },
+      ],
+      targetEvidence: [],
+      counterevidence: [
+        {
+          project: world.source,
+          path: 'docs/solutions/lock-reclaim.md',
+          fingerprint: sha256(EVIDENCE_FILE),
+          excerpt: EVIDENCE,
+          start: 9,
+          end: 9,
+        },
+      ],
+      reason: 'stale',
+      ...over,
+    } as never
+  }
+
+  it('imports the candidate with its reason and span, and the id equals the one computed from local roots', () => {
+    const world = buildWorld()
+    const recorded = mismatchRecord()
+    const body = ok(importOp(world, downloaded(recorded)))
+
+    expect(list(body.refused)).toEqual([])
+    expect(body.imported).toBe(1)
+    expect(body.outcome).toBe('complete')
+
+    const record = JSON.parse(
+      fs.readFileSync(body.runRecordPath as string, 'utf8'),
+    ) as Json
+    const imported = candidateOf(record)
+    expect(imported.kind).toBe('code-mismatch')
+    expect(imported.reason).toBe('stale')
+    expect(imported.target).toBe(world.target)
+    const evidence = list(imported.counterevidence)
+    expect(evidence).toHaveLength(1)
+    expect(evidence[0]).toMatchObject({
+      project: world.source,
+      path: 'docs/solutions/lock-reclaim.md',
+      start: 9,
+      end: 9,
+    })
+
+    const expected = candidateIdentity(
+      toCandidateRecord({
+        ...(localCandidate(world) as unknown as Json),
+        targetName: 'target',
+      } as never),
+    )
+    expect(imported.id).toBe(expected)
+    expect(imported.id).not.toBe(candidateOf(recorded).id)
+    expect(list(body.candidates)[0]?.id).toBe(expected)
+
+    const [entry] = ledgerEntries(world)
+    expect(entry).toMatchObject({
+      id: expected,
+      kind: 'code-mismatch',
+      mismatchReason: 'stale',
+    })
+  })
+
+  it('prints the refresh command and the evidence to recheck, and the digest shows the HEAD the run recorded', () => {
+    const world = buildWorld()
+    const body = ok(importOp(world, downloaded(mismatchRecord())))
+    const summary = String(body.summary)
+    expect(summary).toContain(
+      '/ce:compound-refresh path:docs/solutions/lock-now.md',
+    )
+    expect(summary).toContain(
+      'Evidence to recheck before you confirm: `source` `docs/solutions/lock-reclaim.md:9-9`',
+    )
+    const digest = fs.readFileSync(body.digestPath as string, 'utf8')
+    expect(digest).toContain('- Reason: stale')
+    expect(digest).toContain(`HEAD \`${'a'.repeat(40)}\``)
+    expect(digest).not.toContain('HEAD unavailable')
+  })
+
+  it('labels each evidence with the HEAD of the checkout it was recorded in when two recorded checkouts map to one local root', () => {
+    const world = buildWorld()
+    const record = mismatchRecord()
+    const FIRST = 'a'.repeat(40)
+    const SECOND = 'c'.repeat(40)
+    const SECOND_ROOT = '/runner/work/connect/checkouts/acme__source-again'
+    const [first] = list(record.projects)
+    if (first === undefined) throw new Error('no project')
+    // The same repository recorded under a second checkout at another commit.
+    record.projects = [
+      ...list(record.projects),
+      {
+        ...first,
+        name: 'acme__source-again',
+        root: SECOND_ROOT,
+        key: projectKey(SECOND_ROOT),
+        commit: SECOND,
+      },
+    ]
+    const [evidence] = list(candidateOf(record).counterevidence)
+    if (evidence === undefined) throw new Error('no evidence')
+    candidateOf(record).counterevidence = [
+      evidence,
+      {
+        ...evidence,
+        project: SECOND_ROOT,
+        projectName: 'acme__source-again',
+        excerpt: 'Record the holder start time next to the pid.',
+        start: 13,
+        end: 13,
+      },
+    ]
+    const body = ok(importOp(world, downloaded(record)))
+    expect(list(body.refused)).toEqual([])
+    const digest = fs.readFileSync(body.digestPath as string, 'utf8')
+    const line = (span: string): string =>
+      digest.split('\n').find((text) => text.includes(span)) ?? ''
+    expect(line('lock-reclaim.md:9-9')).toContain(`HEAD \`${FIRST}\``)
+    expect(line('lock-reclaim.md:13-13')).toContain(`HEAD \`${SECOND}\``)
+  })
+
+  it('refuses a record whose reason was changed after the id was made', () => {
+    const world = buildWorld()
+    const record = mismatchRecord()
+    candidateOf(record).reason = 'unscoped'
+    const body = ok(importOp(world, downloaded(record)))
+    expect(refusedBy(body)['candidate-id-mismatch']).toHaveLength(1)
+    expect(body.imported).toBe(0)
+  })
+
+  it('refuses a record whose claim was swapped for another line of the same learning', () => {
+    const world = buildWorld()
+    const record = mismatchRecord()
+    const [source] = list(candidateOf(record).sources)
+    if (source === undefined) throw new Error('no source')
+    source.excerpt = 'Keep the timeout short.'
+    const body = ok(importOp(world, downloaded(record)))
+    expect(refusedBy(body)['candidate-id-mismatch']).toHaveLength(1)
+    expect(body.imported).toBe(0)
+  })
+
+  it('refuses a reason on a kind that cannot carry one, by the check and not by the id', () => {
+    const world = buildWorld()
+    const record = fixtureRecord('good')
+    const lesson = list((record.candidateBlock as Json).candidates).find(
+      (c) => c.kind === 'transferable-lesson',
+    )
+    if (lesson === undefined) throw new Error('no lesson in the fixture')
+    lesson.reason = 'stale'
+    const body = ok(importOp(world, downloaded(record)))
+    const by = refusedBy(body)
+    expect(by['candidate-id-mismatch']).toBeUndefined()
+    expect(by['check-failed']).toHaveLength(1)
+    expect(body.imported).toBe(1)
+  })
+
+  it('refuses a span that does not hold the excerpt', () => {
+    const world = buildWorld()
+    const record = mismatchRecord()
+    const [evidence] = list(candidateOf(record).counterevidence)
+    if (evidence === undefined) throw new Error('no evidence')
+    evidence.start = 11
+    evidence.end = 13
+    const body = ok(importOp(world, downloaded(record)))
+    const [refused] = list(body.refused)
+    expect(refused).toMatchObject({
+      reason: 'check-failed',
+      detail: 'excerpt-outside-span',
+    })
+    expect(body.imported).toBe(0)
+  })
+
+  it('refuses an evidence project with no allowed checkout, and says how to fix it', () => {
+    const world = buildWorld({ allow: (_source, target) => [target] })
+    const body = ok(importOp(world, downloaded(mismatchRecord())))
+    expect(body.imported).toBe(0)
+    const [refused] = list(body.refused)
+    expect(refused?.reason).toBe('repo-not-allowed')
+    expect(refused?.remedy).toContain('allow-list a checkout of acme/source')
+    expect(refused?.remedy).toContain('pinned')
+    expect(String(body.summary)).toContain(String(refused?.remedy))
+  })
+
+  it('adds no remedy to the refusal of a project that is not evidence of a code-mismatch', () => {
+    const world = buildWorld({ allow: (_source, target) => [target] })
+    const body = ok(importOp(world, downloaded(fixtureRecord('good'))))
+    expect(list(body.refused).length).toBeGreaterThan(0)
+    for (const refused of list(body.refused)) {
+      expect(refused.remedy).toBeUndefined()
+    }
+  })
+
+  describe('a rerun', () => {
+    it('lists the open candidate again, with no new run and no new ledger entry', () => {
+      const world = buildWorld()
+      const dir = downloaded(mismatchRecord())
+      const first = ok(importOp(world, dir))
+      const before = treeOf(world.stateRoot)
+
+      const again = ok(importOp(world, dir))
+      expect(again.imported).toBe(0)
+      expect(again.alreadyImported).toBe(1)
+      expect(treeOf(world.stateRoot)).toEqual(before)
+      expect(String(again.summary)).toContain(
+        '/ce:compound-refresh path:docs/solutions/lock-now.md',
+      )
+      expect(list(again.candidates)[0]?.runRecordPath).toBe(first.runRecordPath)
+    })
+
+    it('writes a fresh record when the evidence under the same id is another file', () => {
+      const world = buildWorld()
+      const first = ok(importOp(world, downloaded(mismatchRecord())))
+      const runsBefore = runDirs(world)
+
+      const record = mismatchRecord()
+      const candidate = candidateOf(record)
+      const code = fixtureFiles('target')['src/lock.ts'] ?? ''
+      candidate.counterevidence = [
+        {
+          project: '/runner/work/connect/checkouts/acme__target',
+          projectName: 'acme__target',
+          path: 'src/lock.ts',
+          fingerprint: sha256(code),
+          excerpt: 'export function reclaimLock(path: string): boolean {',
+          cite: 'x',
+          start: 3,
+          end: 3,
+        },
+      ]
+      const again = ok(importOp(world, downloaded(record)))
+      expect(again.imported).toBe(1)
+      expect(runDirs(world)).toHaveLength(runsBefore.length + 1)
+      expect(list(again.candidates)[0]?.runRecordPath).not.toBe(
+        first.runRecordPath,
+      )
+      expect(ledgerEntries(world)).toHaveLength(1)
+    })
+
+    it('binds a decision made from a reimport to the evidence that import cited', () => {
+      const world = buildWorld()
+      const first = ok(importOp(world, downloaded(mismatchRecord())))
+      const id = String(list(first.candidates)[0]?.id)
+
+      // The same claim again, citing another file (B) in place of the first (A).
+      const code = fixtureFiles('target')['src/lock.ts'] ?? ''
+      const citingB = (bytes: string): Json => {
+        const record = mismatchRecord()
+        candidateOf(record).counterevidence = [
+          {
+            project: '/runner/work/connect/checkouts/acme__target',
+            projectName: 'acme__target',
+            path: 'src/lock.ts',
+            fingerprint: sha256(bytes),
+            excerpt: 'export function reclaimLock(path: string): boolean {',
+            cite: 'x',
+            start: 3,
+            end: 3,
+          },
+        ]
+        return record
+      }
+      const second = ok(importOp(world, downloaded(citingB(code))))
+      expect(second.imported).toBe(1)
+      expect(list(ledgerEntries(world)[0]?.evidence)).toMatchObject([
+        { path: 'src/lock.ts', fingerprint: sha256(code) },
+      ])
+
+      decideLedgerEntry(world.stateRoot, {
+        id,
+        status: 'rejected',
+        reason: 'checked by hand',
+      })
+
+      // A, which the decision was not made from, changing does not reopen it.
+      fs.writeFileSync(
+        path.join(world.source, 'docs/solutions/lock-reclaim.md'),
+        `${EVIDENCE_FILE}\nA later line.\n`,
+      )
+      const quiet = ok(importOp(world, downloaded(citingB(code))))
+      expect(quiet.imported).toBe(0)
+      expect(list(quiet.skipped)[0]).toMatchObject({
+        reason: 'rejected-locally',
+      })
+
+      // B, which it was, changing does.
+      const changed = `${code}// later\n`
+      fs.writeFileSync(path.join(world.target, 'src/lock.ts'), changed)
+      const reopened = ok(importOp(world, downloaded(citingB(changed))))
+      expect(reopened.imported).toBe(1)
+      expect(list(reopened.skipped)).toEqual([])
+      expect(list(reopened.candidates)[0]?.standing).toBe('evidence changed')
+    })
+
+    it('publishes again instead of reusing a retained record whose evidence the ledger no longer watches (A, then B, then A)', () => {
+      const world = buildWorld()
+      const code = fixtureFiles('target')['src/lock.ts'] ?? ''
+      const citingB = (): Json => {
+        const record = mismatchRecord()
+        candidateOf(record).counterevidence = [
+          {
+            project: '/runner/work/connect/checkouts/acme__target',
+            projectName: 'acme__target',
+            path: 'src/lock.ts',
+            fingerprint: sha256(code),
+            excerpt: 'export function reclaimLock(path: string): boolean {',
+            cite: 'x',
+            start: 3,
+            end: 3,
+          },
+        ]
+        return record
+      }
+      const first = ok(importOp(world, downloaded(mismatchRecord())))
+      const id = String(list(first.candidates)[0]?.id)
+      const second = ok(importOp(world, downloaded(citingB())))
+      expect(second.imported).toBe(1)
+
+      // A again, both files unchanged. A retained record holds A, but the ledger watches B.
+      const third = ok(importOp(world, downloaded(mismatchRecord())))
+      expect(third.imported).toBe(1)
+      expect(third.alreadyImported).toBe(0)
+      expect(list(third.candidates)[0]?.runRecordPath).not.toBe(
+        first.runRecordPath,
+      )
+      expect(list(ledgerEntries(world)[0]?.evidence)).toMatchObject([
+        { fingerprint: sha256(EVIDENCE_FILE) },
+      ])
+
+      decideLedgerEntry(world.stateRoot, {
+        id,
+        status: 'rejected',
+        reason: 'checked by hand',
+      })
+      const changed = `${EVIDENCE_FILE}\nA later line.\n`
+      fs.writeFileSync(
+        path.join(world.source, 'docs/solutions/lock-reclaim.md'),
+        changed,
+      )
+      const record = mismatchRecord()
+      const [evidence] = list(candidateOf(record).counterevidence)
+      if (evidence === undefined) throw new Error('no evidence')
+      evidence.fingerprint = sha256(changed)
+      const again = ok(importOp(world, downloaded(record)))
+      expect(list(again.skipped)).toEqual([])
+      expect(list(again.candidates)[0]?.standing).toBe('evidence changed')
+    })
+
+    it('tells two evidence files apart by path when their bytes are identical (A, then B, then A)', () => {
+      const COPY = 'docs/solutions/lock-reclaim-copy.md'
+      const world = buildWorld({
+        sourceFiles: { ...fixtureFiles('source'), [COPY]: EVIDENCE_FILE },
+      })
+      const citing = (file: string): Json => {
+        const record = mismatchRecord()
+        const [evidence] = list(candidateOf(record).counterevidence)
+        if (evidence === undefined) throw new Error('no evidence')
+        // The same bytes, so the same fingerprint, the same project and the same span.
+        evidence.path = file
+        return record
+      }
+      const A = 'docs/solutions/lock-reclaim.md'
+      const first = ok(importOp(world, downloaded(citing(A))))
+      const second = ok(importOp(world, downloaded(citing(COPY))))
+      expect(second.imported).toBe(1)
+      expect(list(ledgerEntries(world)[0]?.evidence)).toMatchObject([
+        { path: COPY, fingerprint: sha256(EVIDENCE_FILE) },
+      ])
+
+      // A again: the retained A record cites a file the ledger no longer watches.
+      const third = ok(importOp(world, downloaded(citing(A))))
+      expect(third.imported).toBe(1)
+      expect(list(third.candidates)[0]?.runRecordPath).not.toBe(
+        first.runRecordPath,
+      )
+      expect(list(ledgerEntries(world)[0]?.evidence)).toMatchObject([
+        { path: A },
+      ])
+    })
+
+    it('still reuses the retained record when the ledger watches the evidence it holds', () => {
+      const world = buildWorld()
+      const dir = downloaded(mismatchRecord())
+      const first = ok(importOp(world, dir))
+      const again = ok(importOp(world, dir))
+      expect(again.imported).toBe(0)
+      expect(again.alreadyImported).toBe(1)
+      expect(list(again.candidates)[0]?.runRecordPath).toBe(first.runRecordPath)
+    })
+
+    it('skips a candidate rejected here when its evidence is the same bytes', () => {
+      const world = buildWorld()
+      const dir = downloaded(mismatchRecord())
+      const first = ok(importOp(world, dir))
+      decideLedgerEntry(world.stateRoot, {
+        id: String(list(first.candidates)[0]?.id),
+        status: 'rejected',
+        reason: 'checked by hand',
+      })
+      const again = ok(importOp(world, dir))
+      expect(again.imported).toBe(0)
+      expect(list(again.skipped)[0]).toMatchObject({
+        reason: 'rejected-locally',
+      })
+    })
+
+    it('reopens a candidate rejected here when the evidence it cites has new bytes', () => {
+      const world = buildWorld()
+      const first = ok(importOp(world, downloaded(mismatchRecord())))
+      decideLedgerEntry(world.stateRoot, {
+        id: String(list(first.candidates)[0]?.id),
+        status: 'rejected',
+        reason: 'checked by hand',
+      })
+
+      const changed = `${EVIDENCE_FILE}\nA later line.\n`
+      fs.writeFileSync(
+        path.join(world.source, 'docs/solutions/lock-reclaim.md'),
+        changed,
+      )
+      const record = mismatchRecord()
+      const [evidence] = list(candidateOf(record).counterevidence)
+      if (evidence === undefined) throw new Error('no evidence')
+      evidence.fingerprint = sha256(changed)
+      const again = ok(importOp(world, downloaded(record)))
+      expect(again.imported).toBe(1)
+      expect(list(again.skipped)).toEqual([])
+      expect(list(again.candidates)[0]?.standing).toBe('evidence changed')
+    })
+
+    it('leaves the ledger entry reopened with the new evidence, and a repeat of the same import does not reopen it again', () => {
+      const world = buildWorld()
+      const first = ok(importOp(world, downloaded(mismatchRecord())))
+      const id = String(list(first.candidates)[0]?.id)
+      decideLedgerEntry(world.stateRoot, {
+        id,
+        status: 'rejected',
+        reason: 'checked by hand',
+      })
+
+      const changed = `${EVIDENCE_FILE}\nA later line.\n`
+      fs.writeFileSync(
+        path.join(world.source, 'docs/solutions/lock-reclaim.md'),
+        changed,
+      )
+      const record = mismatchRecord()
+      const [evidence] = list(candidateOf(record).counterevidence)
+      if (evidence === undefined) throw new Error('no evidence')
+      evidence.fingerprint = sha256(changed)
+      const dir = downloaded(record)
+
+      const again = ok(importOp(world, dir))
+      expect(list(again.candidates)[0]?.standing).toBe('evidence changed')
+      const [entry] = ledgerEntries(world)
+      expect(entry).toMatchObject({
+        id,
+        status: 'candidate',
+        reopened: 'target changed',
+        reopenedFor: 'evidence changed',
+      })
+      expect(list(entry?.evidence)[0]?.fingerprint).toBe(sha256(changed))
+
+      const before = treeOf(world.stateRoot)
+      const repeat = ok(importOp(world, dir))
+      expect(repeat.imported).toBe(0)
+      expect(repeat.alreadyImported).toBe(1)
+      expect(list(repeat.skipped)).toEqual([])
+      expect(treeOf(world.stateRoot)).toEqual(before)
+    })
+
+    it('writes a fresh record when only the span of the same evidence differs', () => {
+      const world = buildWorld()
+      ok(importOp(world, downloaded(mismatchRecord())))
+      const runsBefore = runDirs(world)
+
+      const record = mismatchRecord()
+      const [evidence] = list(candidateOf(record).counterevidence)
+      if (evidence === undefined) throw new Error('no evidence')
+      evidence.start = 8
+      evidence.end = 10
+      const again = ok(importOp(world, downloaded(record)))
+      expect(again.imported).toBe(1)
+      expect(runDirs(world)).toHaveLength(runsBefore.length + 1)
+    })
+  })
+
+  it('imports an older record with no reason and no span with its ids unchanged', () => {
+    const world = buildWorld()
+    const body = ok(importOp(world, downloaded(fixtureRecord('good'))))
+    expect(body.imported).toBe(2)
+    const record = JSON.parse(
+      fs.readFileSync(body.runRecordPath as string, 'utf8'),
+    ) as Json
+    for (const candidate of list((record.candidateBlock as Json).candidates)) {
+      expect(candidate).not.toHaveProperty('reason')
+    }
+    for (const entry of ledgerEntries(world)) {
+      expect(entry).not.toHaveProperty('mismatchReason')
+      expect(entry).not.toHaveProperty('claim')
+    }
+  })
+
+  it('round-trips a real CI run: the id the producer wrote survives the recheck and promotes', () => {
+    const ci = buildWorld()
+    const begun = ok(
+      runHelperOp(
+        'begin',
+        { host: 'opencode-v2', version: '9999.0.0', mode: 'headless' },
+        ci.deps,
+      ),
+    )
+    const runId = begun.runId as string
+    const lock = begun.lock as { nonce: string; pid: number }
+    fs.writeFileSync(
+      path.join(begun.workDir as string, 'batch-1.json'),
+      JSON.stringify({
+        version: 1,
+        runId,
+        family: 'locking',
+        ruleIds: [
+          ruleIdFor(ci.source, 'docs/solutions/lock-reclaim.md'),
+          ruleIdFor(ci.target, 'docs/solutions/lock-now.md'),
+        ],
+        projects: [ci.source, ci.target],
+        files: ['docs/solutions/lock-reclaim.md', 'docs/solutions/lock-now.md'],
+        searches: ['reclaim lock'],
+        complete: true,
+        candidates: [
+          {
+            kind: 'code-mismatch',
+            ruleId: ruleIdFor(ci.target, 'docs/solutions/lock-now.md'),
+            target: ci.target,
+            title: 'Reclaiming at once no longer matches the guidance',
+            summary: 'The learning says to reclaim at once.',
+            nextStep: 'refresh-learning',
+            reason: 'stale',
+            overlapCheck: { queries: ['reclaim lock'], result: 'none-found' },
+            sources: [
+              {
+                project: ci.target,
+                path: 'docs/solutions/lock-now.md',
+                fingerprint: sha256(LEARNING),
+                excerpt: CLAIM,
+              },
+            ],
+            targetEvidence: [],
+            counterevidence: [
+              {
+                project: ci.source,
+                path: 'docs/solutions/lock-reclaim.md',
+                fingerprint: sha256(EVIDENCE_FILE),
+                excerpt: EVIDENCE,
+                start: 9,
+                end: 9,
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    ok(
+      runHelperOp(
+        'validate',
+        { runId, lock, batches: ['batch-1.json'] },
+        ci.deps,
+      ),
+    )
+    const published = ok(runHelperOp('publish', { runId, lock }, ci.deps))
+    const record = JSON.parse(
+      fs.readFileSync(published.runRecordPath as string, 'utf8'),
+    ) as Json
+    expect(candidateOf(record).reason).toBe('stale')
+    expect(list(candidateOf(record).counterevidence)[0]).toMatchObject({
+      start: 9,
+      end: 9,
+    })
+
+    const local = buildWorld()
+    const body = ok(
+      importOp(
+        local,
+        downloaded(fs.readFileSync(published.runRecordPath as string, 'utf8')),
+      ),
+    )
+    expect(list(body.refused)).toEqual([])
+    expect(body.imported).toBe(1)
+    expect(list(body.candidates)[0]?.kind).toBe('code-mismatch')
+    expect(String(body.summary)).toContain(
+      '/ce:compound-refresh path:docs/solutions/lock-now.md',
+    )
   })
 })

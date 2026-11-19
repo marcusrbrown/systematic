@@ -11,6 +11,8 @@ import {
   classifyCandidate,
   clearLedger,
   decideLedgerEntry,
+  type EvidenceLookup,
+  type EvidenceNow,
   forceUnlock,
   HOLDERLESS_LOCK_MAX_AGE_MS,
   INVOCATION_FILE,
@@ -29,6 +31,7 @@ import {
   readCiRunMarker,
   readInvocationRecord,
   readLedger,
+  recordsEvidenceOf,
   releaseLock,
   rewriteRunFiles,
   writeInvocationRecord,
@@ -117,6 +120,7 @@ interface Session {
     runId: string,
     candidates: readonly CandidateRecord[],
     hooks?: { afterCommit?: () => void },
+    evidence?: EvidenceLookup,
   ): ReturnType<typeof publishRun>
 }
 
@@ -129,7 +133,7 @@ function session(): Session {
     root,
     procs,
     clock,
-    publish(runId, candidates, hooks) {
+    publish(runId, candidates, hooks, evidence) {
       const lock = expectAcquired(
         acquireLock(root, {
           pid: 7001,
@@ -145,6 +149,7 @@ function session(): Session {
             runId,
             files: { 'digest.md': '# digest\n', 'run.json': '{}\n' },
             candidates,
+            ...(evidence === undefined ? {} : { evidence }),
           },
           { now: () => clock.now, hooks },
         )
@@ -1261,6 +1266,875 @@ describe('ledger', () => {
 function readFileText(file: string): string {
   return fs.readFileSync(file, 'utf8')
 }
+
+// ── code-mismatch: identity, reopen and ledger fields ───────────────────────
+
+const LEARNING_PROJECT = 'aaaaaaaaaaaa'
+const EVIDENCE_PROJECT = 'bbbbbbbbbbbb'
+const LEARNING_PATH = 'docs/solutions/a.md'
+
+function mismatch(over: Partial<CandidateRecord> = {}): CandidateRecord {
+  return {
+    kind: 'code-mismatch',
+    target: '/projects/target',
+    ruleId: 'rule-1',
+    sources: [
+      {
+        role: `source@${LEARNING_PROJECT}`,
+        path: LEARNING_PATH,
+        fingerprint: 'L1',
+      },
+    ],
+    targetEvidence: [],
+    mismatchReason: 'stale',
+    claim: 'claim-1',
+    evidence: [
+      { project: EVIDENCE_PROJECT, path: 'Caddyfile', fingerprint: 'E1' },
+    ],
+    ...over,
+  }
+}
+
+/** What the run's inventory says now: files not listed are unread. */
+function inventory(files: Record<string, EvidenceNow>): EvidenceLookup {
+  return (project, file) => files[`${project}:${file}`] ?? { status: 'unread' }
+}
+
+const present = (fingerprint: string): EvidenceNow => ({
+  status: 'present',
+  fingerprint,
+})
+const GONE: EvidenceNow = { status: 'gone' }
+const EVIDENCE_KEY = `${EVIDENCE_PROJECT}:Caddyfile`
+
+function decide(
+  s: Session,
+  id: string,
+  status: 'promoted' | 'rejected',
+  extra: { destination?: string } = {},
+) {
+  return decideLedgerEntry(
+    s.root,
+    { id, status, reason: `decided ${status}`, ...extra },
+    { pid: 7001, processes: s.procs.table },
+  )
+}
+
+describe('candidateIdentity for a code-mismatch candidate', () => {
+  it('leaves the id of every candidate without the new fields as it was', () => {
+    // Pinned from the algorithm before the new fields existed.
+    expect(candidateIdentity(candidate())).toBe(
+      '192ac5e6e92ec5b669acdd9c356aabeaf37972b6d8c4c2dc183e8776222237d6',
+    )
+  })
+
+  it('differs by reason and by claim', () => {
+    const base = candidateIdentity(mismatch())
+    expect(
+      candidateIdentity(mismatch({ mismatchReason: 'unscoped' })),
+    ).not.toBe(base)
+    expect(candidateIdentity(mismatch({ claim: 'claim-2' }))).not.toBe(base)
+    const { claim: _claim, ...withoutClaim } = mismatch()
+    expect(candidateIdentity(withoutClaim)).not.toBe(base)
+  })
+
+  it('never changes with the evidence, the learning bytes or the evidence order', () => {
+    const base = candidateIdentity(mismatch())
+    expect(
+      candidateIdentity(
+        mismatch({
+          evidence: [
+            { project: EVIDENCE_PROJECT, path: 'other.ts', fingerprint: 'X' },
+          ],
+        }),
+      ),
+    ).toBe(base)
+    expect(candidateIdentity(mismatch({ evidence: [] }))).toBe(base)
+    expect(
+      candidateIdentity(
+        mismatch({
+          sources: [
+            {
+              role: `source@${LEARNING_PROJECT}`,
+              path: LEARNING_PATH,
+              fingerprint: 'L2',
+            },
+          ],
+        }),
+      ),
+    ).toBe(base)
+  })
+})
+
+/**
+ * The ledger validation of the shipped helper (v3.35.3, `connect-state.ts` on
+ * `origin/main`): an entry or history item is read by its named fields only, a
+ * `reopened` value is one of two, and one bad entry makes the whole ledger
+ * unreadable. Copied here, not imported, because it is the reader a rollback
+ * puts back; this copy must not follow the current reader.
+ */
+function shippedReaderAccepts(text: string): boolean {
+  const record = (v: unknown): v is Record<string, unknown> =>
+    typeof v === 'object' && v !== null && !Array.isArray(v)
+  const plain = (v: unknown, max: number): boolean =>
+    typeof v === 'string' &&
+    v.length > 0 &&
+    v.length <= max &&
+    !/\p{Cc}/u.test(v)
+  const optional = (v: unknown, max: number): boolean =>
+    v === undefined || plain(v, max)
+  const reopened = (v: unknown): boolean =>
+    v === undefined || v === 'sources changed' || v === 'target changed'
+  const source = (v: unknown): boolean =>
+    record(v) &&
+    plain(v.role, 512) &&
+    plain(v.path, 4096) &&
+    plain(v.fingerprint, 128)
+  const targetEvidence = (v: unknown): boolean =>
+    record(v) && plain(v.path, 4096) && plain(v.fingerprint, 128)
+  const status = (v: unknown): boolean =>
+    v === 'candidate' || v === 'promoted' || v === 'rejected'
+  const shared = (v: Record<string, unknown>): boolean =>
+    status(v.status) &&
+    optional(v.reason, 500) &&
+    optional(v.destination, 4096) &&
+    reopened(v.reopened) &&
+    Array.isArray(v.sources) &&
+    v.sources.every(source) &&
+    Array.isArray(v.targetEvidence) &&
+    v.targetEvidence.every(targetEvidence) &&
+    plain(v.recordedAt, 512)
+  const historyItem = (v: unknown): boolean => record(v) && shared(v)
+  const entry = (v: unknown): boolean =>
+    record(v) &&
+    plain(v.id, 512) &&
+    plain(v.kind, 512) &&
+    plain(v.target, 4096) &&
+    plain(v.ruleId, 512) &&
+    shared(v) &&
+    Array.isArray(v.history) &&
+    v.history.every(historyItem)
+  try {
+    const value: unknown = JSON.parse(text)
+    return (
+      record(value) &&
+      (value.version === 1 || value.version === 2) &&
+      Array.isArray(value.entries) &&
+      value.entries.every(entry)
+    )
+  } catch {
+    return false
+  }
+}
+
+describe('a decided code-mismatch candidate', () => {
+  it('writes a ledger the shipped reader still loads after an evidence reopen', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const id = ledgerEntries(s.root)[0]?.id ?? ''
+    decide(s, id, 'rejected')
+    s.publish(
+      'run-2',
+      [mismatch()],
+      undefined,
+      inventory({ [EVIDENCE_KEY]: present('E2') }),
+    )
+    const written = fs.readFileSync(path.join(s.root, 'ledger.json'), 'utf8')
+    expect(shippedReaderAccepts(written)).toBe(true)
+    // The reopen is in the ledger under a value the old reader knows,
+    // and its true reason is in a field the old reader ignores.
+    expect(ledgerEntries(s.root)[0]).toMatchObject({
+      status: 'candidate',
+      reopened: 'target changed',
+      reopenedFor: 'evidence changed',
+    })
+
+    // The next reopen moves it into history, which the old reader reads too.
+    decide(s, id, 'rejected')
+    s.publish(
+      'run-3',
+      [mismatch()],
+      undefined,
+      inventory({ [EVIDENCE_KEY]: present('E3') }),
+    )
+    const again = fs.readFileSync(path.join(s.root, 'ledger.json'), 'utf8')
+    expect(shippedReaderAccepts(again)).toBe(true)
+    expect(ledgerEntries(s.root)[0]?.history).toHaveLength(2)
+  })
+
+  it('keeps reopenedFor on the history item of an entry that is reopened again', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const id = ledgerEntries(s.root)[0]?.id ?? ''
+    decide(s, id, 'rejected')
+    s.publish(
+      'run-2',
+      [mismatch()],
+      undefined,
+      inventory({ [EVIDENCE_KEY]: present('E2') }),
+    )
+    expect(ledgerEntries(s.root)[0]).toMatchObject({
+      reopened: 'target changed',
+      reopenedFor: 'evidence changed',
+    })
+
+    // The entry was never decided again, so the next reopen (the learning
+    // changed) moves the evidence reopen into history as it stood.
+    const changedLearning = mismatch({
+      sources: [
+        {
+          role: `source@${LEARNING_PROJECT}`,
+          path: LEARNING_PATH,
+          fingerprint: 'L2',
+        },
+      ],
+    })
+    expect(
+      publishedOutcomes(s.publish('run-3', [changedLearning])),
+    ).toMatchObject([{ standing: 'reopened', reason: 'sources changed' }])
+
+    const [entry] = ledgerEntries(s.root)
+    expect(entry).toMatchObject({ reopened: 'sources changed' })
+    expect(entry).not.toHaveProperty('reopenedFor')
+    expect(entry?.history).toHaveLength(2)
+    expect(entry?.history[1]).toMatchObject({
+      status: 'candidate',
+      reopened: 'target changed',
+      reopenedFor: 'evidence changed',
+    })
+    const written = fs.readFileSync(path.join(s.root, 'ledger.json'), 'utf8')
+    expect(shippedReaderAccepts(written)).toBe(true)
+  })
+
+  it('does not accept the fixture reader for a value only the current reader knows', () => {
+    const entry = {
+      id: 'x',
+      kind: 'k',
+      target: '/t',
+      ruleId: 'r',
+      sources: [],
+      targetEvidence: [],
+      status: 'candidate',
+      reopened: 'evidence changed',
+      history: [],
+      recordedAt: '2026-11-12T00:00:00.000Z',
+    }
+    expect(
+      shippedReaderAccepts(JSON.stringify({ version: 2, entries: [entry] })),
+    ).toBe(false)
+    expect(
+      shippedReaderAccepts(
+        JSON.stringify({
+          version: 2,
+          entries: [{ ...entry, reopened: 'target changed' }],
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  it('reopens as "evidence changed" when an evidence file in another project changes', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const id = ledgerEntries(s.root)[0]?.id ?? ''
+    decide(s, id, 'rejected')
+
+    const outcomes = publishedOutcomes(
+      s.publish(
+        'run-2',
+        [mismatch()],
+        undefined,
+        inventory({ [EVIDENCE_KEY]: present('E2') }),
+      ),
+    )
+    expect(outcomes).toMatchObject([
+      {
+        standing: 'reopened',
+        reason: 'evidence changed',
+        priorStatus: 'rejected',
+      },
+    ])
+    expect(ledgerEntries(s.root)[0]).toMatchObject({
+      status: 'candidate',
+      reopened: 'target changed',
+      reopenedFor: 'evidence changed',
+    })
+  })
+
+  it("reopens the same way for evidence in the learning's own project", () => {
+    const own = {
+      project: LEARNING_PROJECT,
+      path: 'src/loader.ts',
+      fingerprint: 'E1',
+    }
+    const s = session()
+    s.publish('run-1', [mismatch({ evidence: [own] })])
+    const outcomes = publishedOutcomes(
+      s.publish(
+        'run-2',
+        [mismatch({ evidence: [own] })],
+        undefined,
+        inventory({ [`${LEARNING_PROJECT}:src/loader.ts`]: present('E9') }),
+      ),
+    )
+    expect(outcomes).toMatchObject([
+      { standing: 'reopened', reason: 'evidence changed' },
+    ])
+  })
+
+  it('reopens as "evidence changed" when a recorded evidence file is gone', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    expect(
+      publishedOutcomes(
+        s.publish(
+          'run-2',
+          [mismatch()],
+          undefined,
+          inventory({ [EVIDENCE_KEY]: GONE }),
+        ),
+      ),
+    ).toMatchObject([{ standing: 'reopened', reason: 'evidence changed' }])
+  })
+
+  describe('decided with no evidence recorded', () => {
+    function decidedWithoutEvidence(): Session {
+      const s = session()
+      s.publish('run-1', [mismatch({ evidence: [] })])
+      decide(s, ledgerEntries(s.root)[0]?.id ?? '', 'rejected')
+      return s
+    }
+
+    it('reopens as "evidence changed" when a later proposal brings evidence', () => {
+      const s = decidedWithoutEvidence()
+      expect(publishedOutcomes(s.publish('run-2', [mismatch()]))).toMatchObject(
+        [
+          {
+            standing: 'reopened',
+            reason: 'evidence changed',
+            priorStatus: 'rejected',
+          },
+        ],
+      )
+      expect(ledgerEntries(s.root)[0]).toMatchObject({
+        status: 'candidate',
+        reopened: 'target changed',
+        reopenedFor: 'evidence changed',
+        evidence: [
+          { project: EVIDENCE_PROJECT, path: 'Caddyfile', fingerprint: 'E1' },
+        ],
+      })
+    })
+
+    it('stays suppressed when the later proposal has no evidence either', () => {
+      const s = decidedWithoutEvidence()
+      const outcomes = publishedOutcomes(
+        s.publish('run-2', [mismatch({ evidence: [] })]),
+      )
+      expect(outcomes.map((o) => o.standing)).toEqual(['suppressed'])
+    })
+
+    it('is suppressed again once the reopened entry records that evidence', () => {
+      const s = decidedWithoutEvidence()
+      s.publish('run-2', [mismatch()])
+      decide(s, ledgerEntries(s.root)[0]?.id ?? '', 'rejected')
+      const outcomes = publishedOutcomes(s.publish('run-3', [mismatch()]))
+      expect(outcomes.map((o) => o.standing)).toEqual(['suppressed'])
+    })
+  })
+
+  describe('an open entry published again with other evidence', () => {
+    const A = { project: EVIDENCE_PROJECT, path: 'a.conf', fingerprint: 'A1' }
+    const B = { project: EVIDENCE_PROJECT, path: 'b.conf', fingerprint: 'B1' }
+    const A_KEY = `${EVIDENCE_PROJECT}:a.conf`
+    const B_KEY = `${EVIDENCE_PROJECT}:b.conf`
+
+    /** Open with evidence A, then published again citing B, then decided from that. */
+    function decidedOnB(): { s: Session; id: string } {
+      const s = session()
+      s.publish('run-1', [mismatch({ evidence: [A] })])
+      const id = ledgerEntries(s.root)[0]?.id ?? ''
+      const again = publishedOutcomes(
+        s.publish('run-2', [mismatch({ evidence: [B] })]),
+      )
+      expect(again.map((o) => o.standing)).toEqual(['suppressed'])
+      decide(s, id, 'rejected')
+      return { s, id }
+    }
+
+    it('records the evidence of the run that published it, and nothing else about the entry changes', () => {
+      const s = session()
+      s.publish('run-1', [mismatch({ evidence: [A] })])
+      const [before] = ledgerEntries(s.root)
+      s.publish('run-2', [mismatch({ evidence: [B] })])
+      const [after] = ledgerEntries(s.root)
+      expect(after?.evidence).toEqual([B])
+      expect({ ...after, evidence: undefined }).toEqual({
+        ...before,
+        evidence: undefined,
+      })
+    })
+
+    it('reopens when the evidence the decision was made from changes', () => {
+      const { s } = decidedOnB()
+      const outcomes = publishedOutcomes(
+        s.publish(
+          'run-3',
+          [mismatch({ evidence: [B] })],
+          undefined,
+          inventory({ [A_KEY]: present('A1'), [B_KEY]: present('B2') }),
+        ),
+      )
+      expect(outcomes).toMatchObject([
+        {
+          standing: 'reopened',
+          reason: 'evidence changed',
+          priorStatus: 'rejected',
+        },
+      ])
+    })
+
+    it('does not reopen when only the evidence it was replaced by changes', () => {
+      const { s } = decidedOnB()
+      const outcomes = publishedOutcomes(
+        s.publish(
+          'run-3',
+          [mismatch({ evidence: [B] })],
+          undefined,
+          inventory({ [A_KEY]: present('A2'), [B_KEY]: present('B1') }),
+        ),
+      )
+      expect(outcomes.map((o) => o.standing)).toEqual(['suppressed'])
+    })
+
+    it('leaves a decided entry as it is when a run publishes it again', () => {
+      const s = session()
+      s.publish('run-1', [mismatch({ evidence: [A] })])
+      decide(s, ledgerEntries(s.root)[0]?.id ?? '', 'rejected')
+      const before = fs.readFileSync(path.join(s.root, 'ledger.json'), 'utf8')
+      s.publish('run-2', [mismatch({ evidence: [B] })])
+      expect(ledgerEntries(s.root)[0]?.evidence).toEqual([A])
+      expect(fs.readFileSync(path.join(s.root, 'ledger.json'), 'utf8')).toBe(
+        before,
+      )
+    })
+  })
+
+  describe('recordsEvidenceOf', () => {
+    const ref = (
+      path: string,
+      fingerprint = 'E1',
+      project = EVIDENCE_PROJECT,
+    ) => ({
+      project,
+      path,
+      fingerprint,
+    })
+    const entryWith = (evidence: ReturnType<typeof ref>[]) => {
+      const s = session()
+      s.publish('run-1', [mismatch({ evidence })])
+      const [entry] = ledgerEntries(s.root)
+      if (entry === undefined) throw new Error('no entry')
+      return entry
+    }
+
+    it('is true for the same files and fingerprints, in any order', () => {
+      const entry = entryWith([ref('a.conf'), ref('b.conf', 'E2')])
+      expect(
+        recordsEvidenceOf(
+          entry,
+          mismatch({ evidence: [ref('b.conf', 'E2'), ref('a.conf')] }),
+        ),
+      ).toBe(true)
+    })
+
+    it('tells files apart by path when the fingerprint and the project are the same', () => {
+      const entry = entryWith([ref('a.conf')])
+      expect(
+        recordsEvidenceOf(entry, mismatch({ evidence: [ref('b.conf')] })),
+      ).toBe(false)
+    })
+
+    it('tells files apart by fingerprint and by project', () => {
+      const entry = entryWith([ref('a.conf')])
+      expect(
+        recordsEvidenceOf(entry, mismatch({ evidence: [ref('a.conf', 'E9')] })),
+      ).toBe(false)
+      expect(
+        recordsEvidenceOf(
+          entry,
+          mismatch({ evidence: [ref('a.conf', 'E1', 'cccccccccccc')] }),
+        ),
+      ).toBe(false)
+    })
+
+    it('is false when the counts differ, and true for no evidence on both sides', () => {
+      const entry = entryWith([ref('a.conf')])
+      expect(
+        recordsEvidenceOf(
+          entry,
+          mismatch({ evidence: [ref('a.conf'), ref('b.conf')] }),
+        ),
+      ).toBe(false)
+      expect(recordsEvidenceOf(entry, mismatch({ evidence: [] }))).toBe(false)
+      expect(recordsEvidenceOf(entryWith([]), mismatch({ evidence: [] }))).toBe(
+        true,
+      )
+    })
+  })
+
+  it('does not reopen a decided entry of another kind when it has no evidence', () => {
+    const s = session()
+    s.publish('run-1', [candidate()])
+    decide(s, ledgerEntries(s.root)[0]?.id ?? '', 'rejected')
+    const outcomes = publishedOutcomes(s.publish('run-2', [candidate()]))
+    expect(outcomes.map((o) => o.standing)).toEqual(['suppressed'])
+  })
+
+  describe('with two recorded evidence files', () => {
+    const FIRST = {
+      project: EVIDENCE_PROJECT,
+      path: 'Caddyfile',
+      fingerprint: 'E1',
+    }
+    const SECOND = {
+      project: EVIDENCE_PROJECT,
+      path: 'src/second.ts',
+      fingerprint: 'E2',
+    }
+    const FIRST_KEY = `${EVIDENCE_PROJECT}:Caddyfile`
+    const SECOND_KEY = `${EVIDENCE_PROJECT}:src/second.ts`
+
+    function twoRefs(): Session {
+      const s = session()
+      s.publish('run-1', [mismatch({ evidence: [FIRST, SECOND] })])
+      expect(ledgerEntries(s.root)[0]?.evidence).toHaveLength(2)
+      return s
+    }
+
+    it('reopens when only the second one changed', () => {
+      const s = twoRefs()
+      expect(
+        publishedOutcomes(
+          s.publish(
+            'run-2',
+            [mismatch({ evidence: [FIRST, SECOND] })],
+            undefined,
+            inventory({
+              [FIRST_KEY]: present('E1'),
+              [SECOND_KEY]: present('E2-changed'),
+            }),
+          ),
+        ),
+      ).toMatchObject([{ standing: 'reopened', reason: 'evidence changed' }])
+    })
+
+    it('reopens when only the second one is gone', () => {
+      const s = twoRefs()
+      expect(
+        publishedOutcomes(
+          s.publish(
+            'run-2',
+            [mismatch({ evidence: [FIRST, SECOND] })],
+            undefined,
+            inventory({ [FIRST_KEY]: present('E1'), [SECOND_KEY]: GONE }),
+          ),
+        ),
+      ).toMatchObject([{ standing: 'reopened', reason: 'evidence changed' }])
+    })
+
+    it('is suppressed while both are unchanged', () => {
+      const s = twoRefs()
+      expect(
+        publishedOutcomes(
+          s.publish(
+            'run-2',
+            [mismatch({ evidence: [FIRST, SECOND] })],
+            undefined,
+            inventory({
+              [FIRST_KEY]: present('E1'),
+              [SECOND_KEY]: present('E2'),
+            }),
+          ),
+        ),
+      ).toMatchObject([{ standing: 'suppressed' }])
+    })
+  })
+
+  it('reopens as "sources changed" when the learning changed and an evidence file is gone', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const changed = mismatch({
+      sources: [
+        {
+          role: `source@${LEARNING_PROJECT}`,
+          path: LEARNING_PATH,
+          fingerprint: 'L2',
+        },
+      ],
+    })
+    expect(
+      publishedOutcomes(
+        s.publish(
+          'run-2',
+          [changed],
+          undefined,
+          inventory({ [EVIDENCE_KEY]: GONE }),
+        ),
+      ),
+    ).toMatchObject([{ standing: 'reopened', reason: 'sources changed' }])
+  })
+
+  it('is unresolved when the learning itself is missing, whatever happened to the evidence', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const missing = mismatch({
+      sources: [
+        {
+          role: `source@${LEARNING_PROJECT}`,
+          path: LEARNING_PATH,
+          fingerprint: undefined,
+        },
+      ],
+    })
+    expect(
+      publishedOutcomes(
+        s.publish(
+          'run-2',
+          [missing],
+          undefined,
+          inventory({ [EVIDENCE_KEY]: GONE }),
+        ),
+      ),
+    ).toMatchObject([{ standing: 'unresolved', missing: [LEARNING_PATH] }])
+  })
+
+  it('suppresses an unchanged learning with unchanged evidence, whatever the prior status', () => {
+    const s = session()
+    const same = inventory({ [EVIDENCE_KEY]: present('E1') })
+    s.publish('run-1', [mismatch()])
+    const id = ledgerEntries(s.root)[0]?.id ?? ''
+    decide(s, id, 'rejected')
+    expect(
+      publishedOutcomes(s.publish('run-2', [mismatch()], undefined, same)),
+    ).toMatchObject([{ standing: 'suppressed', priorStatus: 'rejected' }])
+    decide(s, id, 'promoted', { destination: LEARNING_PATH })
+    expect(
+      publishedOutcomes(s.publish('run-3', [mismatch()], undefined, same)),
+    ).toMatchObject([{ standing: 'suppressed', priorStatus: 'promoted' }])
+  })
+
+  it('suppresses a proposal that cites another evidence set when the recorded files are unchanged', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const elsewhere = mismatch({
+      evidence: [
+        {
+          project: EVIDENCE_PROJECT,
+          path: 'Caddyfile.other',
+          fingerprint: 'Z',
+        },
+      ],
+    })
+    expect(
+      publishedOutcomes(
+        s.publish(
+          'run-2',
+          [elsewhere],
+          undefined,
+          inventory({
+            [EVIDENCE_KEY]: present('E1'),
+            [`${EVIDENCE_PROJECT}:Caddyfile.other`]: present('Z'),
+          }),
+        ),
+      ),
+    ).toMatchObject([{ standing: 'suppressed' }])
+  })
+
+  it('does not reopen for evidence in a project the run did not read', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    expect(
+      publishedOutcomes(
+        s.publish('run-2', [mismatch()], undefined, inventory({})),
+      ),
+    ).toMatchObject([{ standing: 'suppressed' }])
+  })
+
+  it('judges evidence only when the caller says how the files stand now', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    expect(publishedOutcomes(s.publish('run-2', [mismatch()]))).toMatchObject([
+      { standing: 'suppressed' },
+    ])
+  })
+
+  it('keeps the refresh pointer when a promoted entry reopens for the learning or the evidence', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const id = ledgerEntries(s.root)[0]?.id ?? ''
+    decide(s, id, 'promoted', { destination: LEARNING_PATH })
+
+    expect(
+      publishedOutcomes(
+        s.publish(
+          'run-2',
+          [mismatch()],
+          undefined,
+          inventory({ [EVIDENCE_KEY]: present('E2') }),
+        ),
+      ),
+    ).toMatchObject([
+      {
+        standing: 'reopened',
+        reason: 'evidence changed',
+        priorStatus: 'promoted',
+        refreshPointer: LEARNING_PATH,
+      },
+    ])
+
+    decide(s, id, 'promoted', { destination: LEARNING_PATH })
+    const changed = mismatch({
+      sources: [
+        {
+          role: `source@${LEARNING_PROJECT}`,
+          path: LEARNING_PATH,
+          fingerprint: 'L2',
+        },
+      ],
+    })
+    expect(publishedOutcomes(s.publish('run-3', [changed]))).toMatchObject([
+      {
+        standing: 'reopened',
+        reason: 'sources changed',
+        refreshPointer: LEARNING_PATH,
+      },
+    ])
+  })
+
+  it('keeps two claims in one learning, and two reasons on one claim, as separate entries', () => {
+    const s = session()
+    const outcomes = publishedOutcomes(
+      s.publish('run-1', [
+        mismatch(),
+        mismatch({ claim: 'claim-2' }),
+        mismatch({ mismatchReason: 'unscoped' }),
+      ]),
+    )
+    expect(outcomes.map((o) => o.standing)).toEqual(['new', 'new', 'new'])
+    expect(new Set(ledgerEntries(s.root).map((e) => e.id)).size).toBe(3)
+  })
+
+  it('treats an edited claim as a new candidate and leaves the old entry alone', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    expect(
+      publishedOutcomes(
+        s.publish('run-2', [mismatch({ claim: 'claim-edited' })]),
+      ),
+    ).toMatchObject([{ standing: 'new' }])
+    expect(ledgerEntries(s.root)).toHaveLength(2)
+  })
+})
+
+describe('the ledger fields of a code-mismatch entry', () => {
+  it('keeps the mismatch reason and the evidence apart from the decision reason', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const id = ledgerEntries(s.root)[0]?.id ?? ''
+    expect(ledgerEntries(s.root)[0]).toMatchObject({
+      mismatchReason: 'stale',
+      evidence: [
+        { project: EVIDENCE_PROJECT, path: 'Caddyfile', fingerprint: 'E1' },
+      ],
+    })
+    expect(ledgerEntries(s.root)[0]?.reason).toBeUndefined()
+
+    decide(s, id, 'rejected')
+    expect(ledgerEntries(s.root)[0]).toMatchObject({
+      status: 'rejected',
+      reason: 'decided rejected',
+      mismatchReason: 'stale',
+      evidence: [
+        { project: EVIDENCE_PROJECT, path: 'Caddyfile', fingerprint: 'E1' },
+      ],
+    })
+  })
+
+  it('moves the old reason and evidence into history on a reopen and writes the new ones', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    s.publish(
+      'run-2',
+      [
+        mismatch({
+          evidence: [
+            { project: EVIDENCE_PROJECT, path: 'Caddyfile', fingerprint: 'E2' },
+          ],
+        }),
+      ],
+      undefined,
+      inventory({ [EVIDENCE_KEY]: present('E2') }),
+    )
+    const [entry] = ledgerEntries(s.root)
+    expect(entry).toMatchObject({
+      reopened: 'target changed',
+      reopenedFor: 'evidence changed',
+      mismatchReason: 'stale',
+      evidence: [{ fingerprint: 'E2' }],
+    })
+    expect(entry?.history[0]).toMatchObject({
+      mismatchReason: 'stale',
+      evidence: [{ fingerprint: 'E1' }],
+    })
+  })
+
+  it('does not write the fields for any other kind', () => {
+    const s = session()
+    s.publish('run-1', [candidate()])
+    const text = readFileText(path.join(s.root, 'ledger.json'))
+    expect(text).not.toMatch(/mismatchReason|"evidence"/)
+  })
+
+  it('reads a ledger written before the fields existed and classifies it as it did', () => {
+    const s = session()
+    s.publish('run-1', [candidate()])
+    const before = readLedger(s.root)
+    if (before.status !== 'ok') throw new Error('ledger unreadable')
+    expect(before.ledger.entries[0]?.mismatchReason).toBeUndefined()
+    expect(
+      classifyCandidate(
+        before.ledger,
+        candidate(),
+        inventory({ [EVIDENCE_KEY]: GONE }),
+      ),
+    ).toMatchObject({ standing: 'suppressed' })
+  })
+
+  it('refuses a ledger whose mismatch fields are malformed', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const file = path.join(s.root, 'ledger.json')
+    const parsed = JSON.parse(readFileText(file)) as {
+      entries: Array<Record<string, unknown>>
+    }
+    for (const entry of parsed.entries) entry.evidence = [{ path: 7 }]
+    fs.writeFileSync(file, JSON.stringify(parsed))
+    expect(readLedger(s.root)).toEqual({
+      status: 'unreadable',
+      reason: 'invalid',
+    })
+  })
+
+  it('refuses to publish a candidate whose mismatch fields are malformed', () => {
+    const s = session()
+    const result = s.publish('run-1', [
+      mismatch({
+        evidence: [{ project: 'nope', path: 'a', fingerprint: 'x' }],
+      }),
+    ])
+    expect(result).toEqual({ status: 'failed', reason: 'invalid-candidate' })
+  })
+})
 
 // ── decide and clear ────────────────────────────────────────────────────────
 

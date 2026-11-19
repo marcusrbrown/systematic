@@ -341,7 +341,7 @@ function exerciseHelper(scriptPath: string, label: string): void {
         ruleIdFor(scenario.target, 'docs/solutions/lock-now.md'),
       ],
       projects: [scenario.source, scenario.target],
-      files: ['docs/solutions/lock-reclaim.md'],
+      files: ['docs/solutions/lock-reclaim.md', 'docs/solutions/lock-now.md'],
       searches: ['reclaim lock'],
       complete: true,
       candidates: [contradiction(scenario, ruleId)],
@@ -409,8 +409,102 @@ function exerciseHelper(scriptPath: string, label: string): void {
     `${label}: an allowed project changed`,
   ).toEqual(before)
 
+  exerciseCodeMismatch(scriptPath, label)
   exerciseImport(scriptPath, label)
   exerciseReportOps(scriptPath, label)
+}
+
+function codeMismatch(scenario: Scenario): Record<string, unknown> {
+  return {
+    kind: 'code-mismatch',
+    reason: 'stale',
+    ruleId: ruleIdFor(scenario.target, 'docs/solutions/lock-now.md'),
+    target: scenario.target,
+    title: 'The reclaim-at-once learning no longer matches the source project',
+    summary: 'The learning says reclaim at once; the source verifies first.',
+    nextStep: 'refresh-learning',
+    overlapCheck: { queries: ['reclaim'], result: 'none-found' },
+    sources: [
+      {
+        project: scenario.target,
+        path: 'docs/solutions/lock-now.md',
+        fingerprint: sha256(NOW_LEARNING),
+        excerpt: 'Always reclaim a stale lock immediately after the timeout',
+      },
+    ],
+    targetEvidence: [],
+    counterevidence: [
+      {
+        project: scenario.source,
+        path: 'docs/solutions/lock-reclaim.md',
+        start: 9,
+        end: 11,
+        fingerprint: sha256(LOCK_LEARNING),
+        excerpt:
+          'Never reclaim a lock without verifying the holder identity first.',
+      },
+    ],
+  }
+}
+
+/** A `code-mismatch` run through the real command line: digest, summary and ledger entry. */
+function exerciseCodeMismatch(scriptPath: string, label: string): void {
+  const scenario = buildScenario()
+  const begun = runHelper(scriptPath, ['begin'], scenario, {
+    host: 'pi',
+    version: '0.1.0',
+    mode: 'interactive',
+    consent: true,
+  })
+  expect(begun.exitCode, `${label}: begin ${begun.stdout}`).toBe(0)
+  const runId = begun.json?.runId as string
+  const lock = begun.json?.lock as Json
+  const batch = path.join(begun.json?.workDir as string, 'batch-1.json')
+  fs.writeFileSync(
+    batch,
+    JSON.stringify({
+      version: 1,
+      runId,
+      family: 'claims',
+      ruleIds: [
+        ruleIdFor(scenario.source, 'docs/solutions/lock-reclaim.md'),
+        ruleIdFor(scenario.target, 'docs/solutions/lock-now.md'),
+      ],
+      projects: [scenario.source, scenario.target],
+      files: ['docs/solutions/lock-reclaim.md', 'docs/solutions/lock-now.md'],
+      searches: ['reclaim lock'],
+      complete: true,
+      candidates: [codeMismatch(scenario)],
+    }),
+  )
+  const validated = runHelper(scriptPath, ['validate'], scenario, {
+    runId,
+    lock,
+    batches: [batch],
+  })
+  expect(validated.exitCode, `${label}: validate ${validated.stdout}`).toBe(0)
+  expect((validated.json?.accepted as unknown[] | undefined)?.length).toBe(1)
+
+  const published = runHelper(scriptPath, ['publish'], scenario, {
+    runId,
+    lock,
+  })
+  expect(published.exitCode, `${label}: publish ${published.stdout}`).toBe(0)
+  const digest = fs.readFileSync(published.json?.digestPath as string, 'utf8')
+  expect(digest).toContain('### Candidate 1: code-mismatch (new)')
+  expect(digest).toContain('- Reason: stale')
+  expect(digest).toContain('HEAD')
+  const summary = String(published.json?.summary)
+  expect(summary).toContain(
+    '/ce:compound-refresh path:docs/solutions/lock-now.md',
+  )
+  expect(summary).toContain('Evidence to recheck before you confirm:')
+  expect(summary).toContain('docs/solutions/lock-reclaim.md:9-11')
+
+  const shown = runHelper(scriptPath, ['ledger', 'show'], scenario)
+  const entry = ((shown.json?.entries ?? []) as Array<Json>)[0]
+  expect(entry?.kind).toBe('code-mismatch')
+  expect(entry?.mismatchReason).toBe('stale')
 }
 
 const IMPORT_FIXTURES = path.join(REPO_ROOT, 'tests/fixtures/connect-import')

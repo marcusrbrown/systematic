@@ -71,6 +71,7 @@ const MAX_PATH_LENGTH = 4096
 const MAX_REASON_LENGTH = 500
 const MAX_SOURCES = 32
 const MAX_TARGET_EVIDENCE = 64
+const MAX_EVIDENCE = 64
 const MAX_HISTORY = 10
 const MAX_POSSIBLE_MATCHES = 5
 const MAX_RUN_FILES = 16
@@ -686,6 +687,27 @@ export interface TargetEvidenceRef {
   readonly fingerprint: string
 }
 
+/**
+ * A file a `code-mismatch` candidate cites as evidence, in any allowed
+ * project. The project is its key, so one path in two projects stays two refs.
+ */
+export interface EvidenceRef {
+  readonly project: string
+  readonly path: string
+  readonly fingerprint: string
+}
+
+/** How an evidence file stands in the run's inventory. */
+export type EvidenceNow =
+  | { readonly status: 'present'; readonly fingerprint: string }
+  /** The project was read in full and the file is not in it. */
+  | { readonly status: 'gone' }
+  /** The project was not read, or not in full: nothing can be said about the file. */
+  | { readonly status: 'unread' }
+
+/** Asks the run's inventory about one evidence file: the project key and the path. */
+export type EvidenceLookup = (project: string, path: string) => EvidenceNow
+
 export interface CandidateRecord {
   readonly kind: string
   /** The target project's main-root identity. */
@@ -694,6 +716,12 @@ export interface CandidateRecord {
   readonly ruleId: string
   readonly sources: readonly SourceRef[]
   readonly targetEvidence: readonly TargetEvidenceRef[]
+  /** Why a `code-mismatch` learning is a candidate. Part of its identity. */
+  readonly mismatchReason?: string
+  /** A fingerprint of the claim: the learning's verbatim source excerpt. Part of the identity of a `code-mismatch` candidate. */
+  readonly claim?: string
+  /** The evidence a `code-mismatch` candidate cites. Never part of the identity. */
+  readonly evidence?: readonly EvidenceRef[]
 }
 
 function normalizePath(value: string): string {
@@ -714,6 +742,14 @@ function validFingerprint(value: unknown): value is string {
   return plainText(value, 128)
 }
 
+function validEvidenceRef(value: EvidenceRef): boolean {
+  return (
+    isProjectKey(value.project) &&
+    validPath(value.path) &&
+    validFingerprint(value.fingerprint)
+  )
+}
+
 function validCandidate(value: CandidateRecord): boolean {
   if (!plainText(value.kind, MAX_STRING_LENGTH)) return false
   if (!plainText(value.target, MAX_PATH_LENGTH)) return false
@@ -732,9 +768,22 @@ function validCandidate(value: CandidateRecord): boolean {
     }
   }
   if (value.targetEvidence.length > MAX_TARGET_EVIDENCE) return false
-  return value.targetEvidence.every(
-    (ref) => validPath(ref.path) && validFingerprint(ref.fingerprint),
-  )
+  if (
+    !value.targetEvidence.every(
+      (ref) => validPath(ref.path) && validFingerprint(ref.fingerprint),
+    )
+  ) {
+    return false
+  }
+  return validMismatchFields(value)
+}
+
+/** The optional `code-mismatch` fields of a candidate. */
+function validMismatchFields(value: CandidateRecord): boolean {
+  if (!isOptionalText(value.mismatchReason, MAX_STRING_LENGTH)) return false
+  if (!isOptionalText(value.claim, MAX_STRING_LENGTH)) return false
+  const evidence = value.evidence ?? []
+  return evidence.length <= MAX_EVIDENCE && evidence.every(validEvidenceRef)
 }
 
 /** Sources with normalized paths, duplicates removed, in a fixed order. */
@@ -770,31 +819,88 @@ function normalizedTargetEvidence(
   return [...byPath.values()].sort((a, b) => codepointOrder(a.path, b.path))
 }
 
+/** Evidence in a fixed order, duplicates removed. */
+function normalizedEvidence(candidate: CandidateRecord): EvidenceRef[] {
+  const seen = new Map<string, EvidenceRef>()
+  for (const ref of candidate.evidence ?? []) {
+    const normalized = normalizePath(ref.path)
+    const key = `${ref.project}\0${normalized}`
+    if (!seen.has(key)) {
+      seen.set(key, {
+        project: ref.project,
+        path: normalized,
+        fingerprint: ref.fingerprint,
+      })
+    }
+  }
+  return [...seen.values()].sort(
+    (a, b) =>
+      codepointOrder(a.project, b.project) || codepointOrder(a.path, b.path),
+  )
+}
+
+/** Whether a ledger entry records exactly the evidence files, with fingerprints, that a candidate cites. */
+export function recordsEvidenceOf(
+  entry: LedgerEntry,
+  candidate: CandidateRecord,
+): boolean {
+  const recorded = entry.evidence ?? []
+  const cited = normalizedEvidence(candidate)
+  return (
+    recorded.length === cited.length &&
+    recorded.every(
+      (ref, index) =>
+        ref.project === cited[index]?.project &&
+        ref.path === cited[index]?.path &&
+        ref.fingerprint === cited[index]?.fingerprint,
+    )
+  )
+}
+
 /**
  * The identity of a candidate: kind, target, rule id and the normalized
  * (role, path) of each source. Fingerprints and target evidence are not part
  * of it, so a changed file reopens the same entry instead of making a new one.
+ * A `code-mismatch` candidate adds its reason and claim, so two claims in one
+ * learning, or two reasons on one claim, are separate decisions; its evidence
+ * never enters. A candidate with neither keeps the id it always had.
  */
 export function candidateIdentity(candidate: CandidateRecord): string {
   const sources = normalizedSources(candidate).map((s) => [s.role, s.path])
-  return createHash('sha256')
-    .update(
-      JSON.stringify([
-        'connect-candidate-v1',
-        candidate.kind,
-        candidate.target,
-        candidate.ruleId,
-        sources,
-      ]),
-    )
-    .digest('hex')
+  const parts: unknown[] = [
+    'connect-candidate-v1',
+    candidate.kind,
+    candidate.target,
+    candidate.ruleId,
+    sources,
+  ]
+  if (candidate.mismatchReason !== undefined || candidate.claim !== undefined) {
+    parts.push(candidate.mismatchReason ?? null, candidate.claim ?? null)
+  }
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex')
 }
 
 // ── Ledger ──────────────────────────────────────────────────────────────────
 
 export type LedgerStatus = 'candidate' | 'promoted' | 'rejected'
 
-export type ReopenReason = 'sources changed' | 'target changed'
+export type ReopenReason =
+  | 'sources changed'
+  | 'target changed'
+  | 'evidence changed'
+
+/**
+ * What a ledger file keeps in `reopened`. The helper shipped before
+ * `code-mismatch` reads only these two values and rejects the whole ledger on
+ * any other, so a downgrade would lose every decision. An evidence reopen is
+ * written as `target changed` (a recorded evidence file is the code side of the
+ * claim, as a target evidence file is for a lesson) and its own reason goes in
+ * `reopenedFor`, which that reader ignores.
+ */
+export type StoredReopenReason = Exclude<ReopenReason, 'evidence changed'>
+
+/** The reason an evidence reopen carries beside its stored `reopened`. */
+export type ReopenedFor = Extract<ReopenReason, 'evidence changed'>
 
 export interface LedgerSource {
   readonly role: string
@@ -808,8 +914,13 @@ export interface LedgerHistoryItem {
   readonly reason?: string
   readonly destination?: string
   readonly reopened?: ReopenReason
+  /** Set when `reopened` stands in for `evidence changed`. */
+  readonly reopenedFor?: ReopenedFor
   readonly sources: readonly LedgerSource[]
   readonly targetEvidence: readonly TargetEvidenceRef[]
+  /** Why the `code-mismatch` candidate was proposed. Not the decision `reason`. */
+  readonly mismatchReason?: string
+  readonly evidence?: readonly EvidenceRef[]
   readonly recordedAt: string
 }
 
@@ -820,10 +931,16 @@ export interface LedgerEntry {
   readonly ruleId: string
   readonly sources: readonly LedgerSource[]
   readonly targetEvidence: readonly TargetEvidenceRef[]
+  /** Why the `code-mismatch` candidate was proposed. Not the decision `reason`. */
+  readonly mismatchReason?: string
+  /** The files a `code-mismatch` candidate cited, with the fingerprints it saw. A change in any reopens the entry. */
+  readonly evidence?: readonly EvidenceRef[]
   readonly status: LedgerStatus
   readonly reason?: string
   readonly destination?: string
   readonly reopened?: ReopenReason
+  /** Set when `reopened` stands in for `evidence changed`. */
+  readonly reopenedFor?: ReopenedFor
   readonly history: readonly LedgerHistoryItem[]
   readonly recordedAt: string
 }
@@ -878,7 +995,15 @@ function isLedgerStatus(value: unknown): value is LedgerStatus {
 }
 
 function isReopenReason(value: unknown): value is ReopenReason {
-  return value === 'sources changed' || value === 'target changed'
+  return (
+    value === 'sources changed' ||
+    value === 'target changed' ||
+    value === 'evidence changed'
+  )
+}
+
+function isOptionalReopenedFor(value: unknown): boolean {
+  return value === undefined || value === 'evidence changed'
 }
 
 function isOptionalText(value: unknown, maxLength: number): boolean {
@@ -902,13 +1027,34 @@ function isTargetEvidenceRef(value: unknown): value is TargetEvidenceRef {
   )
 }
 
+function isEvidenceRef(value: unknown): value is EvidenceRef {
+  return (
+    isRecord(value) &&
+    isProjectKey(value.project) &&
+    plainText(value.path, MAX_PATH_LENGTH) &&
+    validFingerprint(value.fingerprint)
+  )
+}
+
+function isOptionalEvidence(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.length <= MAX_EVIDENCE &&
+      value.every(isEvidenceRef))
+  )
+}
+
 function isHistoryItem(value: unknown): value is LedgerHistoryItem {
   return (
     isRecord(value) &&
     isLedgerStatus(value.status) &&
+    isOptionalText(value.mismatchReason, MAX_STRING_LENGTH) &&
+    isOptionalEvidence(value.evidence) &&
     isOptionalText(value.reason, MAX_REASON_LENGTH) &&
     isOptionalText(value.destination, MAX_PATH_LENGTH) &&
     (value.reopened === undefined || isReopenReason(value.reopened)) &&
+    isOptionalReopenedFor(value.reopenedFor) &&
     Array.isArray(value.sources) &&
     value.sources.every(isLedgerSource) &&
     Array.isArray(value.targetEvidence) &&
@@ -928,10 +1074,13 @@ function isLedgerEntry(value: unknown): value is LedgerEntry {
     value.sources.every(isLedgerSource) &&
     Array.isArray(value.targetEvidence) &&
     value.targetEvidence.every(isTargetEvidenceRef) &&
+    isOptionalText(value.mismatchReason, MAX_STRING_LENGTH) &&
+    isOptionalEvidence(value.evidence) &&
     isLedgerStatus(value.status) &&
     isOptionalText(value.reason, MAX_REASON_LENGTH) &&
     isOptionalText(value.destination, MAX_PATH_LENGTH) &&
     (value.reopened === undefined || isReopenReason(value.reopened)) &&
+    isOptionalReopenedFor(value.reopenedFor) &&
     Array.isArray(value.history) &&
     value.history.every(isHistoryItem) &&
     plainText(value.recordedAt, MAX_STRING_LENGTH)
@@ -1105,6 +1254,40 @@ function sameTargetEvidence(
   })
 }
 
+/**
+ * Whether a file the prior entry recorded as evidence has changed or gone,
+ * judged by the run's inventory and not by what the new proposal cites. A file
+ * in a project the run did not read says nothing and reopens nothing.
+ */
+function evidenceChanged(
+  prior: LedgerEntry,
+  lookup: EvidenceLookup | undefined,
+): boolean {
+  if (lookup === undefined) return false
+  return (prior.evidence ?? []).some((ref) => {
+    const now = lookup(ref.project, ref.path)
+    if (now.status === 'gone') return true
+    return now.status === 'present' && now.fingerprint !== ref.fingerprint
+  })
+}
+
+/**
+ * A `code-mismatch` entry decided with no evidence (an investigate) learned
+ * nothing a later proposal that brings verified evidence can be checked
+ * against, and evidence is not part of the identity. Without this the entry
+ * would suppress that proposal forever.
+ */
+function evidenceArrived(
+  prior: LedgerEntry,
+  candidate: CandidateRecord,
+): boolean {
+  return (
+    candidate.kind === 'code-mismatch' &&
+    (prior.evidence ?? []).length === 0 &&
+    normalizedEvidence(candidate).length > 0
+  )
+}
+
 function possibleRenames(
   ledger: Ledger,
   candidate: CandidateRecord,
@@ -1143,11 +1326,15 @@ function possibleRenames(
  *   prior status;
  * - a changed source fingerprint is `reopened` as "sources changed" (with a
  *   refresh pointer when the prior entry was promoted);
+ * - otherwise a recorded evidence file that changed or is gone in the run's
+ *   inventory, or evidence a `code-mismatch` entry decided with none now
+ *   gets, is `reopened` as "evidence changed" (same pointer);
  * - otherwise a changed target fingerprint is `reopened` as "target changed".
  */
 export function classifyCandidate(
   ledger: Ledger,
   candidate: CandidateRecord,
+  evidence?: EvidenceLookup,
 ): CandidateStanding {
   const id = candidateIdentity(candidate)
   const sources = normalizedSources(candidate)
@@ -1165,28 +1352,36 @@ export function classifyCandidate(
     }
   }
   const sourcesSame = sameSources(sources, prior)
-  if (
-    sourcesSame &&
-    sameTargetEvidence(normalizedTargetEvidence(candidate), prior)
-  ) {
-    return { standing: 'suppressed', id, priorStatus: prior.status }
-  }
-  if (sourcesSame) {
+  const pointer =
+    prior.status === 'promoted' && prior.destination !== undefined
+      ? { refreshPointer: prior.destination }
+      : {}
+  if (!sourcesSame) {
     return {
       standing: 'reopened',
       id,
-      reason: 'target changed',
+      reason: 'sources changed',
       priorStatus: prior.status,
+      ...pointer,
     }
+  }
+  if (evidenceChanged(prior, evidence) || evidenceArrived(prior, candidate)) {
+    return {
+      standing: 'reopened',
+      id,
+      reason: 'evidence changed',
+      priorStatus: prior.status,
+      ...pointer,
+    }
+  }
+  if (sameTargetEvidence(normalizedTargetEvidence(candidate), prior)) {
+    return { standing: 'suppressed', id, priorStatus: prior.status }
   }
   return {
     standing: 'reopened',
     id,
-    reason: 'sources changed',
+    reason: 'target changed',
     priorStatus: prior.status,
-    ...(prior.status === 'promoted' && prior.destination !== undefined
-      ? { refreshPointer: prior.destination }
-      : {}),
   }
 }
 
@@ -1204,14 +1399,54 @@ function ledgerSources(candidate: CandidateRecord): LedgerSource[] {
   )
 }
 
+/** The `code-mismatch` fields of a candidate, written only when it has them. */
+function mismatchFields(candidate: CandidateRecord): {
+  mismatchReason?: string
+  evidence?: EvidenceRef[]
+} {
+  const evidence = normalizedEvidence(candidate)
+  return {
+    ...(candidate.mismatchReason === undefined
+      ? {}
+      : { mismatchReason: candidate.mismatchReason }),
+    ...(evidence.length === 0 ? {} : { evidence }),
+  }
+}
+
+/** The entry with exactly this evidence; an empty list leaves the field out. */
+function withEvidence(
+  entry: LedgerEntry,
+  evidence: readonly EvidenceRef[],
+): LedgerEntry {
+  const { evidence: _recorded, ...rest } = entry
+  return evidence.length === 0 ? rest : { ...rest, evidence: [...evidence] }
+}
+
+/** The `reopened` a ledger file keeps for a reason, and the reason itself when the old reader cannot hold it. */
+function reopenedFields(reason: ReopenReason): {
+  reopened: StoredReopenReason
+  reopenedFor?: ReopenedFor
+} {
+  return reason === 'evidence changed'
+    ? { reopened: 'target changed', reopenedFor: reason }
+    : { reopened: reason }
+}
+
 function snapshot(entry: LedgerEntry): LedgerHistoryItem {
   return {
     status: entry.status,
+    ...(entry.mismatchReason === undefined
+      ? {}
+      : { mismatchReason: entry.mismatchReason }),
+    ...(entry.evidence === undefined ? {} : { evidence: entry.evidence }),
     ...(entry.reason === undefined ? {} : { reason: entry.reason }),
     ...(entry.destination === undefined
       ? {}
       : { destination: entry.destination }),
     ...(entry.reopened === undefined ? {} : { reopened: entry.reopened }),
+    ...(entry.reopenedFor === undefined
+      ? {}
+      : { reopenedFor: entry.reopenedFor }),
     sources: entry.sources,
     targetEvidence: entry.targetEvidence,
     recordedAt: entry.recordedAt,
@@ -1227,6 +1462,8 @@ function applyCandidates(
   ledger: Ledger,
   candidates: readonly CandidateRecord[],
   recordedAt: string,
+  evidence: EvidenceLookup | undefined,
+  evidenceFor?: PublishInput['evidenceFor'],
 ): { ledger: Ledger; outcomes: CandidateStanding[] } {
   let entries = [...ledger.entries]
   const outcomes: CandidateStanding[] = []
@@ -1234,6 +1471,7 @@ function applyCandidates(
     const outcome = classifyCandidate(
       { version: LEDGER_VERSION, entries },
       candidate,
+      evidenceFor?.(candidate) ?? evidence,
     )
     outcomes.push(outcome)
     if (outcome.standing === 'new') {
@@ -1244,10 +1482,22 @@ function applyCandidates(
         ruleId: candidate.ruleId,
         sources: ledgerSources(candidate),
         targetEvidence: normalizedTargetEvidence(candidate),
+        ...mismatchFields(candidate),
         status: 'candidate',
         history: [],
         recordedAt,
       })
+    } else if (
+      outcome.standing === 'suppressed' &&
+      outcome.priorStatus === 'candidate'
+    ) {
+      // An open entry a run publishes again is what its digest shows next, so a
+      // decision made from that digest must watch the evidence it cites.
+      entries = entries.map((entry) =>
+        entry.id === outcome.id
+          ? withEvidence(entry, normalizedEvidence(candidate))
+          : entry,
+      )
     } else if (outcome.standing === 'reopened') {
       entries = entries.map((entry) =>
         entry.id === outcome.id
@@ -1258,8 +1508,9 @@ function applyCandidates(
               ruleId: entry.ruleId,
               sources: ledgerSources(candidate),
               targetEvidence: normalizedTargetEvidence(candidate),
+              ...mismatchFields(candidate),
               status: 'candidate',
-              reopened: outcome.reason,
+              ...reopenedFields(outcome.reason),
               history: [...entry.history, snapshot(entry)].slice(-MAX_HISTORY),
               recordedAt,
             }
@@ -1314,6 +1565,18 @@ export interface PublishInput {
   /** File name to content. Names are single path segments. */
   readonly files: Readonly<Record<string, string>>
   readonly candidates: readonly CandidateRecord[]
+  /**
+   * How the evidence files of a decided `code-mismatch` entry stand in the
+   * run's inventory. Left out, evidence never reopens an entry.
+   */
+  readonly evidence?: EvidenceLookup
+  /**
+   * The same for one candidate, where each candidate was checked against its
+   * own files (an import). Wins over `evidence` for the candidates it names.
+   */
+  readonly evidenceFor?: (
+    candidate: CandidateRecord,
+  ) => EvidenceLookup | undefined
   /** Left out, the ledger's coverage is kept as it is. */
   readonly coverage?: CoverageUpdate
 }
@@ -1466,7 +1729,13 @@ function foldRun(
   input: PublishInput,
   recordedAt: string,
 ): { ledger: Ledger; outcomes: CandidateStanding[] } {
-  const applied = applyCandidates(prior, input.candidates, recordedAt)
+  const applied = applyCandidates(
+    prior,
+    input.candidates,
+    recordedAt,
+    input.evidence,
+    input.evidenceFor,
+  )
   const coverage =
     input.coverage === undefined
       ? prior.coverage
@@ -1681,6 +1950,8 @@ export type ImportPlan =
       readonly runId: string
       readonly files: Readonly<Record<string, string>>
       readonly candidates: readonly CandidateRecord[]
+      /** How each candidate's evidence stands, so the ledger fold classifies it as placement did. */
+      readonly evidenceFor?: PublishInput['evidenceFor']
       /**
        * The files that replace the committed ones when the ledger could not be
        * written after the commit, so the run says what happened to it.
@@ -1760,6 +2031,9 @@ export function insertImportRun(
         runId: decision.runId,
         files: decision.files,
         candidates: decision.candidates,
+        ...(decision.evidenceFor === undefined
+          ? {}
+          : { evidenceFor: decision.evidenceFor }),
       },
       options,
     )
@@ -2137,6 +2411,10 @@ export function decideLedgerEntry(
       ruleId: prior.ruleId,
       sources: prior.sources,
       targetEvidence: prior.targetEvidence,
+      ...(prior.mismatchReason === undefined
+        ? {}
+        : { mismatchReason: prior.mismatchReason }),
+      ...(prior.evidence === undefined ? {} : { evidence: prior.evidence }),
       status: input.status,
       reason: input.reason.trim(),
       ...(input.status === 'promoted' && input.destination !== undefined

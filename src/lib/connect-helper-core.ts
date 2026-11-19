@@ -315,6 +315,8 @@ const MAX_BATCH_RULE_IDS = 500
 const MAX_BATCH_PROJECTS = 64
 const MAX_BATCH_LIST = 50
 const MAX_BATCH_ITEM_LENGTH = 300
+/** A `files` entry may be a project root (up to 4,096 characters), a slash and a path. */
+const MAX_BATCH_FILE_LENGTH = 4096 + 1 + MAX_BATCH_ITEM_LENGTH
 const MAX_BATCH_CANDIDATES = 200
 
 /** One rule family's report: what it covered and what it proposed. */
@@ -389,7 +391,7 @@ export function parseBatch(text: string, runId: string): BatchParse {
   }
   const ruleIds = stringList(value.ruleIds, MAX_BATCH_RULE_IDS, 100)
   const projects = stringList(value.projects, MAX_BATCH_PROJECTS, 4096)
-  const files = stringList(value.files, MAX_BATCH_LIST, MAX_BATCH_ITEM_LENGTH)
+  const files = stringList(value.files, MAX_BATCH_LIST, MAX_BATCH_FILE_LENGTH)
   const searches = stringList(
     value.searches,
     MAX_BATCH_LIST,
@@ -424,6 +426,11 @@ export function parseBatch(text: string, runId: string): BatchParse {
 export interface Coverage {
   /** Indexed rules that no complete batch reported. */
   readonly uncoveredRuleIds: readonly string[]
+  /**
+   * Rules a complete batch named but none listed the learning of among its
+   * files. They are also in `uncoveredRuleIds`; this says why.
+   */
+  readonly learningUnreadRuleIds: readonly string[]
   /** Allowed projects that no batch reported reading. */
   readonly untouchedProjects: readonly string[]
   /** Families that stopped before covering their rules. */
@@ -434,29 +441,95 @@ export interface CoverageInput {
   readonly ruleIds: readonly string[]
   readonly projects: readonly string[]
   readonly batches: readonly Batch[]
+  /**
+   * The learning path of each rule, relative to its project. A batch covers a
+   * rule only when it lists that path among its files, so a rule whose entry
+   * alone was read is not covered. A rule with no path here owes no read.
+   */
+  readonly learningPaths?: ReadonlyMap<string, string>
+  /**
+   * The root of the project each rule belongs to. Two projects can hold a
+   * learning at one relative path, so with a root a batch's read is the path
+   * under that root (`<root>/<path>`), or the bare path when no other project's
+   * learning in the run (every rule in `learningPaths`, named by the batch or
+   * not) has that path. A rule with no root here is matched on the bare path
+   * alone.
+   */
+  readonly learningProjects?: ReadonlyMap<string, string>
+}
+
+/** Whether another project's learning in the run has the relative path `learning`. */
+function sharedWithOtherProject(
+  input: CoverageInput,
+  id: string,
+  learning: string,
+  root: string,
+): boolean {
+  for (const [other, path] of input.learningPaths ?? []) {
+    if (
+      other !== id &&
+      path === learning &&
+      input.learningProjects?.get(other) !== root
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
+/** Whether a complete batch's `files` show that it read the learning of rule `id`. */
+function listsLearning(
+  input: CoverageInput,
+  listed: ReadonlySet<string>,
+  id: string,
+): boolean {
+  const learning = input.learningPaths?.get(id)
+  if (learning === undefined) return true
+  const root = input.learningProjects?.get(id)
+  if (root === undefined) return listed.has(learning)
+  if (listed.has(`${root.replace(/\/+$/, '')}/${learning}`)) return true
+  // A bare path is this project's only when no other project's learning in the
+  // run has that path: the entry could be a read of that one, as evidence.
+  return (
+    listed.has(learning) && !sharedWithOtherProject(input, id, learning, root)
+  )
 }
 
 /**
  * Whether the batches cover what the index issued. A model that is told to
  * report nothing still has to name every rule id in a complete batch and every
- * project it read, so silence cannot pass for a clean scan. A run with no
- * rules has nothing to cover.
+ * project it read, so silence cannot pass for a clean scan. A complete batch
+ * that names a rule without listing its learning among its files has not read
+ * what the code-mismatch test checks, so the rule is held back. The list is
+ * the family's own report: it catches a learning that was skipped, not one
+ * that was listed and never opened. A run with no rules has nothing to cover.
  */
 export function checkCoverage(input: CoverageInput): Coverage {
   const incompleteFamilies = input.batches
     .filter((batch) => !batch.complete)
     .map((batch) => batch.family)
   if (input.ruleIds.length === 0) {
-    return { uncoveredRuleIds: [], untouchedProjects: [], incompleteFamilies }
+    return {
+      uncoveredRuleIds: [],
+      learningUnreadRuleIds: [],
+      untouchedProjects: [],
+      incompleteFamilies,
+    }
   }
+  const complete = input.batches.filter((batch) => batch.complete)
+  const named = new Set(complete.flatMap((batch) => batch.ruleIds))
   const covered = new Set(
-    input.batches
-      .filter((batch) => batch.complete)
-      .flatMap((batch) => batch.ruleIds),
+    complete.flatMap((batch) => {
+      const listed = new Set(batch.files)
+      return batch.ruleIds.filter((id) => listsLearning(input, listed, id))
+    }),
   )
   const touched = new Set(input.batches.flatMap((batch) => batch.projects))
   return {
     uncoveredRuleIds: input.ruleIds.filter((id) => !covered.has(id)),
+    learningUnreadRuleIds: input.ruleIds.filter(
+      (id) => named.has(id) && !covered.has(id),
+    ),
     untouchedProjects: input.projects.filter((root) => !touched.has(root)),
     incompleteFamilies,
   }
@@ -629,7 +702,11 @@ export function renderSweepLine(progress: SweepProgress): string {
 
 // ── Candidates ──────────────────────────────────────────────────────────────
 
-export const CANDIDATE_KINDS = ['contradiction', 'transferable-lesson'] as const
+export const CANDIDATE_KINDS = [
+  'contradiction',
+  'transferable-lesson',
+  'code-mismatch',
+] as const
 export type CandidateKind = (typeof CANDIDATE_KINDS)[number]
 
 export const NEXT_STEPS = [
@@ -638,6 +715,14 @@ export const NEXT_STEPS = [
   'investigate',
 ] as const
 export type NextStep = (typeof NEXT_STEPS)[number]
+
+/** Why a learning's claim no longer matches the code. */
+export const MISMATCH_REASONS = ['stale', 'unscoped'] as const
+export type MismatchReason = (typeof MISMATCH_REASONS)[number]
+
+export function isMismatchReason(value: unknown): value is MismatchReason {
+  return MISMATCH_REASONS.some((reason) => reason === value)
+}
 
 /** Limits on a candidate's fields. */
 export const CANDIDATE_LIMITS = Object.freeze({
@@ -698,6 +783,9 @@ export interface ValidSource {
   readonly excerpt: string
   /** How a learning cites this text: `<project>:<path>@<fingerprint>`. */
   readonly cite: string
+  /** The line span the researcher named. Only `code-mismatch` evidence carries one. */
+  readonly start?: number
+  readonly end?: number
 }
 
 export interface ValidTargetEvidence {
@@ -724,6 +812,8 @@ export interface ValidCandidate {
   readonly title: string
   readonly summary: string
   readonly nextStep: NextStep
+  /** Why a `code-mismatch` learning is a candidate. Absent for every other kind. */
+  readonly reason?: MismatchReason
   readonly overlapCheck: OverlapCheck
   readonly sources: readonly ValidSource[]
   readonly targetEvidence: readonly ValidTargetEvidence[]
@@ -992,6 +1082,18 @@ function validSymbol(value: unknown): string | undefined {
   return /\s/.test(symbol) || CONTROL.test(symbol) ? undefined : symbol
 }
 
+/** Whether the lines `start..end` of the verified file contain its excerpt. */
+function spanHoldsExcerpt(
+  verified: Extract<Verified, { status: 'ok' }>,
+  start: number,
+  end: number,
+): boolean {
+  return lines(verified.content)
+    .slice(start - 1, end)
+    .join('\n')
+    .includes(verified.excerpt)
+}
+
 function verifyTargetEvidence(
   ctx: ValidationContext,
   target: ProjectFacts,
@@ -1023,10 +1125,9 @@ function verifyTargetEvidence(
   if (verdict.verdict === 'unchecked') {
     return drop('citation-unchecked', verdict.reason)
   }
-  const span = lines(verified.content)
-    .slice(start - 1, end as number)
-    .join('\n')
-  if (!span.includes(verified.excerpt)) return drop('excerpt-outside-span')
+  if (!spanHoldsExcerpt(verified, start, end as number)) {
+    return drop('excerpt-outside-span')
+  }
   return {
     path: verified.path,
     start,
@@ -1055,6 +1156,51 @@ function toValidSource(
 }
 
 /**
+ * Evidence for a `code-mismatch` candidate: any tracked file in any allowed
+ * project, held to a span that contains the excerpt. No symbol and no citation
+ * check; the helper checks provenance and the researcher judges meaning.
+ */
+function verifySpanEvidence(
+  ctx: ValidationContext,
+  item: unknown,
+): ValidSource | Halt {
+  if (!isRecord(item)) return drop('malformed-candidate')
+  const verified = verifyFile(ctx, item.project, item)
+  if (verified.status !== 'ok') return verified
+  const { start, end } = item
+  if (!isSpan(start, end)) return drop('malformed-candidate')
+  if (!spanHoldsExcerpt(verified, start, end as number)) {
+    return drop('excerpt-outside-span')
+  }
+  return { ...toValidSource(verified), start, end: end as number }
+}
+
+/**
+ * A `code-mismatch` candidate names one learning in the target and nothing
+ * else of the target's: no target evidence, a reason, and a refresh only when
+ * positive evidence rides along.
+ */
+function mismatchProblem(
+  nextStep: NextStep,
+  reason: unknown,
+  target: string,
+  sourceCount: number,
+  sourceProjects: ReadonlySet<string>,
+  targetEvidenceCount: number,
+  evidenceCount: number,
+): DropReason | undefined {
+  if (!isMismatchReason(reason)) return 'invalid-structure'
+  if (sourceCount !== 1 || !sourceProjects.has(target)) {
+    return 'invalid-structure'
+  }
+  if (targetEvidenceCount > 0) return 'invalid-structure'
+  if (nextStep === 'compound-learning') return 'invalid-structure'
+  return nextStep === 'refresh-learning' && evidenceCount < 1
+    ? 'invalid-structure'
+    : undefined
+}
+
+/**
  * A contradiction pairs the target's learning with another project's. Two
  * learnings of the target alone are that project's own business, not a
  * cross-project connection.
@@ -1079,7 +1225,12 @@ function shapeProblem(
   target: string,
   sources: readonly unknown[],
   targetEvidenceCount: number,
+  evidenceCount: number,
+  reason: unknown,
 ): DropReason | undefined {
+  if (kind !== 'code-mismatch' && reason !== undefined) {
+    return 'invalid-structure'
+  }
   if (sources.length < 1) return 'invalid-structure'
   const seen = new Set<string>()
   const sourceProjects = new Set<string>()
@@ -1096,6 +1247,20 @@ function shapeProblem(
       target,
       sources.length,
       sourceProjects,
+    )
+  }
+  // Before the transferable-lesson tail: that tail forbids a target-owned
+  // source and forbids refresh-learning, which would validate this kind
+  // backwards.
+  if (kind === 'code-mismatch') {
+    return mismatchProblem(
+      nextStep,
+      reason,
+      target,
+      sources.length,
+      sourceProjects,
+      targetEvidenceCount,
+      evidenceCount,
     )
   }
   if (sourceProjects.has(target) || targetEvidenceCount < 1) {
@@ -1206,6 +1371,8 @@ export function checkCandidate(
     header.target.root,
     sources,
     evidence.length,
+    counter.length,
+    raw.reason,
   )
   if (shape !== undefined) return drop(shape)
 
@@ -1223,7 +1390,9 @@ export function checkCandidate(
   )
   if (isHalt(validEvidence)) return validEvidence
   const validCounter = verifyEach(counter, (item) =>
-    verifySource(ctx, item, false),
+    header.kind === 'code-mismatch'
+      ? verifySpanEvidence(ctx, item)
+      : verifySource(ctx, item, false),
   )
   if (isHalt(validCounter)) return validCounter
 
@@ -1237,11 +1406,47 @@ export function checkCandidate(
       title: header.title,
       summary: header.summary,
       nextStep: header.nextStep,
+      ...(header.kind === 'code-mismatch' && isMismatchReason(raw.reason)
+        ? { reason: raw.reason }
+        : {}),
       overlapCheck: header.overlapCheck,
       sources: validSources,
       targetEvidence: validEvidence,
       counterevidence: validCounter,
     },
+  }
+}
+
+/** A fingerprint of a claim: the learning's verbatim source excerpt. */
+export function claimFingerprint(excerpt: string): string {
+  return createHash('sha256').update(excerpt).digest('hex')
+}
+
+/**
+ * What identifies a `code-mismatch` candidate beyond the shared fields: its
+ * reason, the claim it quotes and the evidence it cites. The evidence is kept
+ * with its project key so the ledger can recheck each file later; it is not
+ * part of the id.
+ */
+function mismatchRecord(
+  candidate: ValidCandidate,
+): Pick<CandidateRecord, 'mismatchReason' | 'claim' | 'evidence'> | undefined {
+  const [claim] = candidate.sources
+  if (
+    candidate.kind !== 'code-mismatch' ||
+    candidate.reason === undefined ||
+    claim === undefined
+  ) {
+    return undefined
+  }
+  return {
+    mismatchReason: candidate.reason,
+    claim: claimFingerprint(claim.excerpt),
+    evidence: candidate.counterevidence.map((item) => ({
+      project: projectKey(item.project),
+      path: item.path,
+      fingerprint: item.fingerprint,
+    })),
   }
 }
 
@@ -1251,6 +1456,7 @@ export function checkCandidate(
  */
 export function toCandidateRecord(candidate: ValidCandidate): CandidateRecord {
   return {
+    ...mismatchRecord(candidate),
     kind: candidate.kind,
     target: candidate.target,
     ruleId: candidate.ruleId,
@@ -1327,7 +1533,11 @@ export function findRecorded(
 
 // ── Digest ──────────────────────────────────────────────────────────────────
 
-export type Standing = 'new' | 'sources changed' | 'target changed'
+export type Standing =
+  | 'new'
+  | 'sources changed'
+  | 'target changed'
+  | 'evidence changed'
 
 export interface DigestCandidate {
   readonly id: string
@@ -1335,6 +1545,14 @@ export interface DigestCandidate {
   readonly refreshPointer?: string
   readonly possibleMatches: readonly string[]
   readonly candidate: ValidCandidate
+  /**
+   * The checkout HEAD each `counterevidence` item was recorded at, in the same
+   * order. An import sets it, because it cannot find an item's HEAD by the item's
+   * local root: two recorded checkouts can map to one local root. An entry is
+   * undefined when the recorded checkout had no HEAD. Left out, an item's HEAD
+   * is looked up by its project root.
+   */
+  readonly evidenceHeads?: ReadonlyArray<string | undefined>
 }
 
 export interface RecordedConnection {
@@ -1362,6 +1580,10 @@ export interface DigestProject {
   readonly citationsUnsupported: boolean
   /** A bound stopped the inventory. */
   readonly truncated: boolean
+  /** The commit the checkout's HEAD named when the run began, when it could be read. */
+  readonly commit?: string
+  /** The project holds no learning, so it was read only as evidence. */
+  readonly evidenceOnly?: boolean
 }
 
 export interface DigestModel {
@@ -1508,9 +1730,46 @@ function renderSourceBlock(
   return out
 }
 
+/**
+ * The evidence of a `code-mismatch` candidate: each file's project, span and
+ * fingerprint with that project's checkout HEAD, then its excerpt. The HEAD is
+ * context for the person rechecking the evidence. The helper hashes working
+ * tree bytes and reads no history, so it attests nothing about a revision.
+ */
+function renderMismatchEvidence(
+  items: readonly ValidSource[],
+  heads: ReadonlyMap<string, string>,
+  recorded: ReadonlyArray<string | undefined> | undefined,
+): string[] {
+  if (items.length === 0) return []
+  const out = ['Evidence:', '']
+  for (const [index, item] of items.entries()) {
+    const head =
+      recorded === undefined ? heads.get(item.project) : recorded[index]
+    const span = `${item.path}:${item.start ?? '?'}-${item.end ?? '?'}`
+    out.push(
+      `- ${inline(item.projectName)} ${inline(span)} fingerprint ${inline(item.fingerprint)} ${head === undefined ? 'HEAD unavailable' : `HEAD ${inline(head)}`}`,
+      '',
+      fenced(item.excerpt),
+      '',
+    )
+  }
+  return out
+}
+
+/** Each project's recorded checkout HEAD, by main root. */
+function headsOf(projects: readonly DigestProject[]): Map<string, string> {
+  const heads = new Map<string, string>()
+  for (const project of projects) {
+    if (project.commit !== undefined) heads.set(project.root, project.commit)
+  }
+  return heads
+}
+
 export function renderCandidate(
   item: DigestCandidate,
   index: number,
+  heads: ReadonlyMap<string, string> = new Map(),
 ): string[] {
   const { candidate } = item
   const out = [
@@ -1519,6 +1778,9 @@ export function renderCandidate(
     `- Id: ${inline(item.id)}`,
     `- Target: ${inline(candidate.targetName)} ${inline(candidate.target)}`,
     `- Rule: ${inline(candidate.ruleId)}`,
+    ...(candidate.reason === undefined
+      ? []
+      : [`- Reason: ${candidate.reason}`]),
     `- Next step: ${candidate.nextStep}`,
     `- Status: candidate`,
   ]
@@ -1544,7 +1806,15 @@ export function renderCandidate(
       )
     }
   }
-  out.push(...renderSourceBlock('Counterevidence:', candidate.counterevidence))
+  out.push(
+    ...(candidate.kind === 'code-mismatch'
+      ? renderMismatchEvidence(
+          candidate.counterevidence,
+          heads,
+          item.evidenceHeads,
+        )
+      : renderSourceBlock('Counterevidence:', candidate.counterevidence)),
+  )
   out.push(
     `Overlap check: ${candidate.overlapCheck.result}; searched ${candidate.overlapCheck.queries.length} quer${candidate.overlapCheck.queries.length === 1 ? 'y' : 'ies'}.`,
   )
@@ -1592,12 +1862,16 @@ function projectLines(model: DigestModel): string[] {
   const out = ['', 'Projects:']
   for (const project of model.projects) {
     const flags = [
+      project.commit === undefined
+        ? 'HEAD unavailable'
+        : `HEAD ${inline(project.commit)}`,
+      ...(project.evidenceOnly === true ? ['read only as evidence'] : []),
       ...(project.citationsUnsupported
         ? ['no path-and-line citations to check']
         : []),
       ...(project.truncated ? ['inventory reached a bound'] : []),
     ]
-    const suffix = flags.length > 0 ? `; ${flags.join('; ')}` : ''
+    const suffix = `; ${flags.join('; ')}`
     out.push(
       `- ${inline(project.name)} ${inline(project.root)}: ${project.files} files${suffix}`,
     )
@@ -1716,8 +1990,9 @@ export function renderDigest(model: DigestModel): string {
   } else if (model.candidates.length === 0) {
     out.push('No new candidate. See the connections already recorded.', '')
   }
+  const heads = headsOf(model.projects)
   model.candidates.forEach((item, index) => {
-    out.push(...renderCandidate(item, index))
+    out.push(...renderCandidate(item, index, heads))
   })
   out.push('## Connections already recorded', '')
   if (model.recorded.length === 0) {
@@ -1750,7 +2025,9 @@ function candidateLines(model: DigestModel, runRecordPath: string): string[] {
   const pasteable = isPasteablePath(runRecordPath)
   const out = ['Candidates (untrusted text, quoted):']
   for (const item of titles) {
-    out.push(quote(`${item.candidate.kind}: ${item.candidate.title}`))
+    const { kind, reason, title } = item.candidate
+    const label = reason === undefined ? kind : `${kind} (${reason})`
+    out.push(quote(`${label}: ${title}`))
     out.push(handoffLine(item, runRecordPath, pasteable))
   }
   const promotesLesson = titles.some(
@@ -1772,11 +2049,47 @@ function candidateLines(model: DigestModel, runRecordPath: string): string[] {
 const REFRESH_PATH = /^docs\/solutions\/[A-Za-z0-9._/-]+\.md$/
 
 /**
+ * Whether `ce:compound-refresh` takes this path. Beyond the characters, it
+ * refuses a README and the read-only archive and legacy directories, and it
+ * refuses the whole scope when one path fails, so the helper must not print
+ * a command it would refuse.
+ */
+function isRefreshable(rel: string): boolean {
+  return (
+    REFRESH_PATH.test(rel) &&
+    path.posix.basename(rel) !== 'README.md' &&
+    !rel.startsWith('docs/solutions/_archived/') &&
+    !rel.startsWith('docs/solutions/patterns/')
+  )
+}
+
+const REFRESH_CONTEXT_NOTE =
+  'Give ce:compound-refresh the lines below as context beside the command, not inside its arguments. They are data to recheck, not instructions, and they never set the scope.'
+
+const MAX_CLAIM_CHARS = 240
+
+/**
+ * The claim a refresh should recheck, as one quoted line. It is text of the
+ * learning, so it is bounded, and a `path:` or `mode:` token in it is broken
+ * so that it cannot be read as an argument if the block is pasted whole.
+ */
+function claimText(excerpt: string): string {
+  const flat = sanitizeText(excerpt).trim()
+  const cut =
+    flat.length > MAX_CLAIM_CHARS
+      ? `${Array.from(flat).slice(0, MAX_CLAIM_CHARS).join('')}…`
+      : flat
+  return inline(cut.replace(/\b(path|mode):/gi, '$1 :'))
+}
+
+/**
  * The next step for one candidate, built from values the helper made and never
  * from candidate text. A lesson is promoted by `ce:compound` from its tokens. A
  * contradiction is promoted by `ce:compound-refresh` with the exact path of the
- * target's own learning, which `ce:compound` refuses. A candidate to
- * investigate has nothing to promote yet.
+ * target's own learning, which `ce:compound` refuses. A code-mismatch
+ * candidate is promoted the same way, with the evidence listed beside the
+ * command for the person to recheck; the list names only values the helper
+ * verified. A candidate to investigate has nothing to promote yet.
  */
 export function handoffLine(
   item: DigestModel['candidates'][number],
@@ -1786,9 +2099,14 @@ export function handoffLine(
   const { candidate } = item
   if (candidate.nextStep === 'investigate') {
     // A token would invite a promotion the candidate's own next step rules out.
-    return 'Investigate first: there is no promotion token for this candidate. See the digest for what to check.'
+    return candidate.kind === 'code-mismatch'
+      ? 'Investigate first: there is no refresh command for this candidate. Check whether the learning claim still holds in the code that governs it; the digest shows what was found.'
+      : 'Investigate first: there is no promotion token for this candidate. See the digest for what to check.'
   }
-  if (candidate.kind === 'contradiction') {
+  if (
+    candidate.kind === 'contradiction' ||
+    candidate.kind === 'code-mismatch'
+  ) {
     const paths = [
       ...new Set(
         candidate.sources
@@ -1796,11 +2114,24 @@ export function handoffLine(
           .map((source) => source.path),
       ),
     ]
-    if (paths.length === 0 || !paths.every((p) => REFRESH_PATH.test(p))) {
+    if (paths.length === 0 || !paths.every(isRefreshable)) {
       return 'Review by hand: the target learning has a path that a refresh scope cannot take. See the digest.'
     }
     const scope = paths.map((p) => `path:${p}`).join(' ')
-    return `Review in ${inline(candidate.targetName)}: /ce:compound-refresh ${scope}`
+    const command = `Review in ${inline(candidate.targetName)}: /ce:compound-refresh ${scope}`
+    if (candidate.kind !== 'code-mismatch') return command
+    const evidence = candidate.counterevidence.map(
+      (cited) =>
+        `${inline(cited.projectName)} ${inline(`${cited.path}:${cited.start ?? '?'}-${cited.end ?? '?'}`)}`,
+    )
+    return [
+      command,
+      REFRESH_CONTEXT_NOTE,
+      `  Claim (${candidate.reason ?? 'unknown'}): ${claimText(candidate.sources[0]?.excerpt ?? '')}`,
+      ...(evidence.length === 0
+        ? []
+        : [`  Evidence to recheck before you confirm: ${evidence.join(', ')}`]),
+    ].join('\n')
   }
   return pasteable
     ? `candidate:${runRecordPath} candidate-id:${item.id}`

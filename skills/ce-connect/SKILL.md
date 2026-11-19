@@ -1,6 +1,6 @@
 ---
 name: ce:connect
-description: "Use when searching the projects the user has allowed for contradictions between their learnings, or for a lesson that one project recorded and a sibling project still needs. Also use when the user asks what their other projects have learned about a failure."
+description: "Use when searching the projects the user has allowed for contradictions between their learnings, for a lesson that one project recorded and a sibling project still needs, or for a learning whose claim the code no longer supports. Also use when the user asks what their other projects have learned about a failure."
 argument-hint: "[mode:headless | mode:interactive] [group:<name> | projects:<a>,<b> | fetch:<run>[.<attempt>]]"
 metadata:
   harness-portability: neutral-v1
@@ -8,7 +8,7 @@ metadata:
 
 # Connect
 
-Read the learnings, plans and tracked code of the projects the user has allowed, and propose two kinds of candidate: a contradiction between two learnings, and a lesson one project recorded that another project shows the failure for and has not recorded. A run proposes. A human decides, and promotion happens in `ce:compound-refresh` (contradictions) or `ce:compound` (lessons). This skill writes nothing into any project.
+Read the learnings, plans and tracked code of the projects the user has allowed, and propose three kinds of candidate: a contradiction between two learnings, a lesson one project recorded that another project shows the failure for and has not recorded, and a code mismatch, a learning whose present-tense claim the code no longer supports. A run proposes. A human decides, and promotion happens in `ce:compound-refresh` (contradictions and code mismatches) or `ce:compound` (lessons). This skill writes nothing into any project.
 
 A helper owns everything that must be exact: the allow list, the file inventory, the lock, candidate validation, publishing and the ledger. A researcher agent does the only model-driven work, one rule family at a time. Details: `references/candidate-contract.md` and `references/headless-and-outcomes.md`.
 
@@ -192,7 +192,7 @@ JSON
 
 To stop a run that has begun but cannot go on (the user declines, the host fails), send the same request with `"abort": true` added. It releases the lock and discards the work files, and answers `Connect failed` as its `finalLine`.
 
-`publish` answers `outcome`, `finalLine`, `digestPath`, `runRecordPath`, `summary` and `degradeReasons`. Print the `summary` as the helper wrote it. Its `Sweep:` line says how much of the index the sweep has covered (covered X of Y rules, what this run covered, and about how many runs are left). Keep it: a `complete` run covers its offered slice, not necessarily the whole index. Under each lesson title it holds a line of two tokens, `candidate:<run record path>` and `candidate-id:<id>`, that the user pastes after `/ce:compound` to promote that lesson. Under each contradiction title it holds a `Review in <project>: /ce:compound-refresh path:<docs/solutions/...>` line, the exact-path scope the user runs from the target project; `ce:compound` refuses a contradiction, so no compound tokens are printed for one. Print those lines unchanged. Never retype, shorten or build one yourself. A candidate whose next step is `investigate` has no tokens and no refresh line: under its title the summary says to investigate first. Print that line unchanged and do not offer to promote the candidate. Then print, each on a line of its own:
+`publish` answers `outcome`, `finalLine`, `digestPath`, `runRecordPath`, `summary` and `degradeReasons`. Print the `summary` as the helper wrote it. Its `Sweep:` line says how much of the index the sweep has covered (covered X of Y rules, what this run covered, and about how many runs are left). Keep it: a `complete` run covers its offered slice, not necessarily the whole index. Under each lesson title it holds a line of two tokens, `candidate:<run record path>` and `candidate-id:<id>`, that the user pastes after `/ce:compound` to promote that lesson. Under each contradiction or code-mismatch title it holds a `Review in <project>: /ce:compound-refresh path:<docs/solutions/...>` line, the exact-path scope the user runs from the target project; a code mismatch also lists its claim and the evidence to recheck before confirming, as context to give `ce:compound-refresh` beside the command. `ce:compound` refuses both, so no compound tokens are printed for either. Print those lines unchanged. Never retype, shorten or build one yourself. A candidate whose next step is `investigate` has no tokens and no refresh line: under its title the summary says to investigate first. Print that line unchanged and do not offer to promote the candidate. Then print, each on a line of its own:
 
 - the reason, when the outcome is `degraded` or `failed`: the `degradeReasons`, in words;
 - the artifact path: `digestPath`;
@@ -200,7 +200,7 @@ To stop a run that has begun but cannot go on (the user declines, the host fails
 
 In headless mode, print the `finalLine` now and stop. Offer nothing.
 
-In interactive mode, offer to record decisions before the final line. For each candidate the user wants to settle, record it with `decide`: a `rejected` candidate with a reason, or a `promoted` one only after the learning was written, with its destination. A contradiction is promoted through `ce:compound-refresh` in the target project; a transferable lesson through `ce:compound` in the target project, from the run record at `runRecordPath`. The reason is free text, so send it through a heredoc whose delimiter is a fresh token that does not occur in the text, and JSON-escape the reason:
+In interactive mode, offer to record decisions before the final line. For each candidate the user wants to settle, record it with `decide`: a `rejected` candidate with a reason, or a `promoted` one only after the learning was written, with its destination. A contradiction or a code mismatch is promoted through `ce:compound-refresh` in the target project; a transferable lesson through `ce:compound` in the target project, from the run record at `runRecordPath`. The reason is free text, so send it through a heredoc whose delimiter is a fresh token that does not occur in the text, and JSON-escape the reason:
 
 ```bash
 # Resolve helper scripts relative to this skill's directory.

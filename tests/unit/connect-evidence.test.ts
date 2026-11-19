@@ -387,6 +387,65 @@ describe('inventoryProject: eligibility', () => {
     expect(listPaths(inventoryProject(work))).toEqual(['src/keep.ts'])
   })
 
+  describe('extensionless config files', () => {
+    function roleOf(
+      files: Record<string, string>,
+    ): Map<string, string | undefined> {
+      const result = inventoryProject(createProject(files))
+      if (result.status !== 'ok') throw new Error(result.status)
+      return new Map(result.files.map((file) => [file.path, file.role]))
+    }
+
+    it('lists a Caddyfile as config at the root and nested', () => {
+      const roles = roleOf({
+        Caddyfile: ':80 {\n}\n',
+        'apps/dashboard/config/Caddyfile': ':80 {\n}\n',
+      })
+      expect(roles.get('Caddyfile')).toBe('config')
+      expect(roles.get('apps/dashboard/config/Caddyfile')).toBe('config')
+    })
+
+    it('lists a Dockerfile and a Makefile as config at the root and nested', () => {
+      const roles = roleOf({
+        Dockerfile: 'FROM scratch\n',
+        Makefile: 'all:\n',
+        'services/api/Dockerfile': 'FROM scratch\n',
+        'services/api/Makefile': 'all:\n',
+      })
+      for (const rel of [
+        'Dockerfile',
+        'Makefile',
+        'services/api/Dockerfile',
+        'services/api/Makefile',
+      ]) {
+        expect(roles.get(rel)).toBe('config')
+      }
+    })
+
+    it('keeps Caddyfile.test.ts as code', () => {
+      const roles = roleOf({ 'Caddyfile.test.ts': 'export const t = 1\n' })
+      expect(roles.get('Caddyfile.test.ts')).toBe('code')
+    })
+
+    it('leaves out caddyfile, Caddyfile.bak and Caddyfile.example', () => {
+      const roles = roleOf({
+        caddyfile: ':80 {\n}\n',
+        'Caddyfile.bak': ':80 {\n}\n',
+        'Caddyfile.example': ':80 {\n}\n',
+        'src/keep.ts': 'export const keep = 1\n',
+      })
+      expect([...roles.keys()]).toEqual(['src/keep.ts'])
+    })
+
+    it('still excludes a Caddyfile under node_modules', () => {
+      const roles = roleOf({
+        'node_modules/pkg/Caddyfile': ':80 {\n}\n',
+        'src/keep.ts': 'export const keep = 1\n',
+      })
+      expect([...roles.keys()]).toEqual(['src/keep.ts'])
+    })
+  })
+
   describe('exclusions', () => {
     // Each name is paired with a sibling the exclusion must not catch. A name
     // whose extension is outside the config and code lists would be dropped

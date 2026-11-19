@@ -105,6 +105,7 @@ import {
   clearLedger,
   type DecideInput,
   decideLedgerEntry,
+  type EvidenceLookup,
   forceUnlock,
   type ImportInsertResult,
   type ImportPlan,
@@ -126,6 +127,7 @@ import {
   readInvocationRecord,
   readLedger,
   readRunRecord,
+  recordsEvidenceOf,
   releaseLock,
   rewriteRunFiles,
   writeInvocationRecord,
@@ -491,6 +493,14 @@ interface SnapshotProject extends DigestProject {
   readonly citationsChecked: number
   /** The citation cap stopped the check. Reported, and not a reason to degrade. */
   readonly citationsTruncated: boolean
+  /**
+   * Tracked files the inventory could not read (unreadable, over the size
+   * limit, or an unsafe path). They are absent from `inventory` without being
+   * gone, so an evidence file named here is unread, not deleted.
+   */
+  readonly skipped: readonly string[]
+  /** More files were skipped than `skipped` names, so an absent file may be one of them. */
+  readonly skipsUnnamed: boolean
   readonly inventory: ReadonlyArray<{
     readonly path: string
     readonly role: InventoryRole
@@ -543,6 +553,8 @@ interface Snapshot {
     sha256: string
     /** The key of the rule's project. */
     project?: string
+    /** The learning's path in its project. Absent in a run begun before it was kept. */
+    path?: string
   }>
   /** What the run was narrowed to. */
   readonly selection?: Selection
@@ -587,6 +599,8 @@ interface AcceptedCandidate {
   readonly refreshPointer?: string
   readonly possibleMatches: readonly string[]
   readonly candidate: ValidCandidate
+  /** The checkout HEAD each `counterevidence` item was recorded at, for an import. */
+  readonly evidenceHeads?: ReadonlyArray<string | undefined>
 }
 
 interface BatchSummary {
@@ -1012,6 +1026,8 @@ function scanProject(
       citationsChecked: report.citations.length,
       citationsTruncated: report.truncated,
       truncated: inventory.truncated.files || inventory.truncated.hashCap,
+      skipped: inventory.skipped.map((file) => file.path),
+      skipsUnnamed: inventory.skippedCount > inventory.skipped.length,
       inventory: inventory.files.map((file: InventoryFile) => ({
         path: file.path,
         role: file.role,
@@ -1343,6 +1359,7 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
         id: rule.id,
         sha256: rule.sha256,
         project: projectKey(rule.project),
+        path: rule.path,
       })),
       coverageScope,
       offer: {
@@ -1673,14 +1690,43 @@ function standingOf(
   return 'skip'
 }
 
+/**
+ * How the evidence files of a decided candidate stand in this run's inventory.
+ * A project the run did not read, or read only in part, says nothing about a
+ * file it does not list, so that file is neither changed nor gone. The same
+ * holds for a file the inventory skipped (unreadable, oversize), and for any
+ * absent file when skips were too many to name.
+ */
+function evidenceLookup(snapshot: Snapshot): EvidenceLookup {
+  const projects = new Map(
+    snapshot.projects.map((project) => [
+      project.key,
+      {
+        complete: !project.truncated && !project.skipsUnnamed,
+        skipped: new Set(project.skipped),
+        files: new Map(project.inventory.map((f) => [f.path, f.sha256])),
+      },
+    ]),
+  )
+  return (key, rel) => {
+    const project = projects.get(key)
+    if (project === undefined) return { status: 'unread' }
+    const fingerprint = project.files.get(rel)
+    if (fingerprint !== undefined) return { status: 'present', fingerprint }
+    if (project.skipped.has(rel)) return { status: 'unread' }
+    return project.complete ? { status: 'gone' } : { status: 'unread' }
+  }
+}
+
 /** What the ledger says about a candidate that is not a duplicate or already recorded. */
 function classifyAgainstLedger(
   candidate: ValidCandidate,
   record: CandidateRecord,
-  ledger: Ledger,
+  input: ClassifyInput,
   result: Classified,
 ): void {
-  const outcome = classifyCandidate(ledger, record)
+  const { ledger } = input
+  const outcome = classifyCandidate(ledger, record, input.evidence)
   const standing = standingOf(outcome)
   if (standing === 'skip') {
     if (outcome.standing === 'unresolved') result.unresolved++
@@ -1711,13 +1757,14 @@ interface ClassifyInput {
   readonly ctx: ValidationContext
   readonly snapshot: Snapshot
   readonly ledger: Ledger
+  readonly evidence: EvidenceLookup
 }
 
 function reopensForChangedSources(
   record: CandidateRecord,
   input: ClassifyInput,
 ): boolean {
-  const outcome = classifyCandidate(input.ledger, record)
+  const outcome = classifyCandidate(input.ledger, record, input.evidence)
   return outcome.standing === 'reopened' && outcome.reason === 'sources changed'
 }
 
@@ -1766,7 +1813,13 @@ function classifyOne(
   // A promoted learning cites its source by project and path, so it still
   // matches after the source changed. A changed source reopens the connection
   // for refresh (with the pointer to the promoted learning) and is not recorded.
-  const recorded = findRecorded(check.candidate, input.snapshot.provenance)
+  // A code-mismatch candidate has no such shortcut: its source is the target's
+  // own learning, and a sibling that names or cites that learning says nothing
+  // about whether its claim was refreshed. The ledger decides.
+  const recorded =
+    check.candidate.kind === 'code-mismatch'
+      ? undefined
+      : findRecorded(check.candidate, input.snapshot.provenance)
   if (recorded !== undefined && !reopensForChangedSources(record, input)) {
     result.recorded.push({
       pointer: recorded.pointer,
@@ -1774,7 +1827,7 @@ function classifyOne(
     })
     return
   }
-  classifyAgainstLedger(check.candidate, record, input.ledger, result)
+  classifyAgainstLedger(check.candidate, record, input, result)
 }
 
 function classifyBatches(
@@ -1833,8 +1886,13 @@ function coverageLines(
   classified: Classified,
 ): string[] {
   const lines: string[] = []
+  const learningUnread = new Set(coverage.learningUnreadRuleIds)
   for (const id of coverage.uncoveredRuleIds.slice(0, MAX_UNREAD_LINES)) {
-    lines.push(`rule ${id} was not covered by a complete family`)
+    lines.push(
+      learningUnread.has(id)
+        ? `rule ${id} was not covered: its learning was not among the files the family read`
+        : `rule ${id} was not covered by a complete family`,
+    )
   }
   if (coverage.uncoveredRuleIds.length > MAX_UNREAD_LINES) {
     lines.push(
@@ -1949,15 +2007,40 @@ function runValidation(
   }
   const classified = classifyBatches(
     batches,
-    { ctx: contextFrom(snapshot), snapshot, ledger },
+    {
+      ctx: contextFrom(snapshot),
+      snapshot,
+      ledger,
+      evidence: evidenceLookup(snapshot),
+    },
     limits,
   )
   // Only the rules the run was offered must be covered. The rest of the index
   // waits for a later run and is not a reason to degrade this one.
+  // A project with no learning has no rule to cover: it is read as evidence
+  // only, and a batch need not name it.
   const coverage = checkCoverage({
     ruleIds: snapshot.offer.offered,
-    projects: snapshot.projects.map((project) => project.root),
+    projects: snapshot.projects
+      .filter((project) =>
+        project.inventory.some((file) => file.role === 'learning'),
+      )
+      .map((project) => project.root),
     batches,
+    // A begin.json from before paths were kept names none, so it owes no read.
+    learningPaths: new Map(
+      snapshot.ruleVersions.flatMap((rule) =>
+        rule.path === undefined ? [] : [[rule.id, rule.path] as const],
+      ),
+    ),
+    learningProjects: new Map(
+      snapshot.ruleVersions.flatMap((rule) => {
+        const root = snapshot.projects.find(
+          (project) => project.key === rule.project,
+        )?.root
+        return root === undefined ? [] : [[rule.id, root] as const]
+      }),
+    ),
   })
   // A rule whose candidate was lost to changed evidence is not covered, even
   // when a complete family named it: nothing was learned about it this run.
@@ -2112,6 +2195,9 @@ function buildCandidateBlock(accepted: readonly AcceptedCandidate[]): Json {
       title: item.candidate.title,
       summary: item.candidate.summary,
       nextStep: item.candidate.nextStep,
+      ...(item.candidate.reason === undefined
+        ? {}
+        : { reason: item.candidate.reason }),
       overlapCheck: item.candidate.overlapCheck,
       sources: item.candidate.sources,
       targetEvidence: item.candidate.targetEvidence,
@@ -2141,6 +2227,10 @@ function digestModel(
     files: project.files,
     citationsUnsupported: project.citationsUnsupported,
     truncated: project.truncated,
+    ...(project.commit === undefined ? {} : { commit: project.commit }),
+    ...(project.inventory.some((file) => file.role === 'learning')
+      ? {}
+      : { evidenceOnly: true }),
   }))
   return {
     runId: snapshot.runId,
@@ -2296,6 +2386,7 @@ function commitRun(
       candidates: state.accepted.map((item) =>
         toCandidateRecord(item.candidate),
       ),
+      evidence: evidenceLookup(snapshot),
       // The rename commits the run; coverage follows it in the same ledger write.
       coverage: {
         runId: snapshot.runId,
@@ -2653,6 +2744,12 @@ function ledgerShow(request: unknown, deps: HelperDeps): HelperResult {
         ? {}
         : { destination: entry.destination }),
       ...(entry.reopened === undefined ? {} : { reopened: entry.reopened }),
+      ...(entry.reopenedFor === undefined
+        ? {}
+        : { reopenedFor: entry.reopenedFor }),
+      ...(entry.mismatchReason === undefined
+        ? {}
+        : { mismatchReason: entry.mismatchReason }),
       sources: entry.sources.map((source) => ({
         role: source.role,
         path: source.path,
@@ -2806,21 +2903,25 @@ const NO_PLACEMENT: Placement = {
 }
 
 /**
- * What a candidate stands on: its target, sources, target evidence and
- * counterevidence. A kept record is the same candidate only when this matches,
- * because the id is the same across changed fingerprints.
+ * What a candidate stands on: its target, sources, target evidence,
+ * counterevidence and, for a code-mismatch candidate, its reason. The
+ * counterevidence carries each evidence's project, path, span and fingerprint.
+ * A kept record is the same candidate only when this matches, because the id is
+ * the same across changed fingerprints and changed evidence.
  */
 function evidenceOf(candidate: {
   readonly target?: unknown
   readonly sources?: unknown
   readonly targetEvidence?: unknown
   readonly counterevidence?: unknown
+  readonly reason?: unknown
 }): string {
   return JSON.stringify([
     candidate.target,
     candidate.sources,
     candidate.targetEvidence,
     candidate.counterevidence,
+    candidate.reason ?? null,
   ])
 }
 
@@ -2864,6 +2965,9 @@ function freshOf(
       : { refreshPointer: extra.refreshPointer }),
     possibleMatches: extra.possibleMatches ?? [],
     candidate: item.candidate,
+    ...(item.evidenceHeads === undefined
+      ? {}
+      : { evidenceHeads: item.evidenceHeads }),
     record: item.record,
   }
 }
@@ -2892,12 +2996,35 @@ type Placed =
   | { readonly placed: Fresh | Open }
   | { readonly skipped: SkippedCandidate }
 
+/**
+ * How the evidence files of an imported candidate stand: each was checked
+ * against the local bytes, so the candidate's own fingerprint is the local one.
+ * A file it does not cite says nothing, so a decided entry reopens on evidence
+ * the import re-cites with new bytes, not on a file it never read.
+ */
+function importedEvidence(
+  item: Pick<ImportAccepted, 'record'>,
+): EvidenceLookup {
+  const cited = new Map(
+    (item.record.evidence ?? []).map((ref) => [
+      `${ref.project}\0${ref.path}`,
+      ref.fingerprint,
+    ]),
+  )
+  return (project, rel) => {
+    const fingerprint = cited.get(`${project}\0${rel}`)
+    return fingerprint === undefined
+      ? { status: 'unread' }
+      : { status: 'present', fingerprint }
+  }
+}
+
 function placeOne(
   item: ImportAccepted,
   ledger: Ledger,
   heldIn: (item: ImportAccepted) => string | undefined,
 ): Placed {
-  const outcome = classifyCandidate(ledger, item.record)
+  const outcome = classifyCandidate(ledger, item.record, importedEvidence(item))
   if (outcome.standing === 'new') {
     return {
       placed: freshOf(item, 'new', {
@@ -2921,12 +3048,16 @@ function placeOne(
       ),
     }
   }
-  const skipped = skippedOf(
-    item,
-    ledger.entries.find((known) => known.id === item.id),
-  )
+  const entry = ledger.entries.find((known) => known.id === item.id)
+  const skipped = skippedOf(item, entry)
   if (skipped !== undefined) return { skipped }
-  const held = heldIn(item)
+  // A retained record is reused only while the ledger still watches the
+  // evidence it holds. After the claim was published with other evidence, a
+  // decision made from the old record would watch files it never cited.
+  const held =
+    entry !== undefined && !recordsEvidenceOf(entry, item.record)
+      ? undefined
+      : heldIn(item)
   return {
     placed:
       held === undefined
@@ -2939,8 +3070,9 @@ function placeOne(
  * Sort the accepted candidates by what the ledger says about each. A new or
  * reopened one is written. One decided here is skipped and named. One already
  * open is listed again with the import run that holds it; when no kept run
- * holds it with the evidence just verified it is written again, and its ledger
- * entry stays as it is.
+ * holds it with the evidence just verified, or the ledger watches other
+ * evidence than that run holds, it is written again and its ledger entry takes
+ * the evidence it cites.
  */
 function placeCandidates(
   accepted: readonly ImportAccepted[],
@@ -3140,6 +3272,9 @@ function importWrite(
         view.importRuns,
       )
       if (placement.fresh.length === 0) return { publish: false }
+      const lookups = new Map(
+        placement.fresh.map((item) => [item.record, importedEvidence(item)]),
+      )
       const runId = newImportRunId(now())
       localRunId = runId
       const createdAt = new Date(now()).toISOString()
@@ -3160,6 +3295,8 @@ function importWrite(
         runId,
         files: filesOf(model),
         candidates: placement.fresh.map((item) => item.record),
+        // The fold must classify each candidate on the evidence placement did.
+        evidenceFor: (candidate) => lookups.get(candidate),
         // The run is committed before the ledger is written, so a ledger that
         // cannot be written leaves a run that must not say it is complete.
         onLedgerWriteFailed: () =>

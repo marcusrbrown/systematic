@@ -19,7 +19,9 @@ import path from 'node:path'
 import yaml from 'js-yaml'
 import {
   formatProvenanceCitation,
+  handoffLine,
   scanProvenance,
+  type ValidCandidate,
 } from '../../src/lib/connect-helper-core.js'
 import { parseFrontmatter } from '../../src/lib/frontmatter.js'
 import { SKILL_FRONTMATTER_FIELDS } from '../../src/lib/skills.js'
@@ -702,6 +704,129 @@ describe('ce:compound-refresh exact path scope', () => {
     expect(pathScopeSection).toMatch(/never writes? the ledger/i)
     expect(pathScopeSection).toMatch(/`decide`/)
   })
+})
+
+// ── The refresh handoff of a code-mismatch candidate ──────────────────────────────────────
+
+/**
+ * Whether `ce:compound-refresh` takes one `path:` value, by the reasons its
+ * "Exact path scope" section names for the text of a path. The skill is the
+ * consumer: a command the helper prints must pass every check it makes.
+ */
+function refreshAccepts(value: string): boolean {
+  const segments = value.split('/')
+  return (
+    /^[A-Za-z0-9._/-]+$/.test(value) &&
+    !value.startsWith('/') &&
+    !segments.some((part) => part === '' || part === '.' || part === '..') &&
+    value.startsWith('docs/solutions/') &&
+    value.endsWith('.md') &&
+    segments.at(-1) !== 'README.md' &&
+    !value.startsWith('docs/solutions/_archived/') &&
+    !value.startsWith('docs/solutions/patterns/')
+  )
+}
+
+function mismatchCandidateAt(learningPath: string): {
+  readonly id: string
+  readonly standing: 'new'
+  readonly possibleMatches: readonly string[]
+  readonly candidate: ValidCandidate
+} {
+  const learning = {
+    project: '/work/target',
+    projectName: 'target',
+    path: learningPath,
+    fingerprint: 'a'.repeat(64),
+    excerpt: 'Always reclaim a stale lock immediately after the timeout',
+    cite: `target:${learningPath}@${'a'.repeat(64)}`,
+  }
+  return {
+    id: 'b'.repeat(64),
+    standing: 'new',
+    possibleMatches: [],
+    candidate: {
+      kind: 'code-mismatch',
+      reason: 'stale',
+      ruleId: 'rule-0123456789abcdef',
+      target: '/work/target',
+      targetName: 'target',
+      title: 'A claim the code no longer supports',
+      summary: 'The learning says one thing; the code does another.',
+      nextStep: 'refresh-learning',
+      overlapCheck: { queries: ['q'], result: 'none-found' },
+      sources: [learning],
+      targetEvidence: [],
+      counterevidence: [
+        {
+          ...learning,
+          project: '/work/infra',
+          projectName: 'infra',
+          path: 'Caddyfile',
+          start: 1,
+          end: 3,
+        },
+      ],
+    },
+  }
+}
+
+describe('a code-mismatch handoff is an exact path scope the refresh skill takes', () => {
+  const RUN_RECORD = '/state/runs/run.json'
+
+  test('the skill names every reason this check relies on', () => {
+    for (const reason of [
+      'unsupported-characters',
+      'absolute-path',
+      'parent-traversal',
+      'outside-solutions',
+    ]) {
+      expect(pathScopeSection).toContain(`\`${reason}\``)
+    }
+    expect(pathScopeSection).toContain('`README.md`')
+    expect(pathScopeSection).toContain('docs/solutions/_archived/')
+    expect(pathScopeSection).toContain('docs/solutions/patterns/')
+  })
+
+  test('prints one path token for the learning, with no autofix and no keyword scope', () => {
+    const line = handoffLine(
+      mismatchCandidateAt('docs/solutions/logic-errors/lock-now.md'),
+      RUN_RECORD,
+      true,
+    )
+    const [command = ''] = line.split('\n')
+    const words = command.split(': ')[1]?.split(' ') ?? []
+    expect(words[0]).toBe('/ce:compound-refresh')
+    const args = words.slice(1)
+    expect(args).toEqual(['path:docs/solutions/logic-errors/lock-now.md'])
+    for (const arg of args) {
+      expect(arg.startsWith('path:')).toBe(true)
+      expect(refreshAccepts(arg.slice('path:'.length))).toBe(true)
+    }
+    expect(line).not.toContain('mode:autofix')
+  })
+
+  test.each([
+    ['a path outside docs/solutions', 'docs/plans/lock-now.md'],
+    ['a README', 'docs/solutions/README.md'],
+    ['a nested README', 'docs/solutions/logic-errors/README.md'],
+    ['an archived learning', 'docs/solutions/_archived/old.md'],
+    ['a legacy patterns learning', 'docs/solutions/patterns/old.md'],
+    ['a path with a space', 'docs/solutions/two words.md'],
+    ['a path that is not markdown', 'docs/solutions/lock-now.txt'],
+  ])(
+    'gives review by hand, never a command the skill would refuse, for %s',
+    (_name, learningPath) => {
+      expect(refreshAccepts(learningPath)).toBe(false)
+      const line = handoffLine(
+        mismatchCandidateAt(learningPath),
+        RUN_RECORD,
+        true,
+      )
+      expect(line).toContain('Review by hand')
+      expect(line).not.toContain('/ce:compound-refresh')
+    },
+  )
 })
 
 // ── Graders checked against negative controls ───────────────────────────────

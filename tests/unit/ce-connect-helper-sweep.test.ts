@@ -154,6 +154,13 @@ function start(world: World, selection: readonly string[] = []): Started {
   }
 }
 
+/** The learnings `names` of both projects, each under its own root: the paths are the same in both. */
+function learningFiles(world: World, names: readonly string[]): string[] {
+  return [world.alpha, world.beta].flatMap((root) =>
+    names.map((name) => `${root}/docs/solutions/${name}.md`),
+  )
+}
+
 function batch(
   world: World,
   run: Started,
@@ -166,7 +173,9 @@ function batch(
     family: 'family',
     ruleIds,
     projects: [world.alpha, world.beta],
-    files: [],
+    // Every learning of the world, as a family that read them all lists them.
+    // Both projects hold each path, so each is listed under its own root.
+    files: learningFiles(world, NAMES),
     searches: ['search'],
     complete: true,
     candidates: [],
@@ -411,6 +420,32 @@ describe('rotation across runs', () => {
 
     expect(published.outcome).toBe('degraded')
     expect(coveredIds(world).sort()).toEqual([a, b].sort())
+  })
+
+  it('does not record coverage for a rule whose learning no family listed, and offers it again', () => {
+    const world = buildWorld()
+    const run = start(world)
+    const listed = writeBatch(
+      run,
+      'family-1.json',
+      batch(world, run, run.offered, {
+        files: learningFiles(world, ['one']),
+      }),
+    )
+    const validated = validate(world, run, [listed])
+    const published = publish(world, run)
+
+    const read = run.offered.filter((id) => labelOf(world, id).endsWith('/one'))
+    const unread = run.offered.filter((id) => !read.includes(id))
+    expect(read.length).toBeGreaterThan(0)
+    expect(unread.length).toBeGreaterThan(0)
+    expect(validated.degradeReasons).toContain('uncovered-rules')
+    expect((validated.coverage as Json).learningUnreadRuleIds).toEqual(unread)
+    expect(published.outcome).toBe('degraded')
+    expect(coveredIds(world).sort()).toEqual([...read].sort())
+
+    const next = start(world)
+    for (const id of unread) expect(next.offered).toContain(id)
   })
 
   it('re-offers a rule whose learning changed since it was covered', () => {

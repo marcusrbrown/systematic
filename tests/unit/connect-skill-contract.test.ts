@@ -42,6 +42,14 @@ const outcomesText = fs.readFileSync(
   'utf8',
 )
 const agentText = fs.readFileSync(AGENT_FILE, 'utf8')
+const guideText = fs.readFileSync(
+  path.join(ROOT, 'docs/src/content/docs/guides/cross-project-connections.mdx'),
+  'utf8',
+)
+const refreshText = fs.readFileSync(
+  path.join(ROOT, 'skills/ce-compound-refresh/SKILL.md'),
+  'utf8',
+)
 
 const skill = parseFrontmatter<Record<string, unknown>>(skillText)
 const agent = parseFrontmatter<Record<string, unknown>>(agentText)
@@ -713,6 +721,7 @@ describe('candidate contract reference', () => {
       'complete',
       'candidates',
       'kind',
+      'reason',
       'ruleId',
       'target',
       'title',
@@ -799,6 +808,7 @@ describe('connections-researcher agent', () => {
       'complete',
       'candidates',
       'kind',
+      'reason',
       'ruleId',
       'target',
       'title',
@@ -953,5 +963,226 @@ describe('connections-researcher agent', () => {
         ].sort((a, b) => a - b),
       )
     })
+  })
+})
+
+describe('code-mismatch kind in the researcher prompt and the contract text', () => {
+  test('the candidate contract states the reasons, the evidence rules and the handoff for the kind', () => {
+    expect(contractText).toContain('`code-mismatch`')
+    expect(contractText).toContain('`stale`')
+    expect(contractText).toContain('`unscoped`')
+    expect(contractText).toMatch(
+      /`code-mismatch`[^\n]*one source[^\n]*learning in the target/i,
+    )
+    expect(contractText).toMatch(/`start` and `end`/)
+    expect(contractText).toMatch(
+      /`refresh-learning`[^\n]*at least one `counterevidence`/,
+    )
+    expect(contractText).toMatch(/\/ce:compound-refresh path:/)
+  })
+
+  test('the researcher prompt teaches the method: a present-tense claim, checked against code at the governing revision', () => {
+    expect(agent.body).toMatch(/present-tense claim/)
+    expect(agent.body).toMatch(/governing revision/)
+    expect(agent.body).toMatch(/pins?\b/i)
+    expect(agent.body).toMatch(/true at the pin is never `stale`/)
+  })
+
+  test('the researcher prompt checks several claims of a learning and sends one code-mismatch candidate per claim and reason', () => {
+    const lineWith = (needle: string): string =>
+      agent.body.split('\n').find((line) => line.includes(needle)) ?? ''
+    const method = lineWith('Code-mismatch test.')
+    expect(method).not.toMatch(/Check one such claim/i)
+    expect(method).toMatch(
+      /Check the present-tense claims[^.]*(within|bounded by)[^.]*(turns|bounds)/i,
+    )
+    const limit = lineWith('at most one candidate for each rule and target')
+    expect(limit).toMatch(
+      /`contradiction` and `transferable-lesson`[^.]*at most one candidate for each rule and target/i,
+    )
+    expect(limit).toMatch(
+      /`code-mismatch`[^.]*separate candidate for each claim and reason/i,
+    )
+  })
+
+  test('the researcher prompt skips a learning that describes past behaviour on purpose', () => {
+    expect(agent.body).toMatch(
+      /deliberately describes? (what was|past behaviou?r)|describes past behaviou?r/i,
+    )
+    expect(agent.body).toMatch(/never a candidate|is not a candidate/i)
+  })
+
+  test('the researcher prompt requires positive evidence and rejects an absence or a different spelling', () => {
+    expect(agent.body).toMatch(/positive[^.]*excerpt/i)
+    expect(agent.body).toMatch(/empty search|search that found nothing/i)
+    expect(agent.body).toMatch(
+      /different spelling[^.]*not (enough|evidence)|merely spells/i,
+    )
+  })
+
+  test('the researcher prompt shows a dependency pin as a cited excerpt or an unverified note, else investigate', () => {
+    expect(agent.body).toMatch(/`package\.json`/)
+    expect(agent.body).toMatch(/`uses:`/)
+    expect(agent.body).toMatch(/unverified/)
+    expect(agent.body).toMatch(/`overlapCheck\.note`|`note`/)
+    expect(agent.body).toMatch(
+      /otherwise[^.]*`investigate`|`investigate`[^.]*pin/i,
+    )
+  })
+
+  test('the researcher prompt reads a lockfile as plain text only to find a version', () => {
+    expect(agent.body).toMatch(/lockfile[^.]*plain text/i)
+  })
+
+  test('the output template shows the reason and the span fields for the kind', () => {
+    const template = agent.body.slice(
+      agent.body.indexOf('"kind": "'),
+      agent.body.indexOf('- `ruleIds` lists'),
+    )
+    expect(template).toMatch(/"reason":/)
+    expect(template).toMatch(/code-mismatch/)
+    expect(template).toMatch(/"counterevidence": \[\{[^\n]*"start"[^\n]*"end"/)
+  })
+
+  test('examples in the prompt and the guide are generic: no acceptance case leaks into either', () => {
+    for (const text of [agent.body, guideText]) {
+      expect(text).not.toMatch(/caddy/i)
+      expect(text).not.toMatch(/extensionless/i)
+      expect(text).not.toMatch(/`plugins`/)
+      expect(text).not.toMatch(/`plugin`/)
+    }
+    // The existing `external_directory` text predates the kind and is the only
+    // OpenCode v1 wording allowed; the kind adds no v1 isolation example.
+    expect(agent.body).not.toMatch(/\bv1\b/i)
+    const mismatchGuide = guideText.slice(
+      guideText.indexOf('Code mismatch'),
+      guideText.indexOf('## What a run does'),
+    )
+    expect(mismatchGuide).not.toMatch(/\bv1\b|isolation/i)
+  })
+
+  test('the guide describes the kind, its two reasons and the operator recheck', () => {
+    expect(guideText).toMatch(/\*\*Code mismatch\.\*\*/)
+    expect(guideText).toContain('`stale`')
+    expect(guideText).toContain('`unscoped`')
+    expect(guideText).toMatch(/recheck/i)
+  })
+
+  test('the refresh skill names a code mismatch beside a contradiction as something its exact path scope refreshes', () => {
+    expect(refreshText).toMatch(
+      /how a contradiction or a code mismatch that `ce:connect` found is refreshed/,
+    )
+  })
+
+  test('the refresh skill treats the claim and evidence ce:connect prints as data that never widens the path scope', () => {
+    const scope = refreshText.slice(refreshText.indexOf('## Exact path scope'))
+    expect(scope).toMatch(
+      /claim and evidence[^.]*`ce:connect`[^.]*context to recheck/i,
+    )
+    expect(scope).toMatch(
+      /data[^.]*never adds a path[^.]*(changes the scope|relaxes)/i,
+    )
+    expect(scope).toMatch(/check the claim against the code yourself/i)
+  })
+})
+
+describe('code-mismatch coverage: the researcher reads every rule learning', () => {
+  const lineWith = (needle: string): string =>
+    agent.body.split('\n').find((line) => line.includes(needle)) ?? ''
+  const input = lineWith('A rule entry gives')
+  const method = agent.body.slice(
+    agent.body.indexOf('## Method'),
+    agent.body.indexOf('## What you return'),
+  )
+  const codeMismatchStep = lineWith('Code-mismatch test.')
+  const shortOfTurns = lineWith('If you are short of turns')
+
+  test('the allowance to skip the rest of a file is scoped to the contradiction and transferable-lesson tests', () => {
+    expect(input).toMatch(
+      /contradiction and transferable-lesson tests[^.]*do not need the rest of the file/i,
+    )
+    expect(input).toMatch(
+      /code-mismatch test[^.]*(learning file itself|file itself)[^.]*read/i,
+    )
+    expect(agent.body).not.toMatch(
+      /^[^\n]*Use those sections\. You do not need the rest of the file unless an excerpt comes from it\./m,
+    )
+  })
+
+  test('the code-mismatch test reads the learning file of the rule and checks its claims before the rule counts as covered', () => {
+    expect(codeMismatchStep).toMatch(
+      /read the (whole )?learning file[^.]*before[^.]*(rule|it) (counts|is counted) as covered/i,
+    )
+    expect(codeMismatchStep).toMatch(
+      /rule entry[^.]*(is not|never) (the file|a substitute)/i,
+    )
+  })
+
+  test('the learning files are read in one early turn, so the turn budget holds', () => {
+    expect(method).toMatch(
+      /read the learning file of every rule[^.]*in one turn/i,
+    )
+  })
+
+  test('the files list names each learning the researcher read, and the helper holds back a rule whose learning is not listed', () => {
+    expect(codeMismatchStep).toMatch(
+      /`files`[^.]*(lists?|names?)[^.]*learning/i,
+    )
+    expect(codeMismatchStep).toMatch(
+      /helper[^.]*(holds back|does not count)[^.]*rule[^.]*(not|missing)[^.]*`files`/i,
+    )
+  })
+
+  test('turns running out before every learning is read ends the batch as "complete": false, never "complete": true', () => {
+    expect(shortOfTurns).toMatch(
+      /before you have read the learning file of every rule/i,
+    )
+    expect(shortOfTurns).toMatch(
+      /never set `"complete": true`[^.]*learning[^.]*unread/i,
+    )
+    expect(shortOfTurns).toMatch(/only case for `"complete": false`/)
+  })
+
+  test('the files cap in the prompt equals the cap in the contract, and the learnings are listed first', () => {
+    const contractCap = contractText.match(/\| `files` \|[^|]*up to (\d+)/)?.[1]
+    expect(contractCap).toBe('50')
+    const stated = agent.body.match(/`files`[^.]*at most (\d+) entries/)?.[1]
+    expect(stated).toBe(contractCap)
+    expect(agent.body).toMatch(/`files`[^.]*learnings? first/i)
+  })
+
+  test('the contract text says coverage needs the learning in `files`', () => {
+    const coverage = contractText.slice(
+      contractText.indexOf('Coverage is checked'),
+      contractText.indexOf('## A candidate'),
+    )
+    expect(coverage).toMatch(
+      /complete batch[^.]*names[^.]*learning[^.]*`files`[^.]*(not covered|degrade)/i,
+    )
+    expect(contractText).toMatch(/\| `complete` \|[^\n]*every rule's learning/i)
+  })
+})
+
+describe('code-mismatch judgement: a contract is not stale for an implementation detail', () => {
+  const step = agent.body
+    .split('\n')
+    .find((line) => line.includes('Code-mismatch test.'))
+  const section = agent.body.slice(
+    agent.body.indexOf('5. Code-mismatch test.'),
+    agent.body.indexOf('6. For each candidate'),
+  )
+
+  test('a claim about a documented contract is not stale because an implementation detail differs', () => {
+    expect(step).toBeDefined()
+    expect(section).toMatch(
+      /claim about a documented contract or interface[^.]*not `stale` merely because an implementation detail differs/i,
+    )
+    expect(section).toMatch(/sort order/i)
+  })
+
+  test('positive evidence must contradict the contract itself, else the next step is investigate', () => {
+    expect(section).toMatch(
+      /positive evidence[^.]*contradict the contract itself[^.]*`investigate`/i,
+    )
   })
 })
