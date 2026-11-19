@@ -1020,6 +1020,34 @@ describe('code-mismatch kind in the researcher prompt and the contract text', ()
     )
   })
 
+  test('the researcher prompt checks a multi-version claim against the allowed checkout of another version, inside the existing turns', () => {
+    const lines = agent.body.split('\n')
+    const index = lines.findIndex((line) =>
+      /more than one major version or variant/i.test(line),
+    )
+    expect(index).toBeGreaterThan(-1)
+    // The check sits inside the code-mismatch test, before step 6.
+    const stepStart = lines.findIndex((line) =>
+      line.includes('Code-mismatch test.'),
+    )
+    const stepEnd = lines.findIndex((line) => /^6\. /.test(line))
+    expect(index).toBeGreaterThan(stepStart)
+    expect(index).toBeLessThan(stepEnd)
+    const step = lines[index] ?? ''
+    expect(step).toMatch(/dependency, host, runtime or tool/i)
+    expect(step).toMatch(
+      /allowed projects include a checkout of a version other than the one the learning's project runs/i,
+    )
+    expect(step).toMatch(/check the claim against that checkout too/i)
+    expect(step).toMatch(
+      /contradicts the claim with positive evidence[^.]*never limits itself to one version[^.]*`unscoped`/i,
+    )
+    expect(step).toMatch(
+      /cite the other version's code[^.]*pin[^.]*which version the learning's project runs/i,
+    )
+    expect(step).toMatch(/same read and search turns[^.]*no extra turn/i)
+  })
+
   test('the researcher prompt shows a dependency pin as a cited excerpt or an unverified note, else investigate', () => {
     expect(agent.body).toMatch(/`package\.json`/)
     expect(agent.body).toMatch(/`uses:`/)
