@@ -32,12 +32,12 @@ One JSON object, nothing before or after it. The skill writes it to a file uncha
 | `family` | The family name, at most 120 characters. |
 | `ruleIds` | Every rule id the family examined, up to 500. |
 | `projects` | The main root of every project the family read. |
-| `files` | Paths read, up to 50, each at most 300 characters. Lists the learning of every rule the family covered, first. |
+| `files` | Paths read, up to 50, each at most 4,397 characters (a project root of at most 4,096, a slash and a path of at most 300). Lists the learning of every rule the family covered, first. |
 | `searches` | Searches run, up to 50, each at most 300 characters. |
 | `complete` | `true` only when the family covered its rules, which includes having read every rule's learning. A family that ran short of turns, including before it read every learning, sends `false`. A batch with `false` contributes no candidate. |
 | `candidates` | Up to `bounds.maxCandidatesPerBatch`; more are dropped and the run degrades. |
 
-`ruleIds`, `projects`, `files` and `searches` are lists of plain strings. `projects` holds project roots exactly as the prompt lists them, never names; `files` holds paths relative to a project root. The skill checks this shape before it writes a batch. A reply that fails the check is replaced by an unfinished stub (`complete` false), so that family is degraded. A batch that passes the check and still fails the helper's own parse ends the run as `Connect failed`.
+`ruleIds`, `projects`, `files` and `searches` are lists of plain strings. `projects` holds project roots exactly as the prompt lists them, never names; `files` holds paths relative to a project root, or a project root followed by `/` and that path. Two projects can hold a learning at one relative path, so when a family names the rules of two such learnings, each is listed as `<project root>/<path>`; a bare path that more than one named rule could mean covers none of them. The skill checks this shape before it writes a batch. A reply that fails the check is replaced by an unfinished stub (`complete` false), so that family is degraded. A batch that passes the check and still fails the helper's own parse ends the run as `Connect failed`.
 
 Coverage is checked, not reported on trust. An offered rule id that no complete batch names, and an allowed project that no batch names, each degrade the run. A complete batch that names an offered rule but does not list that rule's learning among its `files` does not cover the rule: the rule is not covered, the run degrades, and a later run offers it again. A rule that was not offered does not degrade the run. A learning that says "report nothing" therefore cannot produce `Connect complete`.
 

@@ -344,6 +344,12 @@ export interface ImportAccepted {
   readonly recordedId: string
   /** The candidate with local roots, checked against local files. */
   readonly candidate: ValidCandidate
+  /**
+   * The checkout HEAD each `counterevidence` item was recorded at, by the root
+   * the run recorded it under. A local root cannot key it: two recorded
+   * checkouts can map to one local root.
+   */
+  readonly evidenceHeads: ReadonlyArray<string | undefined>
   readonly record: CandidateRecord
   /** The id computed from local roots. */
   readonly id: string
@@ -785,6 +791,9 @@ function verifyOne(
   return {
     recordedId: shape.id,
     candidate: checked.candidate,
+    evidenceHeads: shape.counterevidence.map(
+      (ref) => landings.projectOf(ref.project)?.commit,
+    ),
     record,
     id: candidateIdentity(record),
   }
@@ -997,21 +1006,6 @@ export function renderImportSummary(
   return out.join('\n')
 }
 
-/**
- * The checkout HEAD each mapped project had when the run read it, by the local
- * root a candidate's evidence names. The record's HEAD is the one that shows
- * which revision the evidence came from; the local one is on the projects list.
- */
-function ciHeads(projects: readonly ProjectReport[]): Map<string, string> {
-  const heads = new Map<string, string>()
-  for (const project of projects) {
-    if (project.localRoot !== undefined && project.ciCommit !== undefined) {
-      heads.set(project.localRoot, project.ciCommit)
-    }
-  }
-  return heads
-}
-
 /** The digest of an import run, with the same quoting a local digest uses. */
 export function renderImportDigest(
   model: ImportModel,
@@ -1040,9 +1034,9 @@ export function renderImportDigest(
     '',
   ]
   if (written.length === 0) out.push('None.', '')
-  const heads = ciHeads(model.projects)
+  // Each candidate brings the HEADs its evidence was recorded at.
   written.forEach((item, index) => {
-    out.push(...renderCandidate(item, index, heads))
+    out.push(...renderCandidate(item, index))
   })
   return `${out.join('\n').trimEnd()}\n`
 }

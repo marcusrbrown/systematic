@@ -3603,3 +3603,107 @@ describe('render: all retained state is checked before the cache or any artifact
     expect(out.stdout).not.toContain('gh cache delete')
   })
 })
+
+// ── Evidence repositories are checked from the stored payload ──────────────
+
+const GONE_ROOT = '/runner/work/connect/checkouts/gone__project'
+
+/**
+ * A day whose open `code-mismatch` candidate cites a file of `gone/project`
+ * and nothing else names that repository: it is not on the project list and
+ * its sources come from `other/repo`. The run record that listed it expires
+ * afterwards, so only the payload store still names it.
+ */
+function evidenceOnlyDay(box: Box): void {
+  const dir = seedHandoff(box, {
+    candidates: [
+      blockCandidate(1, {
+        kind: 'code-mismatch',
+        nextStep: 'refresh-learning',
+        reason: 'stale',
+        counterevidence: [
+          {
+            project: GONE_ROOT,
+            projectName: 'gone',
+            path: 'src/loader.ts',
+            start: 3,
+            end: 9,
+            fingerprint: sha('loader'),
+            excerpt: 'export const load = () => undefined',
+            cite: 'x',
+          },
+        ],
+      }),
+      blockCandidate(2),
+    ],
+  })
+  const runFile = path.join(dir, 'runs', CONNECT_RUN, 'run.json')
+  const record = JSON.parse(fs.readFileSync(runFile, 'utf8')) as {
+    projects: Json[]
+  }
+  record.projects.push({
+    name: 'gone',
+    root: GONE_ROOT,
+    key: 'abcdefabcdef',
+    repo: 'gone/project',
+    commit: 'c'.repeat(40),
+  })
+  fs.writeFileSync(runFile, JSON.stringify(record))
+  expect(renderDay(box, DATE_ONE).render.exitCode).toBe(0)
+  fs.rmSync(path.join(stateRootOf(box), 'runs'), {
+    recursive: true,
+    force: true,
+  })
+}
+
+describe('prepare and render: an evidence-only repository is rechecked from the payload store', () => {
+  const rechecks: Array<[string, (box: Box) => StepResult]> = [
+    ['prepare', (box) => recheckPrepare(box, 'acme/target other/repo')],
+    ['render', (box) => recheckRender(box, 'acme/target other/repo')],
+  ]
+  for (const [job, recheck] of rechecks) {
+    for (const verdict of ['private', 'ERROR']) {
+      it(`${job} fails red when the repository only an open candidate's evidence cites is ${verdict === 'ERROR' ? 'unreadable' : 'private'}`, () => {
+        const box = makeBox()
+        evidenceOnlyDay(box)
+        PRIVATE_NOW(box, 'gone__project', verdict)
+        const result = recheck(box)
+        expect(result.exitCode).toBe(1)
+        expect(result.stdout).toContain('gone/project')
+        for (const phrase of RECOVERY) expect(result.stdout).toContain(phrase)
+        expect(result.outputs.has('repos')).toBe(false)
+        expect(ghWrites(box)).toEqual([])
+      })
+    }
+
+    it(`${job} lists the evidence repository once it is public`, () => {
+      const box = makeBox()
+      evidenceOnlyDay(box)
+      const result = recheck(box)
+      expect(result.exitCode).toBe(0)
+      expect((result.outputs.get('repos') ?? '').split(' ').sort()).toEqual([
+        'acme/target',
+        'gone/project',
+        'other/repo',
+      ])
+    })
+
+    it(`${job} fails closed on stored evidence whose repository cannot be named`, () => {
+      const box = makeBox()
+      evidenceOnlyDay(box)
+      const store = path.join(stateRootOf(box), 'ci-payloads.json')
+      const text = fs.readFileSync(store, 'utf8')
+      const parsed = JSON.parse(text) as {
+        payloads: Array<{ evidence?: Array<Record<string, unknown>> }>
+      }
+      for (const payload of parsed.payloads) {
+        for (const item of payload.evidence ?? []) delete item.repo
+      }
+      fs.writeFileSync(store, JSON.stringify(parsed))
+      expect(JSON.stringify(parsed)).toContain('src/loader.ts')
+      const result = recheck(box)
+      expect(result.exitCode).toBe(1)
+      expect(result.outputs.has('repos')).toBe(false)
+    })
+  }
+})

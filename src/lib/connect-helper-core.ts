@@ -315,6 +315,8 @@ const MAX_BATCH_RULE_IDS = 500
 const MAX_BATCH_PROJECTS = 64
 const MAX_BATCH_LIST = 50
 const MAX_BATCH_ITEM_LENGTH = 300
+/** A `files` entry may be a project root (up to 4,096 characters), a slash and a path. */
+const MAX_BATCH_FILE_LENGTH = 4096 + 1 + MAX_BATCH_ITEM_LENGTH
 const MAX_BATCH_CANDIDATES = 200
 
 /** One rule family's report: what it covered and what it proposed. */
@@ -389,7 +391,7 @@ export function parseBatch(text: string, runId: string): BatchParse {
   }
   const ruleIds = stringList(value.ruleIds, MAX_BATCH_RULE_IDS, 100)
   const projects = stringList(value.projects, MAX_BATCH_PROJECTS, 4096)
-  const files = stringList(value.files, MAX_BATCH_LIST, MAX_BATCH_ITEM_LENGTH)
+  const files = stringList(value.files, MAX_BATCH_LIST, MAX_BATCH_FILE_LENGTH)
   const searches = stringList(
     value.searches,
     MAX_BATCH_LIST,
@@ -445,6 +447,37 @@ export interface CoverageInput {
    * alone was read is not covered. A rule with no path here owes no read.
    */
   readonly learningPaths?: ReadonlyMap<string, string>
+  /**
+   * The root of the project each rule belongs to. Two projects can hold a
+   * learning at one relative path, so with a root a batch's read is the path
+   * under that root (`<root>/<path>`), or the bare path when no other rule the
+   * batch names has it in another project. A rule with no root here is matched
+   * on the bare path alone.
+   */
+  readonly learningProjects?: ReadonlyMap<string, string>
+}
+
+/** Whether a complete batch's `files` show that it read the learning of rule `id`. */
+function listsLearning(
+  input: CoverageInput,
+  batch: Batch,
+  listed: ReadonlySet<string>,
+  id: string,
+): boolean {
+  const learning = input.learningPaths?.get(id)
+  if (learning === undefined) return true
+  const root = input.learningProjects?.get(id)
+  if (root === undefined) return listed.has(learning)
+  if (listed.has(`${root.replace(/\/+$/, '')}/${learning}`)) return true
+  if (!listed.has(learning)) return false
+  // A bare path is this project's only when no other rule in the batch has
+  // the same path in another project: the entry could be either read.
+  return !batch.ruleIds.some(
+    (other) =>
+      other !== id &&
+      input.learningPaths?.get(other) === learning &&
+      input.learningProjects?.get(other) !== root,
+  )
 }
 
 /**
@@ -473,10 +506,9 @@ export function checkCoverage(input: CoverageInput): Coverage {
   const covered = new Set(
     complete.flatMap((batch) => {
       const listed = new Set(batch.files)
-      return batch.ruleIds.filter((id) => {
-        const learning = input.learningPaths?.get(id)
-        return learning === undefined || listed.has(learning)
-      })
+      return batch.ruleIds.filter((id) =>
+        listsLearning(input, batch, listed, id),
+      )
     }),
   )
   const touched = new Set(input.batches.flatMap((batch) => batch.projects))
@@ -1500,6 +1532,14 @@ export interface DigestCandidate {
   readonly refreshPointer?: string
   readonly possibleMatches: readonly string[]
   readonly candidate: ValidCandidate
+  /**
+   * The checkout HEAD each `counterevidence` item was recorded at, in the same
+   * order. An import sets it, because it cannot find an item's HEAD by the item's
+   * local root: two recorded checkouts can map to one local root. An entry is
+   * undefined when the recorded checkout had no HEAD. Left out, an item's HEAD
+   * is looked up by its project root.
+   */
+  readonly evidenceHeads?: ReadonlyArray<string | undefined>
 }
 
 export interface RecordedConnection {
@@ -1686,11 +1726,13 @@ function renderSourceBlock(
 function renderMismatchEvidence(
   items: readonly ValidSource[],
   heads: ReadonlyMap<string, string>,
+  recorded: ReadonlyArray<string | undefined> | undefined,
 ): string[] {
   if (items.length === 0) return []
   const out = ['Evidence:', '']
-  for (const item of items) {
-    const head = heads.get(item.project)
+  for (const [index, item] of items.entries()) {
+    const head =
+      recorded === undefined ? heads.get(item.project) : recorded[index]
     const span = `${item.path}:${item.start ?? '?'}-${item.end ?? '?'}`
     out.push(
       `- ${inline(item.projectName)} ${inline(span)} fingerprint ${inline(item.fingerprint)} ${head === undefined ? 'HEAD unavailable' : `HEAD ${inline(head)}`}`,
@@ -1753,7 +1795,11 @@ export function renderCandidate(
   }
   out.push(
     ...(candidate.kind === 'code-mismatch'
-      ? renderMismatchEvidence(candidate.counterevidence, heads)
+      ? renderMismatchEvidence(
+          candidate.counterevidence,
+          heads,
+          item.evidenceHeads,
+        )
       : renderSourceBlock('Counterevidence:', candidate.counterevidence)),
   )
   out.push(

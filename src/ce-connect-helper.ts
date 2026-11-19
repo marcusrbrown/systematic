@@ -598,6 +598,8 @@ interface AcceptedCandidate {
   readonly refreshPointer?: string
   readonly possibleMatches: readonly string[]
   readonly candidate: ValidCandidate
+  /** The checkout HEAD each `counterevidence` item was recorded at, for an import. */
+  readonly evidenceHeads?: ReadonlyArray<string | undefined>
 }
 
 interface BatchSummary {
@@ -2030,6 +2032,14 @@ function runValidation(
         rule.path === undefined ? [] : [[rule.id, rule.path] as const],
       ),
     ),
+    learningProjects: new Map(
+      snapshot.ruleVersions.flatMap((rule) => {
+        const root = snapshot.projects.find(
+          (project) => project.key === rule.project,
+        )?.root
+        return root === undefined ? [] : [[rule.id, root] as const]
+      }),
+    ),
   })
   // A rule whose candidate was lost to changed evidence is not covered, even
   // when a complete family named it: nothing was learned about it this run.
@@ -2733,6 +2743,9 @@ function ledgerShow(request: unknown, deps: HelperDeps): HelperResult {
         ? {}
         : { destination: entry.destination }),
       ...(entry.reopened === undefined ? {} : { reopened: entry.reopened }),
+      ...(entry.reopenedFor === undefined
+        ? {}
+        : { reopenedFor: entry.reopenedFor }),
       ...(entry.mismatchReason === undefined
         ? {}
         : { mismatchReason: entry.mismatchReason }),
@@ -2951,6 +2964,9 @@ function freshOf(
       : { refreshPointer: extra.refreshPointer }),
     possibleMatches: extra.possibleMatches ?? [],
     candidate: item.candidate,
+    ...(item.evidenceHeads === undefined
+      ? {}
+      : { evidenceHeads: item.evidenceHeads }),
     record: item.record,
   }
 }

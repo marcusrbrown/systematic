@@ -456,6 +456,11 @@ interface PayloadSource {
  */
 interface PayloadEvidence {
   readonly projectName: string
+  /**
+   * The `owner/repo` the file belongs to, so the visibility rechecks can name
+   * a repository only this candidate cites. Absent when it could not be named.
+   */
+  readonly repo?: string
   readonly path: string
   readonly start?: number
   readonly end?: number
@@ -498,6 +503,9 @@ type PayloadText = Pick<
 /** Each project's recorded checkout HEAD, by the root a candidate names it by. */
 type Heads = ReadonlyMap<string, string>
 
+/** Each project's `owner/repo`, by the same root. */
+type Repos = ReadonlyMap<string, string>
+
 function sourceOf(item: unknown): PayloadSource | undefined {
   if (!isRecord(item)) return undefined
   const sourcePath = lineOf(item.path, LIMITS.path)
@@ -525,6 +533,7 @@ function spanOf(
 function evidenceItemOf(
   item: unknown,
   heads: Heads,
+  repos: Repos,
 ): PayloadEvidence | undefined {
   if (!isRecord(item)) return undefined
   const evidencePath = lineOf(item.path, LIMITS.path)
@@ -537,8 +546,15 @@ function evidenceItemOf(
       : typeof item.project === 'string'
         ? heads.get(item.project)
         : undefined
+  const repo =
+    typeof item.repo === 'string' && REPO.test(item.repo)
+      ? item.repo
+      : typeof item.project === 'string'
+        ? repos.get(item.project)
+        : undefined
   return {
     projectName: lineOf(item.projectName, LIMITS.name) ?? 'unknown',
+    ...(repo === undefined ? {} : { repo }),
     path: evidencePath,
     ...(span === undefined ? {} : span),
     ...(head === undefined ? {} : { head }),
@@ -550,6 +566,7 @@ function mismatchFields(
   raw: Record<string, unknown>,
   kind: string,
   heads: Heads,
+  repos: Repos,
 ): Pick<PayloadText, 'reason' | 'evidence'> {
   if (kind !== 'code-mismatch') return {}
   const reason = MISMATCH_REASONS.find((known) => known === raw.reason)
@@ -558,7 +575,7 @@ function mismatchFields(
   const evidence = Array.isArray(list)
     ? (list as unknown[])
         .slice(0, CANDIDATE_LIMITS.counterevidence)
-        .flatMap((item) => evidenceItemOf(item, heads) ?? [])
+        .flatMap((item) => evidenceItemOf(item, heads, repos) ?? [])
     : []
   return {
     ...(reason === undefined ? {} : { reason }),
@@ -567,7 +584,11 @@ function mismatchFields(
 }
 
 /** The display fields of a candidate, from a run record or from the store. */
-function payloadText(raw: unknown, heads: Heads): PayloadText | undefined {
+function payloadText(
+  raw: unknown,
+  heads: Heads,
+  repos: Repos,
+): PayloadText | undefined {
   if (!isRecord(raw) || !Array.isArray(raw.sources)) return undefined
   const title = lineOf(raw.title, LIMITS.title)
   const summary = paragraphOf(raw.summary, LIMITS.summary)
@@ -583,13 +604,13 @@ function payloadText(raw: unknown, heads: Heads): PayloadText | undefined {
     nextStep: tokenOf(raw.nextStep),
     targetName: lineOf(raw.targetName, LIMITS.name) ?? 'unknown',
     sources,
-    ...mismatchFields(raw, kind, heads),
+    ...mismatchFields(raw, kind, heads, repos),
   }
 }
 
 function payloadFromStore(raw: unknown): Payload | undefined {
   if (!isRecord(raw) || !isCandidateId(raw.id)) return undefined
-  const text = payloadText(raw, new Map())
+  const text = payloadText(raw, new Map(), new Map())
   if (text === undefined) return undefined
   if (!isDigits(raw.runId) || !isDigits(raw.attempt)) return undefined
   const { repo, firstShown } = raw
@@ -1109,7 +1130,11 @@ function proposed(
   const out = new Map<string, Payload>()
   for (const raw of run?.candidates ?? []) {
     if (!isRecord(raw) || !isCandidateId(raw.id) || !open.has(raw.id)) continue
-    const text = payloadText(raw, run?.commitByRoot ?? new Map())
+    const text = payloadText(
+      raw,
+      run?.commitByRoot ?? new Map(),
+      run?.repoByRoot ?? new Map(),
+    )
     if (text === undefined) continue
     const target = typeof raw.target === 'string' ? raw.target : undefined
     const repo = target === undefined ? undefined : run?.repoByRoot.get(target)

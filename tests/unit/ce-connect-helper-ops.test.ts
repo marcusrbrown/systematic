@@ -1757,6 +1757,46 @@ describe('validate and publish', () => {
     expect((validated.coverage as Json).learningUnreadRuleIds).toEqual([])
   })
 
+  describe('when two projects hold a learning at one relative path', () => {
+    const SHARED = 'docs/solutions/lock-reclaim.md'
+
+    function sharedPathRun(files: (world: World) => string[]) {
+      const world = buildWorld({ targetFiles: { [SHARED]: LOCK_LEARNING } })
+      const rules = [
+        world.ruleId,
+        ruleIdFor(world.target, SHARED),
+        ruleIdFor(world.target, 'docs/solutions/lock-now.md'),
+      ]
+      const { validated } = fullRun(world, [], {
+        batch: { ruleIds: rules, files: files(world) },
+      })
+      return { world, validated, targetRule: rules[1] as string }
+    }
+
+    it("leaves the other project's rule uncovered when the batch lists the read of only one", () => {
+      const { validated, targetRule } = sharedPathRun((world) => [
+        `${world.source}/${SHARED}`,
+        'docs/solutions/lock-now.md',
+      ])
+      expect(validated.pendingOutcome).toBe('degraded')
+      expect((validated.coverage as Json).uncoveredRuleIds).toEqual([
+        targetRule,
+      ])
+      expect((validated.coverage as Json).learningUnreadRuleIds).toEqual([
+        targetRule,
+      ])
+    })
+
+    it("covers both when each project's read is listed under its own root", () => {
+      const { validated } = sharedPathRun((world) => [
+        `${world.source}/${SHARED}`,
+        `${world.target}/${SHARED}`,
+        'docs/solutions/lock-now.md',
+      ])
+      expect(validated.pendingOutcome).toBe('complete')
+    })
+  })
+
   it('owes no read for a run begun before learning paths were kept', () => {
     const world = buildWorld()
     const run = start(world)
@@ -4231,7 +4271,8 @@ describe('a decided code-mismatch candidate across runs', () => {
     expect((shown.entries as Json[])[0]).toMatchObject({
       id,
       status: 'candidate',
-      reopened: 'evidence changed',
+      reopened: 'target changed',
+      reopenedFor: 'evidence changed',
       mismatchReason: 'stale',
     })
   })

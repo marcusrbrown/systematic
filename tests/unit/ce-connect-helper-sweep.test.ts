@@ -154,6 +154,13 @@ function start(world: World, selection: readonly string[] = []): Started {
   }
 }
 
+/** The learnings `names` of both projects, each under its own root: the paths are the same in both. */
+function learningFiles(world: World, names: readonly string[]): string[] {
+  return [world.alpha, world.beta].flatMap((root) =>
+    names.map((name) => `${root}/docs/solutions/${name}.md`),
+  )
+}
+
 function batch(
   world: World,
   run: Started,
@@ -167,7 +174,8 @@ function batch(
     ruleIds,
     projects: [world.alpha, world.beta],
     // Every learning of the world, as a family that read them all lists them.
-    files: NAMES.map((name) => `docs/solutions/${name}.md`),
+    // Both projects hold each path, so each is listed under its own root.
+    files: learningFiles(world, NAMES),
     searches: ['search'],
     complete: true,
     candidates: [],
@@ -420,7 +428,9 @@ describe('rotation across runs', () => {
     const listed = writeBatch(
       run,
       'family-1.json',
-      batch(world, run, run.offered, { files: ['docs/solutions/one.md'] }),
+      batch(world, run, run.offered, {
+        files: learningFiles(world, ['one']),
+      }),
     )
     const validated = validate(world, run, [listed])
     const published = publish(world, run)

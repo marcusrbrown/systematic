@@ -871,6 +871,19 @@ export type ReopenReason =
   | 'target changed'
   | 'evidence changed'
 
+/**
+ * What a ledger file keeps in `reopened`. The helper shipped before
+ * `code-mismatch` reads only these two values and rejects the whole ledger on
+ * any other, so a downgrade would lose every decision. An evidence reopen is
+ * written as `target changed` (a recorded evidence file is the code side of the
+ * claim, as a target evidence file is for a lesson) and its own reason goes in
+ * `reopenedFor`, which that reader ignores.
+ */
+export type StoredReopenReason = Exclude<ReopenReason, 'evidence changed'>
+
+/** The reason an evidence reopen carries beside its stored `reopened`. */
+export type ReopenedFor = Extract<ReopenReason, 'evidence changed'>
+
 export interface LedgerSource {
   readonly role: string
   readonly path: string
@@ -883,6 +896,8 @@ export interface LedgerHistoryItem {
   readonly reason?: string
   readonly destination?: string
   readonly reopened?: ReopenReason
+  /** Set when `reopened` stands in for `evidence changed`. */
+  readonly reopenedFor?: ReopenedFor
   readonly sources: readonly LedgerSource[]
   readonly targetEvidence: readonly TargetEvidenceRef[]
   /** Why the `code-mismatch` candidate was proposed. Not the decision `reason`. */
@@ -906,6 +921,8 @@ export interface LedgerEntry {
   readonly reason?: string
   readonly destination?: string
   readonly reopened?: ReopenReason
+  /** Set when `reopened` stands in for `evidence changed`. */
+  readonly reopenedFor?: ReopenedFor
   readonly history: readonly LedgerHistoryItem[]
   readonly recordedAt: string
 }
@@ -967,6 +984,10 @@ function isReopenReason(value: unknown): value is ReopenReason {
   )
 }
 
+function isOptionalReopenedFor(value: unknown): boolean {
+  return value === undefined || value === 'evidence changed'
+}
+
 function isOptionalText(value: unknown, maxLength: number): boolean {
   return value === undefined || plainText(value, maxLength)
 }
@@ -1015,6 +1036,7 @@ function isHistoryItem(value: unknown): value is LedgerHistoryItem {
     isOptionalText(value.reason, MAX_REASON_LENGTH) &&
     isOptionalText(value.destination, MAX_PATH_LENGTH) &&
     (value.reopened === undefined || isReopenReason(value.reopened)) &&
+    isOptionalReopenedFor(value.reopenedFor) &&
     Array.isArray(value.sources) &&
     value.sources.every(isLedgerSource) &&
     Array.isArray(value.targetEvidence) &&
@@ -1040,6 +1062,7 @@ function isLedgerEntry(value: unknown): value is LedgerEntry {
     isOptionalText(value.reason, MAX_REASON_LENGTH) &&
     isOptionalText(value.destination, MAX_PATH_LENGTH) &&
     (value.reopened === undefined || isReopenReason(value.reopened)) &&
+    isOptionalReopenedFor(value.reopenedFor) &&
     Array.isArray(value.history) &&
     value.history.every(isHistoryItem) &&
     plainText(value.recordedAt, MAX_STRING_LENGTH)
@@ -1372,6 +1395,25 @@ function mismatchFields(candidate: CandidateRecord): {
   }
 }
 
+/** The entry with exactly this evidence; an empty list leaves the field out. */
+function withEvidence(
+  entry: LedgerEntry,
+  evidence: readonly EvidenceRef[],
+): LedgerEntry {
+  const { evidence: _recorded, ...rest } = entry
+  return evidence.length === 0 ? rest : { ...rest, evidence: [...evidence] }
+}
+
+/** The `reopened` a ledger file keeps for a reason, and the reason itself when the old reader cannot hold it. */
+function reopenedFields(reason: ReopenReason): {
+  reopened: StoredReopenReason
+  reopenedFor?: ReopenedFor
+} {
+  return reason === 'evidence changed'
+    ? { reopened: 'target changed', reopenedFor: reason }
+    : { reopened: reason }
+}
+
 function snapshot(entry: LedgerEntry): LedgerHistoryItem {
   return {
     status: entry.status,
@@ -1384,6 +1426,9 @@ function snapshot(entry: LedgerEntry): LedgerHistoryItem {
       ? {}
       : { destination: entry.destination }),
     ...(entry.reopened === undefined ? {} : { reopened: entry.reopened }),
+    ...(entry.reopenedFor === undefined
+      ? {}
+      : { reopenedFor: entry.reopenedFor }),
     sources: entry.sources,
     targetEvidence: entry.targetEvidence,
     recordedAt: entry.recordedAt,
@@ -1424,6 +1469,17 @@ function applyCandidates(
         history: [],
         recordedAt,
       })
+    } else if (
+      outcome.standing === 'suppressed' &&
+      outcome.priorStatus === 'candidate'
+    ) {
+      // An open entry a run publishes again is what its digest shows next, so a
+      // decision made from that digest must watch the evidence it cites.
+      entries = entries.map((entry) =>
+        entry.id === outcome.id
+          ? withEvidence(entry, normalizedEvidence(candidate))
+          : entry,
+      )
     } else if (outcome.standing === 'reopened') {
       entries = entries.map((entry) =>
         entry.id === outcome.id
@@ -1436,7 +1492,7 @@ function applyCandidates(
               targetEvidence: normalizedTargetEvidence(candidate),
               ...mismatchFields(candidate),
               status: 'candidate',
-              reopened: outcome.reason,
+              ...reopenedFields(outcome.reason),
               history: [...entry.history, snapshot(entry)].slice(-MAX_HISTORY),
               recordedAt,
             }

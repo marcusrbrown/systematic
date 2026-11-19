@@ -986,6 +986,7 @@ describe('renderReport', () => {
         evidence: [
           {
             projectName: 'infra',
+            repo: 'acme/infra',
             path: 'caddy/Caddyfile',
             start: 3,
             end: 9,
@@ -999,6 +1000,23 @@ describe('renderReport', () => {
       const { body } = rendered(root, { date: DAY_TWO, runId: '901' })
       expect(body).toContain('Reason: stale')
       expect(body).toContain(`- infra:caddy/Caddyfile:3-9:${INFRA_COMMIT}`)
+    })
+
+    it('stores no repository for evidence in a project the run record does not list, so the recheck fails closed on it', () => {
+      const root = seededMismatch(
+        mismatch({
+          counterevidence: [
+            evidenceItem({
+              project: '/runner/work/connect/checkouts/unlisted',
+            }),
+          ],
+        }),
+      )
+      rendered(root)
+      const [stored] = payloadsOf(root)
+      const evidence = (stored?.evidence ?? []) as Json[]
+      expect(evidence).toHaveLength(1)
+      expect(evidence[0]).not.toHaveProperty('repo')
     })
 
     it('prints no reason or evidence for a kind that has none', () => {

@@ -1564,6 +1564,47 @@ describe('import: a code-mismatch candidate carries its reason and evidence', ()
     expect(digest).not.toContain('HEAD unavailable')
   })
 
+  it('labels each evidence with the HEAD of the checkout it was recorded in when two recorded checkouts map to one local root', () => {
+    const world = buildWorld()
+    const record = mismatchRecord()
+    const FIRST = 'a'.repeat(40)
+    const SECOND = 'c'.repeat(40)
+    const SECOND_ROOT = '/runner/work/connect/checkouts/acme__source-again'
+    const [first] = list(record.projects)
+    if (first === undefined) throw new Error('no project')
+    // The same repository recorded under a second checkout at another commit.
+    record.projects = [
+      ...list(record.projects),
+      {
+        ...first,
+        name: 'acme__source-again',
+        root: SECOND_ROOT,
+        key: projectKey(SECOND_ROOT),
+        commit: SECOND,
+      },
+    ]
+    const [evidence] = list(candidateOf(record).counterevidence)
+    if (evidence === undefined) throw new Error('no evidence')
+    candidateOf(record).counterevidence = [
+      evidence,
+      {
+        ...evidence,
+        project: SECOND_ROOT,
+        projectName: 'acme__source-again',
+        excerpt: 'Record the holder start time next to the pid.',
+        start: 13,
+        end: 13,
+      },
+    ]
+    const body = ok(importOp(world, downloaded(record)))
+    expect(list(body.refused)).toEqual([])
+    const digest = fs.readFileSync(body.digestPath as string, 'utf8')
+    const line = (span: string): string =>
+      digest.split('\n').find((text) => text.includes(span)) ?? ''
+    expect(line('lock-reclaim.md:9-9')).toContain(`HEAD \`${FIRST}\``)
+    expect(line('lock-reclaim.md:13-13')).toContain(`HEAD \`${SECOND}\``)
+  })
+
   it('refuses a record whose reason was changed after the id was made', () => {
     const world = buildWorld()
     const record = mismatchRecord()
@@ -1681,6 +1722,61 @@ describe('import: a code-mismatch candidate carries its reason and evidence', ()
       expect(ledgerEntries(world)).toHaveLength(1)
     })
 
+    it('binds a decision made from a reimport to the evidence that import cited', () => {
+      const world = buildWorld()
+      const first = ok(importOp(world, downloaded(mismatchRecord())))
+      const id = String(list(first.candidates)[0]?.id)
+
+      // The same claim again, citing another file (B) in place of the first (A).
+      const code = fixtureFiles('target')['src/lock.ts'] ?? ''
+      const citingB = (bytes: string): Json => {
+        const record = mismatchRecord()
+        candidateOf(record).counterevidence = [
+          {
+            project: '/runner/work/connect/checkouts/acme__target',
+            projectName: 'acme__target',
+            path: 'src/lock.ts',
+            fingerprint: sha256(bytes),
+            excerpt: 'export function reclaimLock(path: string): boolean {',
+            cite: 'x',
+            start: 3,
+            end: 3,
+          },
+        ]
+        return record
+      }
+      const second = ok(importOp(world, downloaded(citingB(code))))
+      expect(second.imported).toBe(1)
+      expect(list(ledgerEntries(world)[0]?.evidence)).toMatchObject([
+        { path: 'src/lock.ts', fingerprint: sha256(code) },
+      ])
+
+      decideLedgerEntry(world.stateRoot, {
+        id,
+        status: 'rejected',
+        reason: 'checked by hand',
+      })
+
+      // A, which the decision was not made from, changing does not reopen it.
+      fs.writeFileSync(
+        path.join(world.source, 'docs/solutions/lock-reclaim.md'),
+        `${EVIDENCE_FILE}\nA later line.\n`,
+      )
+      const quiet = ok(importOp(world, downloaded(citingB(code))))
+      expect(quiet.imported).toBe(0)
+      expect(list(quiet.skipped)[0]).toMatchObject({
+        reason: 'rejected-locally',
+      })
+
+      // B, which it was, changing does.
+      const changed = `${code}// later\n`
+      fs.writeFileSync(path.join(world.target, 'src/lock.ts'), changed)
+      const reopened = ok(importOp(world, downloaded(citingB(changed))))
+      expect(reopened.imported).toBe(1)
+      expect(list(reopened.skipped)).toEqual([])
+      expect(list(reopened.candidates)[0]?.standing).toBe('evidence changed')
+    })
+
     it('skips a candidate rejected here when its evidence is the same bytes', () => {
       const world = buildWorld()
       const dir = downloaded(mismatchRecord())
@@ -1748,7 +1844,8 @@ describe('import: a code-mismatch candidate carries its reason and evidence', ()
       expect(entry).toMatchObject({
         id,
         status: 'candidate',
-        reopened: 'evidence changed',
+        reopened: 'target changed',
+        reopenedFor: 'evidence changed',
       })
       expect(list(entry?.evidence)[0]?.fingerprint).toBe(sha256(changed))
 

@@ -71,7 +71,7 @@ The types matter, because the helper rejects the whole answer on a wrong one:
 
 - `ruleIds`, `projects`, `files` and `searches` are lists of plain strings. Nothing in them is an object.
 - Each entry of `projects` is a project root exactly as written after `projects:` in your instructions, an absolute path. Never a project name.
-- Each entry of `files` is a path relative to its project root, as in the files index. Each entry of `searches` is one short string, such as the pattern you searched. `files` holds at most 50 entries, so list the learnings first and other files after.
+- Each entry of `files` is a path relative to its project root, as in the files index. When two rules you name have learnings at the same relative path in different projects, write each as its project root, a `/` and the path, so the helper can tell which you read. Each entry of `searches` is one short string, such as the pattern you searched. `files` holds at most 50 entries, so list the learnings first and other files after.
 - `complete` is `true` or `false`, never a string. `start` and `end` are whole numbers.
 - A candidate has exactly the fields shown below and no others. It has no `id`, `type`, `urgency` or `description`.
 

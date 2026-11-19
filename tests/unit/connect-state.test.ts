@@ -1365,7 +1365,172 @@ describe('candidateIdentity for a code-mismatch candidate', () => {
   })
 })
 
+/**
+ * The ledger validation of the shipped helper (v3.35.3, `connect-state.ts` on
+ * `origin/main`): an entry or history item is read by its named fields only, a
+ * `reopened` value is one of two, and one bad entry makes the whole ledger
+ * unreadable. Copied here, not imported, because it is the reader a rollback
+ * puts back; this copy must not follow the current reader.
+ */
+function shippedReaderAccepts(text: string): boolean {
+  const record = (v: unknown): v is Record<string, unknown> =>
+    typeof v === 'object' && v !== null && !Array.isArray(v)
+  const plain = (v: unknown, max: number): boolean =>
+    typeof v === 'string' &&
+    v.length > 0 &&
+    v.length <= max &&
+    !/\p{Cc}/u.test(v)
+  const optional = (v: unknown, max: number): boolean =>
+    v === undefined || plain(v, max)
+  const reopened = (v: unknown): boolean =>
+    v === undefined || v === 'sources changed' || v === 'target changed'
+  const source = (v: unknown): boolean =>
+    record(v) &&
+    plain(v.role, 512) &&
+    plain(v.path, 4096) &&
+    plain(v.fingerprint, 128)
+  const targetEvidence = (v: unknown): boolean =>
+    record(v) && plain(v.path, 4096) && plain(v.fingerprint, 128)
+  const status = (v: unknown): boolean =>
+    v === 'candidate' || v === 'promoted' || v === 'rejected'
+  const shared = (v: Record<string, unknown>): boolean =>
+    status(v.status) &&
+    optional(v.reason, 500) &&
+    optional(v.destination, 4096) &&
+    reopened(v.reopened) &&
+    Array.isArray(v.sources) &&
+    v.sources.every(source) &&
+    Array.isArray(v.targetEvidence) &&
+    v.targetEvidence.every(targetEvidence) &&
+    plain(v.recordedAt, 512)
+  const historyItem = (v: unknown): boolean => record(v) && shared(v)
+  const entry = (v: unknown): boolean =>
+    record(v) &&
+    plain(v.id, 512) &&
+    plain(v.kind, 512) &&
+    plain(v.target, 4096) &&
+    plain(v.ruleId, 512) &&
+    shared(v) &&
+    Array.isArray(v.history) &&
+    v.history.every(historyItem)
+  try {
+    const value: unknown = JSON.parse(text)
+    return (
+      record(value) &&
+      (value.version === 1 || value.version === 2) &&
+      Array.isArray(value.entries) &&
+      value.entries.every(entry)
+    )
+  } catch {
+    return false
+  }
+}
+
 describe('a decided code-mismatch candidate', () => {
+  it('writes a ledger the shipped reader still loads after an evidence reopen', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const id = ledgerEntries(s.root)[0]?.id ?? ''
+    decide(s, id, 'rejected')
+    s.publish(
+      'run-2',
+      [mismatch()],
+      undefined,
+      inventory({ [EVIDENCE_KEY]: present('E2') }),
+    )
+    const written = fs.readFileSync(path.join(s.root, 'ledger.json'), 'utf8')
+    expect(shippedReaderAccepts(written)).toBe(true)
+    // The reopen is in the ledger under a value the old reader knows,
+    // and its true reason is in a field the old reader ignores.
+    expect(ledgerEntries(s.root)[0]).toMatchObject({
+      status: 'candidate',
+      reopened: 'target changed',
+      reopenedFor: 'evidence changed',
+    })
+
+    // The next reopen moves it into history, which the old reader reads too.
+    decide(s, id, 'rejected')
+    s.publish(
+      'run-3',
+      [mismatch()],
+      undefined,
+      inventory({ [EVIDENCE_KEY]: present('E3') }),
+    )
+    const again = fs.readFileSync(path.join(s.root, 'ledger.json'), 'utf8')
+    expect(shippedReaderAccepts(again)).toBe(true)
+    expect(ledgerEntries(s.root)[0]?.history).toHaveLength(2)
+  })
+
+  it('keeps reopenedFor on the history item of an entry that is reopened again', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const id = ledgerEntries(s.root)[0]?.id ?? ''
+    decide(s, id, 'rejected')
+    s.publish(
+      'run-2',
+      [mismatch()],
+      undefined,
+      inventory({ [EVIDENCE_KEY]: present('E2') }),
+    )
+    expect(ledgerEntries(s.root)[0]).toMatchObject({
+      reopened: 'target changed',
+      reopenedFor: 'evidence changed',
+    })
+
+    // The entry was never decided again, so the next reopen (the learning
+    // changed) moves the evidence reopen into history as it stood.
+    const changedLearning = mismatch({
+      sources: [
+        {
+          role: `source@${LEARNING_PROJECT}`,
+          path: LEARNING_PATH,
+          fingerprint: 'L2',
+        },
+      ],
+    })
+    expect(
+      publishedOutcomes(s.publish('run-3', [changedLearning])),
+    ).toMatchObject([{ standing: 'reopened', reason: 'sources changed' }])
+
+    const [entry] = ledgerEntries(s.root)
+    expect(entry).toMatchObject({ reopened: 'sources changed' })
+    expect(entry).not.toHaveProperty('reopenedFor')
+    expect(entry?.history).toHaveLength(2)
+    expect(entry?.history[1]).toMatchObject({
+      status: 'candidate',
+      reopened: 'target changed',
+      reopenedFor: 'evidence changed',
+    })
+    const written = fs.readFileSync(path.join(s.root, 'ledger.json'), 'utf8')
+    expect(shippedReaderAccepts(written)).toBe(true)
+  })
+
+  it('does not accept the fixture reader for a value only the current reader knows', () => {
+    const entry = {
+      id: 'x',
+      kind: 'k',
+      target: '/t',
+      ruleId: 'r',
+      sources: [],
+      targetEvidence: [],
+      status: 'candidate',
+      reopened: 'evidence changed',
+      history: [],
+      recordedAt: '2026-11-12T00:00:00.000Z',
+    }
+    expect(
+      shippedReaderAccepts(JSON.stringify({ version: 2, entries: [entry] })),
+    ).toBe(false)
+    expect(
+      shippedReaderAccepts(
+        JSON.stringify({
+          version: 2,
+          entries: [{ ...entry, reopened: 'target changed' }],
+        }),
+      ),
+    ).toBe(true)
+  })
+
   it('reopens as "evidence changed" when an evidence file in another project changes', () => {
     const s = session()
     s.publish('run-1', [mismatch()])
@@ -1389,7 +1554,8 @@ describe('a decided code-mismatch candidate', () => {
     ])
     expect(ledgerEntries(s.root)[0]).toMatchObject({
       status: 'candidate',
-      reopened: 'evidence changed',
+      reopened: 'target changed',
+      reopenedFor: 'evidence changed',
     })
   })
 
@@ -1450,7 +1616,8 @@ describe('a decided code-mismatch candidate', () => {
       )
       expect(ledgerEntries(s.root)[0]).toMatchObject({
         status: 'candidate',
-        reopened: 'evidence changed',
+        reopened: 'target changed',
+        reopenedFor: 'evidence changed',
         evidence: [
           { project: EVIDENCE_PROJECT, path: 'Caddyfile', fingerprint: 'E1' },
         ],
@@ -1471,6 +1638,83 @@ describe('a decided code-mismatch candidate', () => {
       decide(s, ledgerEntries(s.root)[0]?.id ?? '', 'rejected')
       const outcomes = publishedOutcomes(s.publish('run-3', [mismatch()]))
       expect(outcomes.map((o) => o.standing)).toEqual(['suppressed'])
+    })
+  })
+
+  describe('an open entry published again with other evidence', () => {
+    const A = { project: EVIDENCE_PROJECT, path: 'a.conf', fingerprint: 'A1' }
+    const B = { project: EVIDENCE_PROJECT, path: 'b.conf', fingerprint: 'B1' }
+    const A_KEY = `${EVIDENCE_PROJECT}:a.conf`
+    const B_KEY = `${EVIDENCE_PROJECT}:b.conf`
+
+    /** Open with evidence A, then published again citing B, then decided from that. */
+    function decidedOnB(): { s: Session; id: string } {
+      const s = session()
+      s.publish('run-1', [mismatch({ evidence: [A] })])
+      const id = ledgerEntries(s.root)[0]?.id ?? ''
+      const again = publishedOutcomes(
+        s.publish('run-2', [mismatch({ evidence: [B] })]),
+      )
+      expect(again.map((o) => o.standing)).toEqual(['suppressed'])
+      decide(s, id, 'rejected')
+      return { s, id }
+    }
+
+    it('records the evidence of the run that published it, and nothing else about the entry changes', () => {
+      const s = session()
+      s.publish('run-1', [mismatch({ evidence: [A] })])
+      const [before] = ledgerEntries(s.root)
+      s.publish('run-2', [mismatch({ evidence: [B] })])
+      const [after] = ledgerEntries(s.root)
+      expect(after?.evidence).toEqual([B])
+      expect({ ...after, evidence: undefined }).toEqual({
+        ...before,
+        evidence: undefined,
+      })
+    })
+
+    it('reopens when the evidence the decision was made from changes', () => {
+      const { s } = decidedOnB()
+      const outcomes = publishedOutcomes(
+        s.publish(
+          'run-3',
+          [mismatch({ evidence: [B] })],
+          undefined,
+          inventory({ [A_KEY]: present('A1'), [B_KEY]: present('B2') }),
+        ),
+      )
+      expect(outcomes).toMatchObject([
+        {
+          standing: 'reopened',
+          reason: 'evidence changed',
+          priorStatus: 'rejected',
+        },
+      ])
+    })
+
+    it('does not reopen when only the evidence it was replaced by changes', () => {
+      const { s } = decidedOnB()
+      const outcomes = publishedOutcomes(
+        s.publish(
+          'run-3',
+          [mismatch({ evidence: [B] })],
+          undefined,
+          inventory({ [A_KEY]: present('A2'), [B_KEY]: present('B1') }),
+        ),
+      )
+      expect(outcomes.map((o) => o.standing)).toEqual(['suppressed'])
+    })
+
+    it('leaves a decided entry as it is when a run publishes it again', () => {
+      const s = session()
+      s.publish('run-1', [mismatch({ evidence: [A] })])
+      decide(s, ledgerEntries(s.root)[0]?.id ?? '', 'rejected')
+      const before = fs.readFileSync(path.join(s.root, 'ledger.json'), 'utf8')
+      s.publish('run-2', [mismatch({ evidence: [B] })])
+      expect(ledgerEntries(s.root)[0]?.evidence).toEqual([A])
+      expect(fs.readFileSync(path.join(s.root, 'ledger.json'), 'utf8')).toBe(
+        before,
+      )
     })
   })
 
@@ -1769,7 +2013,8 @@ describe('the ledger fields of a code-mismatch entry', () => {
     )
     const [entry] = ledgerEntries(s.root)
     expect(entry).toMatchObject({
-      reopened: 'evidence changed',
+      reopened: 'target changed',
+      reopenedFor: 'evidence changed',
       mismatchReason: 'stale',
       evidence: [{ fingerprint: 'E2' }],
     })

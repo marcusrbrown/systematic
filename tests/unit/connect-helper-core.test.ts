@@ -428,6 +428,27 @@ describe('parseBatch', () => {
     ).toBe(false)
   })
 
+  it('takes a file entry that holds a project root and a path, and no longer one', () => {
+    const entry = (length: number): string => `/${'r'.repeat(length - 1)}`
+    // A project root of up to 4,096 characters, a slash and a 300-character path.
+    const longest = `${entry(4096)}/${'p'.repeat(300)}`
+    expect(longest).toHaveLength(4397)
+    expect(
+      parseBatch(JSON.stringify({ ...batch, files: [longest] }), 'run-1').ok,
+    ).toBe(true)
+    expect(
+      parseBatch(JSON.stringify({ ...batch, files: [`${longest}x`] }), 'run-1')
+        .ok,
+    ).toBe(false)
+    // A search stays at 300.
+    expect(
+      parseBatch(
+        JSON.stringify({ ...batch, searches: ['s'.repeat(301)] }),
+        'run-1',
+      ).ok,
+    ).toBe(false)
+  })
+
   it('rejects a wrongly typed complete flag or candidates list', () => {
     for (const bad of [
       { ...batch, complete: 'yes' },
@@ -635,6 +656,59 @@ describe('checkCoverage', () => {
         batches: [batchOf({ ruleIds: ['b'], projects: ['/p'], files: [] })],
       })
       expect(coverage.incompleteFamilies).toEqual([])
+    })
+
+    describe('when two projects hold a learning at the same path', () => {
+      // Rule `a` is in /p and rule `b` in /q; both learnings are docs/solutions/setup.md.
+      const shared = new Map([
+        ['a', 'docs/solutions/setup.md'],
+        ['b', 'docs/solutions/setup.md'],
+      ])
+      const learningProjects = new Map([
+        ['a', '/p'],
+        ['b', '/q'],
+      ])
+      const cover = (files: string[], ruleIds = ['a', 'b']) =>
+        checkCoverage({
+          ruleIds: ['a', 'b'],
+          projects: ['/p', '/q'],
+          learningPaths: shared,
+          learningProjects,
+          batches: [batchOf({ ruleIds, projects: ['/p', '/q'], files })],
+        })
+
+      it('leaves the other rule uncovered when the batch lists the read of only one', () => {
+        const coverage = cover(['/p/docs/solutions/setup.md'])
+        expect(coverage.uncoveredRuleIds).toEqual(['b'])
+        expect(coverage.learningUnreadRuleIds).toEqual(['b'])
+      })
+
+      it("covers both when the batch lists each project's own read", () => {
+        const coverage = cover([
+          '/p/docs/solutions/setup.md',
+          '/q/docs/solutions/setup.md',
+        ])
+        expect(coverage.uncoveredRuleIds).toEqual([])
+      })
+
+      it('does not credit either rule for a bare path both could mean', () => {
+        const coverage = cover(['docs/solutions/setup.md'])
+        expect(coverage.uncoveredRuleIds).toEqual(['a', 'b'])
+      })
+
+      it('still credits a bare path when the batch names only one of the two rules', () => {
+        const coverage = cover(['docs/solutions/setup.md'], ['a'])
+        expect(coverage.uncoveredRuleIds).toEqual(['b'])
+        expect(coverage.learningUnreadRuleIds).toEqual([])
+        expect(
+          cover(['docs/solutions/setup.md'], ['a']).uncoveredRuleIds,
+        ).not.toContain('a')
+      })
+
+      it("does not take a path under another project root for this project's read", () => {
+        const coverage = cover(['/q/docs/solutions/setup.md'])
+        expect(coverage.uncoveredRuleIds).toEqual(['a'])
+      })
     })
   })
 })

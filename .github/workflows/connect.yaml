@@ -229,7 +229,7 @@ jobs:
               def checkout:
                 if test("^[a-z0-9][a-z0-9-]{0,38}__[a-z0-9._-]{1,100}$") then sub("__"; "/") else "unresolved" end;
               .payloads[]?
-              | (.repo // "unresolved"), (.sources[]? | (.projectName // "") | checkout)
+              | (.repo // "unresolved"), (.sources[]? | (.projectName // "") | checkout), (.evidence[]? | (.repo // "unresolved"))
             ' "$store") || fail "Could not read the candidate store."
           fi
           if [ -d "$root/runs" ]; then
@@ -743,7 +743,7 @@ jobs:
               def checkout:
                 if test("^[a-z0-9][a-z0-9-]{0,38}__[a-z0-9._-]{1,100}$") then sub("__"; "/") else "unresolved" end;
               .payloads[]?
-              | (.repo // "unresolved"), (.sources[]? | (.projectName // "") | checkout)
+              | (.repo // "unresolved"), (.sources[]? | (.projectName // "") | checkout), (.evidence[]? | (.repo // "unresolved"))
             ' "$store") || fail "Could not read the candidate store."
           fi
           if [ -d "$root/runs" ]; then
