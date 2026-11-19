@@ -724,9 +724,11 @@ describe('restoreSkillResults', () => {
     })
   })
 
-  test('does not overwrite a result that is neither text nor content', () => {
+  test('does not overwrite an error result, even when the store has the full text', () => {
     const store = createSkillOutputStore()
     store.put('s', 'c1', 'FULL-OUTPUT')
+    // The shape the hook receives: the host's normalized `{ type: 'error', value }`,
+    // whose value is the stored `{ error, content }` (ToolResultValue.make).
     const failed = {
       role: 'tool',
       content: [
@@ -734,15 +736,17 @@ describe('restoreSkillResults', () => {
           type: 'tool-result',
           id: 'c1',
           name: 'systematic_skill',
-          result: { error: 'boom', content: [] },
-          resultType: 'error',
+          result: { type: 'error', value: { error: 'boom', content: [] } },
         },
       ],
     }
 
     restoreSkillResults(store, { sessionID: 's', messages: [failed] })
 
-    expect(failed.content[0]?.result).toEqual({ error: 'boom', content: [] })
+    expect(failed.content[0]?.result).toEqual({
+      type: 'error',
+      value: { error: 'boom', content: [] },
+    })
   })
 
   test('ignores events and messages of any other shape without throwing', () => {

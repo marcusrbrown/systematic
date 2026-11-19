@@ -2105,7 +2105,16 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
     test(
       'a skill under the host limit reaches the Responses wire as the same function_call_output with a store entry and after a restart',
       async () => {
-        const { pluginSpec } = extractPackagedPlugin(fixture, HOST)
+        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
+        // What the tool produces for this skill, from the packed copy by its real
+        // path (the one the host loads), so the base directory in the text matches.
+        const expected = createSkillToolDescriptor({
+          bundledSkillsDir: path.join(fs.realpathSync(packageDir), 'skills'),
+          disabledSkills: [],
+        }).load({ name: 'git-worktree' }).output
+        // The premise: the host does not cut this skill (51200 bytes, 2000 lines).
+        expect(Buffer.byteLength(expected)).toBeLessThanOrEqual(51_200)
+        expect(expected.split('\n').length).toBeLessThanOrEqual(2000)
         const responses = startResponsesModelServer()
         const prompt = async (
           host: Awaited<ReturnType<typeof startAgentHost>>,
@@ -2163,14 +2172,13 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           expect(outputs).toHaveLength(3)
 
           // The raw wire value, not its text: a string is not `[{ type: 'input_text' }]`,
-          // and the provider caches by the bytes of the history.
-          const [first, ...rest] = outputs
-          expect(typeof first, 'the skill is sent as a plain string').toBe(
-            'string',
-          )
-          expect(String(first)).toContain('<skill_content')
-          for (const output of rest) {
-            expect(JSON.stringify(output)).toBe(JSON.stringify(first))
+          // and the provider caches by the bytes of the history. Every request
+          // carries exactly the full skill text, so a result that is the same on
+          // every request but cut, or wrapped, fails too.
+          for (const [index, output] of outputs.entries()) {
+            expect(output, `request ${index + 1} carries the full skill`).toBe(
+              expected,
+            )
           }
         } finally {
           responses.stop()

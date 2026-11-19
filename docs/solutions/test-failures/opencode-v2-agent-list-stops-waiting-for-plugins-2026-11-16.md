@@ -27,7 +27,7 @@ A real-host test starts an OpenCode v2 server with the packaged Systematic plugi
 
 ## Solution
 
-The `listAgents` helper calls `provider.list` for the project location first, then `agent.list` (`tests/integration/opencode-v2.test.ts:674-684`, `listAgents`):
+The `listAgents` helper calls `provider.list` for the project location first, then `agent.list` (`tests/integration/opencode-v2.test.ts:675-684`, `listAgents`):
 
 ```ts
 const location = { directory: fixture.projectDir }
