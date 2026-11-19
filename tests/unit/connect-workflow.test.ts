@@ -3688,6 +3688,38 @@ describe('prepare and render: an evidence-only repository is rechecked from the 
       ])
     })
 
+    for (const blank of ['', '  ', 7]) {
+      it(`${job} fails closed on stored evidence whose repository is ${JSON.stringify(blank)}`, () => {
+        const box = makeBox()
+        evidenceOnlyDay(box)
+        const store = path.join(stateRootOf(box), 'ci-payloads.json')
+        const parsed = JSON.parse(fs.readFileSync(store, 'utf8')) as {
+          payloads: Array<{ evidence?: Array<Record<string, unknown>> }>
+        }
+        for (const payload of parsed.payloads) {
+          for (const item of payload.evidence ?? []) item.repo = blank
+        }
+        fs.writeFileSync(store, JSON.stringify(parsed))
+        const result = recheck(box)
+        expect(result.exitCode).toBe(1)
+        expect(result.outputs.has('repos')).toBe(false)
+      })
+    }
+
+    it(`${job} fails closed on a stored target whose repository is blank`, () => {
+      const box = makeBox()
+      evidenceOnlyDay(box)
+      const store = path.join(stateRootOf(box), 'ci-payloads.json')
+      const parsed = JSON.parse(fs.readFileSync(store, 'utf8')) as {
+        payloads: Array<Record<string, unknown>>
+      }
+      for (const payload of parsed.payloads) payload.repo = '  '
+      fs.writeFileSync(store, JSON.stringify(parsed))
+      const result = recheck(box)
+      expect(result.exitCode).toBe(1)
+      expect(result.outputs.has('repos')).toBe(false)
+    })
+
     it(`${job} fails closed on stored evidence whose repository cannot be named`, () => {
       const box = makeBox()
       evidenceOnlyDay(box)

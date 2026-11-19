@@ -31,6 +31,7 @@ import {
   readCiRunMarker,
   readInvocationRecord,
   readLedger,
+  recordsEvidenceOf,
   releaseLock,
   rewriteRunFiles,
   writeInvocationRecord,
@@ -1714,6 +1715,69 @@ describe('a decided code-mismatch candidate', () => {
       expect(ledgerEntries(s.root)[0]?.evidence).toEqual([A])
       expect(fs.readFileSync(path.join(s.root, 'ledger.json'), 'utf8')).toBe(
         before,
+      )
+    })
+  })
+
+  describe('recordsEvidenceOf', () => {
+    const ref = (
+      path: string,
+      fingerprint = 'E1',
+      project = EVIDENCE_PROJECT,
+    ) => ({
+      project,
+      path,
+      fingerprint,
+    })
+    const entryWith = (evidence: ReturnType<typeof ref>[]) => {
+      const s = session()
+      s.publish('run-1', [mismatch({ evidence })])
+      const [entry] = ledgerEntries(s.root)
+      if (entry === undefined) throw new Error('no entry')
+      return entry
+    }
+
+    it('is true for the same files and fingerprints, in any order', () => {
+      const entry = entryWith([ref('a.conf'), ref('b.conf', 'E2')])
+      expect(
+        recordsEvidenceOf(
+          entry,
+          mismatch({ evidence: [ref('b.conf', 'E2'), ref('a.conf')] }),
+        ),
+      ).toBe(true)
+    })
+
+    it('tells files apart by path when the fingerprint and the project are the same', () => {
+      const entry = entryWith([ref('a.conf')])
+      expect(
+        recordsEvidenceOf(entry, mismatch({ evidence: [ref('b.conf')] })),
+      ).toBe(false)
+    })
+
+    it('tells files apart by fingerprint and by project', () => {
+      const entry = entryWith([ref('a.conf')])
+      expect(
+        recordsEvidenceOf(entry, mismatch({ evidence: [ref('a.conf', 'E9')] })),
+      ).toBe(false)
+      expect(
+        recordsEvidenceOf(
+          entry,
+          mismatch({ evidence: [ref('a.conf', 'E1', 'cccccccccccc')] }),
+        ),
+      ).toBe(false)
+    })
+
+    it('is false when the counts differ, and true for no evidence on both sides', () => {
+      const entry = entryWith([ref('a.conf')])
+      expect(
+        recordsEvidenceOf(
+          entry,
+          mismatch({ evidence: [ref('a.conf'), ref('b.conf')] }),
+        ),
+      ).toBe(false)
+      expect(recordsEvidenceOf(entry, mismatch({ evidence: [] }))).toBe(false)
+      expect(recordsEvidenceOf(entryWith([]), mismatch({ evidence: [] }))).toBe(
+        true,
       )
     })
   })

@@ -226,10 +226,12 @@ jobs:
           named=""
           if [ -f "$store" ] && [ ! -L "$store" ]; then
             named=$(jq -r '
+              def slug:
+                if type == "string" and test("^[a-z0-9][a-z0-9-]{0,38}/[a-z0-9._-]{1,100}$") then . else "unresolved" end;
               def checkout:
                 if test("^[a-z0-9][a-z0-9-]{0,38}__[a-z0-9._-]{1,100}$") then sub("__"; "/") else "unresolved" end;
               .payloads[]?
-              | (.repo // "unresolved"), (.sources[]? | (.projectName // "") | checkout), (.evidence[]? | (.repo // "unresolved"))
+              | (.repo | slug), (.sources[]? | (.projectName // "") | checkout), (.evidence[]? | (.repo | slug))
             ' "$store") || fail "Could not read the candidate store."
           fi
           if [ -d "$root/runs" ]; then
@@ -740,10 +742,12 @@ jobs:
           named=""
           if [ -f "$store" ] && [ ! -L "$store" ]; then
             named=$(jq -r '
+              def slug:
+                if type == "string" and test("^[a-z0-9][a-z0-9-]{0,38}/[a-z0-9._-]{1,100}$") then . else "unresolved" end;
               def checkout:
                 if test("^[a-z0-9][a-z0-9-]{0,38}__[a-z0-9._-]{1,100}$") then sub("__"; "/") else "unresolved" end;
               .payloads[]?
-              | (.repo // "unresolved"), (.sources[]? | (.projectName // "") | checkout), (.evidence[]? | (.repo // "unresolved"))
+              | (.repo | slug), (.sources[]? | (.projectName // "") | checkout), (.evidence[]? | (.repo | slug))
             ' "$store") || fail "Could not read the candidate store."
           fi
           if [ -d "$root/runs" ]; then

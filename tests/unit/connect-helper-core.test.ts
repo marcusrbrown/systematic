@@ -696,13 +696,40 @@ describe('checkCoverage', () => {
         expect(coverage.uncoveredRuleIds).toEqual(['a', 'b'])
       })
 
-      it('still credits a bare path when the batch names only one of the two rules', () => {
+      it("does not credit a bare path to a rule the batch names alone, when another project's learning has that path", () => {
+        // The batch names only a's rule; the bare path may be b's learning, read as evidence.
         const coverage = cover(['docs/solutions/setup.md'], ['a'])
+        expect(coverage.uncoveredRuleIds).toEqual(['a', 'b'])
+        expect(coverage.learningUnreadRuleIds).toEqual(['a'])
+      })
+
+      it('credits the qualified read of the rule the batch names alone', () => {
+        const coverage = cover(['/p/docs/solutions/setup.md'], ['a'])
         expect(coverage.uncoveredRuleIds).toEqual(['b'])
         expect(coverage.learningUnreadRuleIds).toEqual([])
-        expect(
-          cover(['docs/solutions/setup.md'], ['a']).uncoveredRuleIds,
-        ).not.toContain('a')
+      })
+
+      it('still credits a bare path that is unique across the run', () => {
+        const unique = checkCoverage({
+          ruleIds: ['a', 'c'],
+          projects: ['/p', '/q'],
+          learningPaths: new Map([
+            ['a', 'docs/solutions/setup.md'],
+            ['c', 'docs/solutions/other.md'],
+          ]),
+          learningProjects: new Map([
+            ['a', '/p'],
+            ['c', '/q'],
+          ]),
+          batches: [
+            batchOf({
+              ruleIds: ['a', 'c'],
+              projects: ['/p', '/q'],
+              files: ['docs/solutions/setup.md', 'docs/solutions/other.md'],
+            }),
+          ],
+        })
+        expect(unique.uncoveredRuleIds).toEqual([])
       })
 
       it("does not take a path under another project root for this project's read", () => {

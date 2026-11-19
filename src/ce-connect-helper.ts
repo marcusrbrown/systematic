@@ -127,6 +127,7 @@ import {
   readInvocationRecord,
   readLedger,
   readRunRecord,
+  recordsEvidenceOf,
   releaseLock,
   rewriteRunFiles,
   writeInvocationRecord,
@@ -3047,12 +3048,16 @@ function placeOne(
       ),
     }
   }
-  const skipped = skippedOf(
-    item,
-    ledger.entries.find((known) => known.id === item.id),
-  )
+  const entry = ledger.entries.find((known) => known.id === item.id)
+  const skipped = skippedOf(item, entry)
   if (skipped !== undefined) return { skipped }
-  const held = heldIn(item)
+  // A retained record is reused only while the ledger still watches the
+  // evidence it holds. After the claim was published with other evidence, a
+  // decision made from the old record would watch files it never cited.
+  const held =
+    entry !== undefined && !recordsEvidenceOf(entry, item.record)
+      ? undefined
+      : heldIn(item)
   return {
     placed:
       held === undefined
@@ -3065,8 +3070,9 @@ function placeOne(
  * Sort the accepted candidates by what the ledger says about each. A new or
  * reopened one is written. One decided here is skipped and named. One already
  * open is listed again with the import run that holds it; when no kept run
- * holds it with the evidence just verified it is written again, and its ledger
- * entry stays as it is.
+ * holds it with the evidence just verified, or the ledger watches other
+ * evidence than that run holds, it is written again and its ledger entry takes
+ * the evidence it cites.
  */
 function placeCandidates(
   accepted: readonly ImportAccepted[],

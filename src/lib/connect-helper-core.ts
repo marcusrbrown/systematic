@@ -450,17 +450,36 @@ export interface CoverageInput {
   /**
    * The root of the project each rule belongs to. Two projects can hold a
    * learning at one relative path, so with a root a batch's read is the path
-   * under that root (`<root>/<path>`), or the bare path when no other rule the
-   * batch names has it in another project. A rule with no root here is matched
-   * on the bare path alone.
+   * under that root (`<root>/<path>`), or the bare path when no other project's
+   * learning in the run (every rule in `learningPaths`, named by the batch or
+   * not) has that path. A rule with no root here is matched on the bare path
+   * alone.
    */
   readonly learningProjects?: ReadonlyMap<string, string>
+}
+
+/** Whether another project's learning in the run has the relative path `learning`. */
+function sharedWithOtherProject(
+  input: CoverageInput,
+  id: string,
+  learning: string,
+  root: string,
+): boolean {
+  for (const [other, path] of input.learningPaths ?? []) {
+    if (
+      other !== id &&
+      path === learning &&
+      input.learningProjects?.get(other) !== root
+    ) {
+      return true
+    }
+  }
+  return false
 }
 
 /** Whether a complete batch's `files` show that it read the learning of rule `id`. */
 function listsLearning(
   input: CoverageInput,
-  batch: Batch,
   listed: ReadonlySet<string>,
   id: string,
 ): boolean {
@@ -469,14 +488,10 @@ function listsLearning(
   const root = input.learningProjects?.get(id)
   if (root === undefined) return listed.has(learning)
   if (listed.has(`${root.replace(/\/+$/, '')}/${learning}`)) return true
-  if (!listed.has(learning)) return false
-  // A bare path is this project's only when no other rule in the batch has
-  // the same path in another project: the entry could be either read.
-  return !batch.ruleIds.some(
-    (other) =>
-      other !== id &&
-      input.learningPaths?.get(other) === learning &&
-      input.learningProjects?.get(other) !== root,
+  // A bare path is this project's only when no other project's learning in the
+  // run has that path: the entry could be a read of that one, as evidence.
+  return (
+    listed.has(learning) && !sharedWithOtherProject(input, id, learning, root)
   )
 }
 
@@ -506,9 +521,7 @@ export function checkCoverage(input: CoverageInput): Coverage {
   const covered = new Set(
     complete.flatMap((batch) => {
       const listed = new Set(batch.files)
-      return batch.ruleIds.filter((id) =>
-        listsLearning(input, batch, listed, id),
-      )
+      return batch.ruleIds.filter((id) => listsLearning(input, listed, id))
     }),
   )
   const touched = new Set(input.batches.flatMap((batch) => batch.projects))

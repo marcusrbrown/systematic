@@ -1777,6 +1777,102 @@ describe('import: a code-mismatch candidate carries its reason and evidence', ()
       expect(list(reopened.candidates)[0]?.standing).toBe('evidence changed')
     })
 
+    it('publishes again instead of reusing a retained record whose evidence the ledger no longer watches (A, then B, then A)', () => {
+      const world = buildWorld()
+      const code = fixtureFiles('target')['src/lock.ts'] ?? ''
+      const citingB = (): Json => {
+        const record = mismatchRecord()
+        candidateOf(record).counterevidence = [
+          {
+            project: '/runner/work/connect/checkouts/acme__target',
+            projectName: 'acme__target',
+            path: 'src/lock.ts',
+            fingerprint: sha256(code),
+            excerpt: 'export function reclaimLock(path: string): boolean {',
+            cite: 'x',
+            start: 3,
+            end: 3,
+          },
+        ]
+        return record
+      }
+      const first = ok(importOp(world, downloaded(mismatchRecord())))
+      const id = String(list(first.candidates)[0]?.id)
+      const second = ok(importOp(world, downloaded(citingB())))
+      expect(second.imported).toBe(1)
+
+      // A again, both files unchanged. A retained record holds A, but the ledger watches B.
+      const third = ok(importOp(world, downloaded(mismatchRecord())))
+      expect(third.imported).toBe(1)
+      expect(third.alreadyImported).toBe(0)
+      expect(list(third.candidates)[0]?.runRecordPath).not.toBe(
+        first.runRecordPath,
+      )
+      expect(list(ledgerEntries(world)[0]?.evidence)).toMatchObject([
+        { fingerprint: sha256(EVIDENCE_FILE) },
+      ])
+
+      decideLedgerEntry(world.stateRoot, {
+        id,
+        status: 'rejected',
+        reason: 'checked by hand',
+      })
+      const changed = `${EVIDENCE_FILE}\nA later line.\n`
+      fs.writeFileSync(
+        path.join(world.source, 'docs/solutions/lock-reclaim.md'),
+        changed,
+      )
+      const record = mismatchRecord()
+      const [evidence] = list(candidateOf(record).counterevidence)
+      if (evidence === undefined) throw new Error('no evidence')
+      evidence.fingerprint = sha256(changed)
+      const again = ok(importOp(world, downloaded(record)))
+      expect(list(again.skipped)).toEqual([])
+      expect(list(again.candidates)[0]?.standing).toBe('evidence changed')
+    })
+
+    it('tells two evidence files apart by path when their bytes are identical (A, then B, then A)', () => {
+      const COPY = 'docs/solutions/lock-reclaim-copy.md'
+      const world = buildWorld({
+        sourceFiles: { ...fixtureFiles('source'), [COPY]: EVIDENCE_FILE },
+      })
+      const citing = (file: string): Json => {
+        const record = mismatchRecord()
+        const [evidence] = list(candidateOf(record).counterevidence)
+        if (evidence === undefined) throw new Error('no evidence')
+        // The same bytes, so the same fingerprint, the same project and the same span.
+        evidence.path = file
+        return record
+      }
+      const A = 'docs/solutions/lock-reclaim.md'
+      const first = ok(importOp(world, downloaded(citing(A))))
+      const second = ok(importOp(world, downloaded(citing(COPY))))
+      expect(second.imported).toBe(1)
+      expect(list(ledgerEntries(world)[0]?.evidence)).toMatchObject([
+        { path: COPY, fingerprint: sha256(EVIDENCE_FILE) },
+      ])
+
+      // A again: the retained A record cites a file the ledger no longer watches.
+      const third = ok(importOp(world, downloaded(citing(A))))
+      expect(third.imported).toBe(1)
+      expect(list(third.candidates)[0]?.runRecordPath).not.toBe(
+        first.runRecordPath,
+      )
+      expect(list(ledgerEntries(world)[0]?.evidence)).toMatchObject([
+        { path: A },
+      ])
+    })
+
+    it('still reuses the retained record when the ledger watches the evidence it holds', () => {
+      const world = buildWorld()
+      const dir = downloaded(mismatchRecord())
+      const first = ok(importOp(world, dir))
+      const again = ok(importOp(world, dir))
+      expect(again.imported).toBe(0)
+      expect(again.alreadyImported).toBe(1)
+      expect(list(again.candidates)[0]?.runRecordPath).toBe(first.runRecordPath)
+    })
+
     it('skips a candidate rejected here when its evidence is the same bytes', () => {
       const world = buildWorld()
       const dir = downloaded(mismatchRecord())

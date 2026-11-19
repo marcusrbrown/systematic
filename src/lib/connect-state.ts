@@ -839,6 +839,24 @@ function normalizedEvidence(candidate: CandidateRecord): EvidenceRef[] {
   )
 }
 
+/** Whether a ledger entry records exactly the evidence files, with fingerprints, that a candidate cites. */
+export function recordsEvidenceOf(
+  entry: LedgerEntry,
+  candidate: CandidateRecord,
+): boolean {
+  const recorded = entry.evidence ?? []
+  const cited = normalizedEvidence(candidate)
+  return (
+    recorded.length === cited.length &&
+    recorded.every(
+      (ref, index) =>
+        ref.project === cited[index]?.project &&
+        ref.path === cited[index]?.path &&
+        ref.fingerprint === cited[index]?.fingerprint,
+    )
+  )
+}
+
 /**
  * The identity of a candidate: kind, target, rule id and the normalized
  * (role, path) of each source. Fingerprints and target evidence are not part
