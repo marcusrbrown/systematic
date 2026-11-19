@@ -22,8 +22,10 @@ import {
   acquireLock,
   CI_RUN_FILE,
   INVOCATION_FILE,
+  type LedgerEntry,
   type ProcessTable,
   releaseLock,
+  revisionOf,
 } from '../../src/lib/connect-state.js'
 import { cleanupTempDirs, git, makeDir } from './git-worktree-fixtures'
 
@@ -3643,28 +3645,28 @@ describe('the report operations at the helper entry', () => {
     const runDir = path.join(world.stateRoot, 'runs', CONNECT_RUN)
     fs.mkdirSync(runDir, { recursive: true, mode: 0o700 })
     const numbers = Array.from({ length: count }, (_, i) => i + 1)
+    const entries = numbers.map(
+      (n): LedgerEntry => ({
+        id: candidateId(n),
+        kind: 'transferable-lesson',
+        target: world.target,
+        ruleId: world.ruleId,
+        sources: [
+          {
+            role: 'source',
+            path: `docs/solutions/lesson-${n}.md`,
+            fingerprint: sha256(`fingerprint-${n}`),
+          },
+        ],
+        targetEvidence: [],
+        status: 'candidate',
+        history: [],
+        recordedAt: new Date(Date.UTC(2026, 10, 1, 0, n)).toISOString(),
+      }),
+    )
     fs.writeFileSync(
       path.join(world.stateRoot, 'ledger.json'),
-      JSON.stringify({
-        version: 2,
-        entries: numbers.map((n) => ({
-          id: candidateId(n),
-          kind: 'transferable-lesson',
-          target: world.target,
-          ruleId: world.ruleId,
-          sources: [
-            {
-              role: 'source',
-              path: `docs/solutions/lesson-${n}.md`,
-              fingerprint: sha256(`fingerprint-${n}`),
-            },
-          ],
-          targetEvidence: [],
-          status: 'candidate',
-          history: [],
-          recordedAt: new Date(Date.UTC(2026, 10, 1, 0, n)).toISOString(),
-        })),
-      }),
+      JSON.stringify({ version: 2, entries }),
     )
     fs.writeFileSync(
       path.join(runDir, 'run.json'),
@@ -3685,19 +3687,20 @@ describe('the report operations at the helper entry', () => {
         sweep: { total: 4, covered: 1, coveredThisRun: 1, runsLeft: 3 },
         candidateBlock: {
           schemaVersion: 1,
-          candidates: numbers.map((n) => ({
-            id: candidateId(n),
+          candidates: entries.map((entry, i) => ({
+            id: entry.id,
+            revision: revisionOf(entry),
             kind: 'transferable-lesson',
             target: world.target,
             targetName: 'target',
-            title: `Lesson ${n}`,
-            summary: `Summary of lesson ${n}.`,
+            title: `Lesson ${i + 1}`,
+            summary: `Summary of lesson ${i + 1}.`,
             nextStep: 'compound-learning',
             sources: [
               {
                 projectName: 'source',
-                path: `docs/solutions/lesson-${n}.md`,
-                excerpt: `Excerpt ${n}`,
+                path: `docs/solutions/lesson-${i + 1}.md`,
+                excerpt: `Excerpt ${i + 1}`,
               },
             ],
           })),

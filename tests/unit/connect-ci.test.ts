@@ -108,6 +108,8 @@ type Json = Record<string, unknown>
 function blockCandidate(index: number, over: Json = {}): Json {
   return {
     id: idOf(index),
+    // What the run's digest was written against: the entry's own revision.
+    revision: revisionOf(entryOf(index)),
     status: 'candidate',
     standing: 'new',
     possibleMatches: [],
@@ -1048,6 +1050,9 @@ describe('renderReport', () => {
           payloads: [
             {
               id: idOf(1),
+              revision: revisionOf(
+                entryOf(1, { kind: 'code-mismatch', status: 'candidate' }),
+              ),
               title: 'Old',
               summary: 'Written by an earlier helper.',
               kind: 'transferable-lesson',
@@ -2399,51 +2404,44 @@ describe('the revision of a report', () => {
     expect(statusOf(root, 1)).toBe('rejected')
   })
 
-  it('applies a line from before revisions to a candidate that never reopened', () => {
-    const root = seeded(1)
-    const old = `- [x] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`
-    const result = applyTicks(root, {
-      body: withTick(bodyOf(root), old),
-      issue: 12,
-    })
-    expect(result).toMatchObject({
-      accepted: [{ id: idOf(1), status: 'rejected' }],
-      skipped: [],
-    })
-  })
-
-  it('skips a line from before revisions as stale once the candidate has reopened', () => {
-    const root = seeded(1)
-    const old = `- [x] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`
-    const body = withTick(bodyOf(root), old)
-    reopen(root, 1, 'edited')
+  it('skips a line from before revisions as unversioned, whether or not the candidate ever reopened', () => {
+    const old = (index: number) =>
+      `- [x] Rejected <!-- connect-decision:rejected:${idOf(index)} -->`
+    const root = seeded(2)
+    const body = withTick(withTick(bodyOf(root), old(1)), old(2))
+    reopen(root, 2, 'edited')
     const result = applyTicks(root, { body, issue: 12 })
     expect(result).toMatchObject({
+      status: 'applied',
       accepted: [],
-      skipped: [{ id: idOf(1), status: 'rejected', reason: 'stale' }],
+      skipped: [
+        { id: idOf(1), status: 'rejected', reason: 'unversioned' },
+        { id: idOf(2), status: 'rejected', reason: 'unversioned' },
+      ],
     })
-    expect(statusOf(root, 1)).toBe('candidate')
+    for (const index of [1, 2]) {
+      expect(statusOf(root, index)).toBe('candidate')
+    }
   })
 
-  it('skips a line from before revisions when the reopen is only in the entry history', () => {
-    const root = seeded(1)
-    const old = `- [x] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`
-    const body = withTick(bodyOf(root), old)
-    reopen(root, 1, 'edited')
-    // It was settled since, so `reopened` is gone; the history still says it reopened.
-    const read = readLedger(root)
-    if (read.status !== 'ok') throw new Error('ledger')
-    writeLedger(
-      root,
-      read.ledger.entries.map((entry) => {
-        const { reopened: _gone, ...rest } = entry
-        return { ...rest, status: 'candidate' }
-      }),
-    )
-    expect(applyTicks(root, { body, issue: 12 })).toMatchObject({
+  it('records nothing for a legacy tick behind a cache rollback, whatever manifest ids it names', () => {
+    // A report from before revisions listed these ids and was ticked; its cache save failed,
+    // so the ledger this run restores is the one from before that reopen.
+    const root = seeded(2)
+    const legacy = bodyOf(root)
+      .replaceAll(/:r[0-9a-f]{12}/g, '')
+      .replace(
+        `- [ ] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`,
+        `- [x] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`,
+      )
+    const before = ledgerBytes(root)
+    expect(applyTicks(root, { body: legacy, issue: 20 })).toMatchObject({
       accepted: [],
-      skipped: [{ id: idOf(1), reason: 'stale' }],
+      skipped: [{ id: idOf(1), status: 'rejected', reason: 'unversioned' }],
+      unresolved: [],
     })
+    expect(ledgerBytes(root)).toBe(before)
+    expect(statusOf(root, 1)).toBe('candidate')
   })
 
   it('skips a tick for a revision the ledger does not hold', () => {
@@ -2667,26 +2665,96 @@ describe("a report binds a candidate's text to the revision of its boxes", () =>
     })
   })
 
-  it('keeps the revision of a payload in the store, and takes a store from before revisions for the revision of its entry', () => {
+  it('keeps the revision of a payload in the store', () => {
     const root = seeded(1)
     rendered(root)
     expect(payloadsOf(root)[0]).toMatchObject({
       revision: revisionOf(entryOf(1)),
     })
-    // A store written before revisions has none: it describes the entry as it stands.
-    const file = path.join(root, PAYLOAD_FILE)
-    const store = JSON.parse(fs.readFileSync(file, 'utf8')) as {
-      payloads: Array<Record<string, unknown>>
+  })
+
+  describe('text from before revisions', () => {
+    /** The store as an older release wrote it: the text, and no revision. */
+    function unversion(root: string): void {
+      const file = path.join(root, PAYLOAD_FILE)
+      const store = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+        payloads: Array<Record<string, unknown>>
+      }
+      for (const item of store.payloads) delete item.revision
+      fs.writeFileSync(file, JSON.stringify(store))
     }
-    for (const item of store.payloads) delete item.revision
-    fs.writeFileSync(file, JSON.stringify(store))
-    writeInvocation(root, '901-1', {}, null)
-    const body = rendered(root, { runId: '901', date: DAY_TWO }).body
-    expect(body).toContain('Title: Lesson 1')
-    expect(boxesOf(body, 1)).toEqual([
-      boxLine(1, 'promoted', false),
-      boxLine(1, 'rejected', false),
-    ])
+
+    it('renders no boxes and says details are being refreshed, even for an entry whose content it may describe', () => {
+      const root = seeded(2)
+      rendered(root)
+      unversion(root)
+      writeInvocation(root, '901-1', {}, null)
+      const body = rendered(root, { runId: '901', date: DAY_TWO }).body
+      for (const index of [1, 2]) {
+        expect(body).toContain(
+          `Details for \`${idOf(index)}\` are being refreshed, so there is nothing to tick yet.`,
+        )
+        expect(boxesOf(body, index)).toEqual([])
+      }
+      expect(body).not.toContain('Title: Lesson')
+    })
+
+    it('cannot acquire boxes when its ledger write had failed and the first render after the upgrade has no fresh text', () => {
+      // The cache holds the text of a proposal whose ledger write failed, with no revision.
+      const root = seeded(1)
+      rendered(root)
+      unversion(root)
+      // The ledger is at the revision before that proposal, or another one: either way no box.
+      for (const variant of [undefined, 'later']) {
+        if (variant !== undefined) {
+          const read = readLedger(root)
+          if (read.status !== 'ok') throw new Error('ledger')
+          const changed = contentOf(1, variant)
+          writeLedger(
+            root,
+            read.ledger.entries.map((entry) => ({
+              ...entry,
+              sources: changed.sources,
+              reopened: 'sources changed' as const,
+            })),
+          )
+        }
+        writeInvocation(root, '901-1', {}, null)
+        const body = rendered(root, { runId: '901', date: DAY_TWO }).body
+        expect(boxesOf(body, 1)).toEqual([])
+        expect(body).toContain('are being refreshed')
+        expect(applyTicks(root, { body, issue: 9 })).toMatchObject({
+          accepted: [],
+          skipped: [],
+        })
+      }
+    })
+
+    it('shows boxes again once a run stores text with a revision', () => {
+      const root = seeded(1)
+      rendered(root)
+      unversion(root)
+      writeInvocation(root, '901-1', {}, null)
+      const refreshed = rendered(root, { runId: '901', date: DAY_TWO }).body
+      expect(boxesOf(refreshed, 1)).toEqual([])
+      // The next run proposes the candidate again, with a revision.
+      stampProposal(root, 1, revisionOf(entryOf(1)))
+      writeInvocation(root, '902-1')
+      const body = rendered(root, { runId: '902', date: DAY_TWO }).body
+      expect(body).toContain('Title: Lesson 1')
+      expect(boxesOf(body, 1)).toEqual([
+        boxLine(1, 'promoted', false),
+        boxLine(1, 'rejected', false),
+      ])
+    })
+
+    it('does not accept a run record that names no revision as text for the entry', () => {
+      const root = seeded(1)
+      stampProposal(root, 1, undefined)
+      const body = rendered(root).body
+      expect(boxesOf(body, 1)).toEqual([])
+      expect(body).toContain('are being refreshed')
+    })
   })
 })
 

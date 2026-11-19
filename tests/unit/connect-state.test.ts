@@ -1670,9 +1670,15 @@ describe('a decided code-mismatch candidate', () => {
       s.publish('run-2', [mismatch({ evidence: [B] })])
       const [after] = ledgerEntries(s.root)
       expect(after?.evidence).toEqual([B])
-      expect({ ...after, evidence: undefined }).toEqual({
+      // The revision follows the evidence it covers; nothing else changes.
+      expect(after?.revision).toBe(
+        revisionOfCandidate(mismatch({ evidence: [B] })),
+      )
+      expect(after?.revision).not.toBe(before?.revision)
+      expect({ ...after, evidence: undefined, revision: undefined }).toEqual({
         ...before,
         evidence: undefined,
+        revision: undefined,
       })
     })
 
@@ -2427,10 +2433,12 @@ describe('the revision of a ledger entry', () => {
     })
   })
 
-  it('keeps the revision when an open entry takes the evidence a later run cites', () => {
+  it('recomputes the revision when an open entry takes the evidence a later run cites, so a decision from the earlier digest is refused', () => {
     const s = session()
     s.publish('run-1', [mismatch()])
-    const before = ledgerEntries(s.root)[0]
+    const [before] = ledgerEntries(s.root)
+    if (before === undefined) throw new Error('no entry')
+    const earlier = revisionOf(before)
     // The same files, cited differently: the entry takes the new set and stays suppressed.
     const other = mismatch({
       evidence: [
@@ -2448,12 +2456,60 @@ describe('the revision of a ledger entry', () => {
         ),
       ).map((o) => o.standing),
     ).toEqual(['suppressed'])
-    const after = ledgerEntries(s.root)[0]
+    const [after] = ledgerEntries(s.root)
     expect(after?.evidence).toHaveLength(2)
-    expect(after?.revision).toBe(before?.revision)
+    // What a digest of this evidence would show.
+    expect(after?.revision).toBe(revisionOfCandidate(other))
+    expect(after?.revision).not.toBe(earlier)
+    // A decision from the digest of the earlier evidence is refused, and the entry stays open.
+    const id = before.id
+    expect(
+      decideLedgerEntry(
+        s.root,
+        { id, status: 'rejected', reason: 'old digest', revision: earlier },
+        options(s),
+      ),
+    ).toEqual({ status: 'failed', reason: 'stale-revision' })
+    expect(ledgerEntries(s.root)[0]).toMatchObject({ status: 'candidate' })
   })
 
-  it('pins an entry written before revisions to its own revision when a run re-cites its evidence', () => {
+  it('records no evidence, and a new revision, when an open entry is published again as an evidence-free investigation', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const [before] = ledgerEntries(s.root)
+    if (before === undefined) throw new Error('no entry')
+    expect(before.evidence).toHaveLength(1)
+    const id = before.id
+    const earlier = revisionOf(before)
+
+    const bare = mismatch({ evidence: [] })
+    expect(
+      publishedOutcomes(
+        s.publish(
+          'run-2',
+          [bare],
+          undefined,
+          inventory({ [EVIDENCE_KEY]: present('E1') }),
+        ),
+      ).map((o) => o.standing),
+    ).toEqual(['suppressed'])
+    const [after] = ledgerEntries(s.root)
+    // The entry no longer watches the files it recorded.
+    expect(after).not.toHaveProperty('evidence')
+    expect(after?.revision).toBe(revisionOfCandidate(bare))
+    expect(after?.revision).not.toBe(earlier)
+    // So a decision from the digest of the evidence it had is refused, and the entry stays open.
+    expect(
+      decideLedgerEntry(
+        s.root,
+        { id, status: 'rejected', reason: 'old digest', revision: earlier },
+        options(s),
+      ),
+    ).toEqual({ status: 'failed', reason: 'stale-revision' })
+    expect(ledgerEntries(s.root)[0]).toMatchObject({ status: 'candidate' })
+  })
+
+  it('recomputes the revision of an entry written before revisions when a run re-cites its evidence', () => {
     const s = session()
     s.publish('run-1', [mismatch()])
     const file = path.join(s.root, 'ledger.json')
@@ -2464,24 +2520,34 @@ describe('the revision of a ledger entry', () => {
     fs.writeFileSync(file, JSON.stringify(ledger))
     const [before] = ledgerEntries(s.root)
     if (before === undefined) throw new Error('no entry')
-    const reviewed = revisionOf(before)
+    const other = mismatch({
+      evidence: [
+        { project: EVIDENCE_PROJECT, path: 'Caddyfile', fingerprint: 'E1' },
+        { project: EVIDENCE_PROJECT, path: 'Extra', fingerprint: 'X1' },
+      ],
+    })
     s.publish(
       'run-2',
-      [
-        mismatch({
-          evidence: [
-            { project: EVIDENCE_PROJECT, path: 'Caddyfile', fingerprint: 'E1' },
-            { project: EVIDENCE_PROJECT, path: 'Extra', fingerprint: 'X1' },
-          ],
-        }),
-      ],
+      [other],
       undefined,
       inventory({ [EVIDENCE_KEY]: present('E1') }),
     )
     const [after] = ledgerEntries(s.root)
-    expect(after?.evidence).toHaveLength(2)
-    // The digest a decision came from described the evidence the entry had.
-    expect(after?.revision).toBe(reviewed)
+    expect(after?.revision).toBe(revisionOfCandidate(other))
+    expect(after?.revision).not.toBe(revisionOf(before))
+  })
+
+  it('leaves the revision alone when a run cites the same evidence again', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const [before] = ledgerEntries(s.root)
+    s.publish(
+      'run-2',
+      [mismatch()],
+      undefined,
+      inventory({ [EVIDENCE_KEY]: present('E1') }),
+    )
+    expect(ledgerEntries(s.root)[0]?.revision).toBe(before?.revision)
   })
 
   it('reads an entry with no stored revision as the revision of its fields', () => {

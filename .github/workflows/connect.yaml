@@ -338,7 +338,7 @@ jobs:
             reason=$(printf '%s' "$answer" | jq -r '.reason // "no-answer"' 2>/dev/null) || reason=no-answer
             fail "apply-ticks failed: ${reason}"
           fi
-          printf '%s' "$answer" | jq -r '"Ticks from report #\(.report): accepted \(.accepted | length), skipped \(.skipped | length), unresolved \(.unresolved | length)."'
+          printf '%s' "$answer" | jq -r '([.skipped[] | select(.reason == "unversioned")] | length) as $old | "Ticks from report #\(.report): accepted \(.accepted | length), skipped \(.skipped | length), unresolved \(.unresolved | length)." + (if $old > 0 then " \($old) tick(s) were on boxes from a report before revisions and were not recorded: tick the box on the current report."  else "" end)'
 
       # The run job needs at least one file to download on a first run.
       - name: Write hand-off marker
@@ -985,7 +985,7 @@ jobs:
           const BEGIN = '<!-- connect-decisions:begin -->'
           const END = '<!-- connect-decisions:end -->'
           const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/
-          const BOX = /^- \[([ xX])\] (Promoted|Rejected) <!-- connect-decision:(promoted|rejected):([0-9a-f]{64})(?::r([0-9a-f]{12}))? -->[ \t]*$/
+          const BOX = /^- \[([ xX])\] (Promoted|Rejected) <!-- connect-decision:(promoted|rejected):([0-9a-f]{64}):r([0-9a-f]{12}) -->[ \t]*$/
           const LABEL = { promoted: 'Promoted', rejected: 'Rejected' }
 
           // The generated checkbox lines inside the one delimited section and
@@ -1030,8 +1030,8 @@ jobs:
               if (!inside) return
               const box = BOX.exec(line)
               if (box !== null && LABEL[box[3]] === box[2]) {
-                // A tick belongs to one revision of a candidate: a line without a suffix is from before revisions.
-                found.push({ index, ticked: box[1] !== ' ', key: box[3] + ':' + box[4] + ':' + (box[5] === undefined ? '' : box[5]) })
+                // A tick belongs to one revision of a candidate. A line without a revision is from before revisions and is never carried.
+                found.push({ index, ticked: box[1] !== ' ', key: box[3] + ':' + box[4] + ':' + box[5] })
               }
             })
             return begins === 1 && ends === 1 && ordered ? found : []

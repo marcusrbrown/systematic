@@ -924,6 +924,8 @@ function entryOf(index: number): Json {
 function blockCandidate(index: number, over: Json = {}): Json {
   return {
     id: idOf(index),
+    // What the run's digest was written against: the entry's own revision.
+    revision: fixtureRevision(index),
     status: 'candidate',
     standing: 'new',
     possibleMatches: [],
@@ -3294,6 +3296,33 @@ describe('post: ticks made while a run was executing', () => {
     const result = recordTicks(box, number)
     expect(result.stdout).toContain('accepted 0, skipped 1')
     expect(statusOf(box, 1)).toBe('candidate')
+  })
+
+  it('records nothing for a tick on a box from before revisions, and tells the operator to tick the current report', () => {
+    const box = makeBox()
+    const { number, body } = firstDay(box)
+    // The report as a release before revisions wrote it, ticked.
+    const legacy = tick(body, 1, 'rejected').replaceAll(/:r[0-9a-f]{12}/g, '')
+    setIssueBody(box, number, legacy)
+    runStep(box, 'prepare', 'Find the open report', FOUND)
+    const result = recordTicks(box, number)
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('accepted 0, skipped 1')
+    expect(result.stdout).toContain('before revisions')
+    expect(result.stdout).toContain('tick the box on the current report')
+    expect(statusOf(box, 1)).toBe('candidate')
+  })
+
+  it('does not carry a tick on a box from before revisions into the new body', () => {
+    const box = makeBox()
+    const { number, body } = firstDay(box)
+    const legacy = tick(body, 1, 'rejected').replaceAll(/:r[0-9a-f]{12}/g, '')
+    setIssueBody(box, number, legacy)
+    const second = nextDay(box, DATE_ONE)
+    publish(box, second.render, DATE_ONE)
+    const posted = liveBody(box, number)
+    expect(posted).not.toContain('- [x]')
+    expect(posted).toBe(trimmed(second.body))
   })
 
   it('carries an upper-case X the way the tick reader counts it', () => {

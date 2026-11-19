@@ -1439,12 +1439,13 @@ function withEvidence(
   entry: LedgerEntry,
   evidence: readonly EvidenceRef[],
 ): LedgerEntry {
-  const { evidence: _recorded, ...rest } = entry
-  // The revision stays what the entry was proposed with, so a report written
-  // for it still matches; an entry without one is pinned before its evidence
-  // changes.
-  const pinned = { ...rest, revision: revisionOf(entry) }
-  return evidence.length === 0 ? pinned : { ...pinned, evidence: [...evidence] }
+  const { evidence: _recorded, revision: _stale, ...rest } = entry
+  const next =
+    evidence.length === 0 ? rest : { ...rest, evidence: [...evidence] }
+  // The revision covers the evidence a decision reviews, so it follows it: a
+  // digest of the evidence the entry had no longer matches, and a decision made
+  // from it is refused until a digest of the new evidence is read.
+  return { ...next, revision: revisionOf(next) }
 }
 
 /** The `reopened` a ledger file keeps for a reason, and the reason itself when the old reader cannot hold it. */

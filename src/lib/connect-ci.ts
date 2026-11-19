@@ -23,8 +23,8 @@
  * learning, target or evidence does, and the same content always has the same
  * revision. A tick made against another revision is skipped as stale and never
  * recorded, so it cannot settle a candidate nobody has decided. A line without
- * one is from a report before revisions: it applies only to a candidate that
- * has never reopened.
+ * one is from a report before revisions and is skipped as `unversioned`: the
+ * operator ticks the revision-tagged box of the current report instead.
  *
  * Import rule: node builtins and the `connect-*` modules. The `ce:connect`
  * helper bundles this module, so it must never import zod, `config.ts` or
@@ -506,9 +506,10 @@ interface Payload {
   readonly attempt: string
   /**
    * The revision this text describes: what the run that proposed it recorded.
-   * Absent in a store from before revisions, which is read as the revision the
-   * entry has. A box is rendered only when it equals the entry's revision, so a
-   * proposal that was never committed can never sit above another revision's box.
+   * Absent in a store from before revisions, and then no box is rendered for
+   * it until a run stores text with a revision. A box is rendered only when it
+   * equals the entry's revision, so a proposal that was never committed can
+   * never sit above another revision's box.
    */
   readonly revision?: string
 }
@@ -1210,21 +1211,11 @@ function proposed(
  * The payload of each open candidate: this run's text when it proposes the
  * candidate, otherwise the stored text. A text for the revision the ledger
  * holds wins over one for another, so a run whose ledger write failed cannot
- * replace the committed revision with its own. A text from before revisions
- * is taken to describe the revision the entry has. A text for another
- * revision is kept under its own, where it can match only content it
- * describes. A settled candidate has none.
+ * replace the committed revision with its own. A text for another revision is
+ * kept under its own, where it can match only content it describes, and a text
+ * with no revision (from before revisions) matches none. A settled candidate
+ * has none.
  */
-/** The payload with the revision it describes; one from before revisions describes the entry's. */
-function bound(
-  payload: Payload | undefined,
-  live: string,
-): Payload | undefined {
-  return payload === undefined || payload.revision !== undefined
-    ? payload
-    : { ...payload, revision: live }
-}
-
 function mergedPayloads(
   open: readonly LedgerEntry[],
   stored: ReadonlyMap<string, Payload>,
@@ -1233,8 +1224,8 @@ function mergedPayloads(
   const out = new Map<string, Payload>()
   for (const entry of open) {
     const live = revisionOf(entry)
-    const earlier = bound(stored.get(entry.id), live)
-    const proposedNow = bound(fresh.get(entry.id), live)
+    const earlier = stored.get(entry.id)
+    const proposedNow = fresh.get(entry.id)
     const current =
       earlier?.revision === live && proposedNow?.revision !== live
         ? undefined
@@ -1499,6 +1490,8 @@ export type SkipReason =
   | 'already-recorded'
   /** The tick was made against another revision of the candidate than the ledger holds. */
   | 'stale'
+  /** The tick is on a box with no revision, from a report before revisions: tick the revision-tagged box on the current report. */
+  | 'unversioned'
 
 export interface SkippedTick {
   readonly id: string
@@ -1590,11 +1583,6 @@ type Verdict =
   | { readonly kind: 'skip'; readonly skipped: SkippedTick }
   | { readonly kind: 'unresolved'; readonly unresolved: UnresolvedTick }
 
-/** An entry that was never reopened: no reopen on it and none in its history. */
-function neverReopened(entry: LedgerEntry): boolean {
-  return entry.reopened === undefined && entry.history.length === 0
-}
-
 /** What to do with the ticks one candidate has, given the manifest and the ledger. */
 function judge(
   id: string,
@@ -1621,13 +1609,10 @@ function judge(
     }
   }
   // A tick settles the revision it was made against. A line that names none is
-  // from before revisions: it was made against an entry that never reopened.
+  // from before revisions, and nothing can show which content it was made for.
+  if (first.revision === undefined) return skip('unversioned')
   const current = revisionOf(entry)
-  const sameRevision =
-    first.revision === undefined
-      ? neverReopened(entry)
-      : first.revision === current
-  if (!sameRevision) return skip('stale')
+  if (first.revision !== current) return skip('stale')
   if (entry.status === status && entry.reason === reason) {
     return skip('already-recorded')
   }
@@ -1683,8 +1668,8 @@ function skipReasonOf(reason: string): SkipReason | undefined {
  * Record the ticks of a report body. A tick counts when its box is a generated
  * line in the section of the body, its id is in the manifest the body names,
  * and the candidate is open at the revision the line names; a tick for any
- * other revision is skipped as `stale`, and a line from before revisions counts
- * only for a candidate that never reopened. A decision already recorded with
+ * other revision is skipped as `stale`, and a line from before revisions as
+ * `unversioned`. A decision already recorded with
  * the same reason is left as it is, so a second pass changes nothing. Each
  * decision is made only if the candidate is still open at that revision under
  * the lock, so one recorded since the ledger was read is skipped as

@@ -28,6 +28,7 @@ import {
 } from '../../scripts/generate-ce-connect-helper.ts'
 import { generateRegistryContent } from '../../scripts/generate-registry.ts'
 import { ruleIdFor } from '../../src/lib/connect-helper-core.js'
+import { type LedgerEntry, revisionOf } from '../../src/lib/connect-state.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 const HELPER_REL = 'skills/ce-connect/scripts/connect.mjs'
@@ -596,28 +597,28 @@ function exerciseReportOps(scriptPath: string, label: string): void {
     mode: 0o700,
   })
   const ids = [sha256('pack-candidate-1'), sha256('pack-candidate-2')]
+  const entries = ids.map(
+    (id, index): LedgerEntry => ({
+      id,
+      kind: 'transferable-lesson',
+      target: scenario.target,
+      ruleId: 'rule-0123456789abcdef',
+      sources: [
+        {
+          role: 'source',
+          path: `docs/solutions/lesson-${index}.md`,
+          fingerprint: sha256(`fingerprint-${index}`),
+        },
+      ],
+      targetEvidence: [],
+      status: 'candidate',
+      history: [],
+      recordedAt: new Date(Date.UTC(2026, 10, 1, 0, index)).toISOString(),
+    }),
+  )
   fs.writeFileSync(
     path.join(stateRoot, 'ledger.json'),
-    JSON.stringify({
-      version: 2,
-      entries: ids.map((id, index) => ({
-        id,
-        kind: 'transferable-lesson',
-        target: scenario.target,
-        ruleId: 'rule-0123456789abcdef',
-        sources: [
-          {
-            role: 'source',
-            path: `docs/solutions/lesson-${index}.md`,
-            fingerprint: sha256(`fingerprint-${index}`),
-          },
-        ],
-        targetEvidence: [],
-        status: 'candidate',
-        history: [],
-        recordedAt: new Date(Date.UTC(2026, 10, 1, 0, index)).toISOString(),
-      })),
-    }),
+    JSON.stringify({ version: 2, entries }),
   )
   fs.writeFileSync(
     path.join(stateRoot, 'runs', connectRun, 'run.json'),
@@ -630,6 +631,7 @@ function exerciseReportOps(scriptPath: string, label: string): void {
         schemaVersion: 1,
         candidates: ids.map((id, index) => ({
           id,
+          revision: revisionOf(entries[index] as LedgerEntry),
           kind: 'transferable-lesson',
           target: scenario.target,
           targetName: 'target',
