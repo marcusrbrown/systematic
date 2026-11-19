@@ -38,19 +38,20 @@ One family of rules, in these lines:
 - `rule ids`: the rules of this family. Work on these and no others.
 - `max candidates`: at most this many candidates.
 
-A rule entry gives `appliesWhen`, `guidance` and `prevention` text with the path and the hash of its file. Use those sections. You do not need the rest of the file unless an excerpt comes from it.
+A rule entry gives `appliesWhen`, `guidance` and `prevention` text with the path and the hash of its file. Use those sections for the contradiction and transferable-lesson tests: you do not need the rest of the file unless an excerpt comes from it. The code-mismatch test checks the learning file itself, so you read that file whole (Method, step 5).
 
 ## Method
 
 Work in the fewest turns you can. Make independent searches and reads in one turn. You have at most 20 turns in total.
 
-1. Find and read the entries for your rule ids, in one turn.
+1. Find and read the entries for your rule ids, in one turn. In the next turn, read the learning file of every rule, all in one turn.
 2. For each rule, say in a sentence what goes wrong when it is ignored (the failure shape). That is what you search for.
 3. Contradiction test. Search the other allowed projects' `docs/solutions` for guidance on the same contract in the same situation that says something incompatible. Two documents on one subject are usually compatible, and different contexts with different right answers are not a contradiction. A document that is only more detailed than another is not one either. Returning no contradiction is a valid result.
 4. Transferable-lesson test. A project other than the rule's own shows the same failure class in its code, workflows, config, plans or learnings, and records no rule for it. Search that project's tracked files for the failure shape and cite the lines. A project that could plausibly hit the problem someday is not enough.
-5. Code-mismatch test. The learning file that your rule names makes present-tense claims about how code, config or a tool behaves. Check the present-tense claims that matter against the code at their governing revision, within your turns and `max candidates`. Each claim is judged on its own. The governing revision is the checkout of the project the claim is about. For a claim about a dependency, it is the version the consumer pins, so judge the claim at that pin. A claim that was true at the pin is never `stale`, however far upstream has moved on. Read a lockfile as plain text only to learn which version to look at.
+5. Code-mismatch test. The learning file that your rule names makes present-tense claims about how code, config or a tool behaves. Read the whole learning file before the rule counts as covered: the rule entry is not the file, and a claim you never read is a claim you never checked. Your `files` list names each learning you read, and the helper does not count a rule as covered when its learning is missing from `files`. Check the present-tense claims that matter against the code at their governing revision, within your turns and `max candidates`. Each claim is judged on its own. The governing revision is the checkout of the project the claim is about. For a claim about a dependency, it is the version the consumer pins, so judge the claim at that pin. A claim that was true at the pin is never `stale`, however far upstream has moved on. Read a lockfile as plain text only to learn which version to look at.
    - `stale`: code at the governing revision contradicts the claim. Quote the contradicting lines.
    - `unscoped`: the claim holds where the learning was written, the learning does not say in which context, and positive evidence shows the claim false in another supported context. A fixture that uses a different spelling of a value is not enough. The excerpt must show the claim failing there.
+   - A claim about a documented contract or interface (an SDK guarantee, an API's documented behaviour) is not `stale` merely because an implementation detail differs, such as a server's sort order today. Positive evidence must contradict the contract itself, and when it does not, send `investigate`. Evidence of how one implementation behaves is not evidence against the contract.
    - A learning that deliberately describes past behaviour, such as a decision record of what was true when it was written, is never a candidate, whatever the code says now.
    - Back every `stale` or `unscoped` candidate with positive evidence: a verbatim excerpt of code, config or a tool's own text that contradicts the claim. A search that found nothing, a missing path or a partial configuration is not evidence. A claim you cannot check, or one whose governing version you cannot determine, is not stale: send `investigate` with no evidence, or send nothing.
    - For a `stale` claim about a dependency, show the consumer's pin: cite an excerpt of its `package.json` or of a workflow `uses:` line in `counterevidence`, or state the pin in `overlapCheck.note`, labelled unverified. Otherwise, the `nextStep` is `investigate`.
@@ -60,7 +61,7 @@ Work in the fewest turns you can. Make independent searches and reads in one tur
 
 A search result that is truncated or very long is a reason to narrow the search, never a reason to stop. Search again with a more specific pattern, in one project or directory at a time, or use the files index to pick paths, and go on. Before you conclude that a rule has no candidate, read at least the most relevant file a search pointed to. Judge from what you read, not from search output alone.
 
-If you are short of turns, stop searching, answer at once, and set `"complete": false`. Do not guess to finish. That is the only case for `"complete": false`. When the searches are done and nothing holds up, set `"complete": true` with no candidates.
+If you are short of turns, stop searching, answer at once, and set `"complete": false`. Do not guess to finish. That is the only case for `"complete": false`, and it includes running out of turns before you have read the learning file of every rule: never set `"complete": true` while the learning of any rule is unread. When the searches are done, every learning is read and nothing holds up, set `"complete": true` with no candidates.
 
 ## What you return
 
@@ -70,7 +71,7 @@ The types matter, because the helper rejects the whole answer on a wrong one:
 
 - `ruleIds`, `projects`, `files` and `searches` are lists of plain strings. Nothing in them is an object.
 - Each entry of `projects` is a project root exactly as written after `projects:` in your instructions, an absolute path. Never a project name.
-- Each entry of `files` is a path relative to its project root, as in the files index. Each entry of `searches` is one short string, such as the pattern you searched.
+- Each entry of `files` is a path relative to its project root, as in the files index. Each entry of `searches` is one short string, such as the pattern you searched. `files` holds at most 50 entries, so list the learnings first and other files after.
 - `complete` is `true` or `false`, never a string. `start` and `end` are whole numbers.
 - A candidate has exactly the fields shown below and no others. It has no `id`, `type`, `urgency` or `description`.
 

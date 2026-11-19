@@ -552,6 +552,8 @@ interface Snapshot {
     sha256: string
     /** The key of the rule's project. */
     project?: string
+    /** The learning's path in its project. Absent in a run begun before it was kept. */
+    path?: string
   }>
   /** What the run was narrowed to. */
   readonly selection?: Selection
@@ -1354,6 +1356,7 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
         id: rule.id,
         sha256: rule.sha256,
         project: projectKey(rule.project),
+        path: rule.path,
       })),
       coverageScope,
       offer: {
@@ -1880,8 +1883,13 @@ function coverageLines(
   classified: Classified,
 ): string[] {
   const lines: string[] = []
+  const learningUnread = new Set(coverage.learningUnreadRuleIds)
   for (const id of coverage.uncoveredRuleIds.slice(0, MAX_UNREAD_LINES)) {
-    lines.push(`rule ${id} was not covered by a complete family`)
+    lines.push(
+      learningUnread.has(id)
+        ? `rule ${id} was not covered: its learning was not among the files the family read`
+        : `rule ${id} was not covered by a complete family`,
+    )
   }
   if (coverage.uncoveredRuleIds.length > MAX_UNREAD_LINES) {
     lines.push(
@@ -2016,6 +2024,12 @@ function runValidation(
       )
       .map((project) => project.root),
     batches,
+    // A begin.json from before paths were kept names none, so it owes no read.
+    learningPaths: new Map(
+      snapshot.ruleVersions.flatMap((rule) =>
+        rule.path === undefined ? [] : [[rule.id, rule.path] as const],
+      ),
+    ),
   })
   // A rule whose candidate was lost to changed evidence is not covered, even
   // when a complete family named it: nothing was learned about it this run.

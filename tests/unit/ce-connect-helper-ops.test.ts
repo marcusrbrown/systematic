@@ -321,7 +321,7 @@ function batchJson(world: World, runId: string, over: Json = {}): Json {
     family: 'locking',
     ruleIds: allRuleIds(world),
     projects: [world.source, world.target],
-    files: ['docs/solutions/lock-reclaim.md'],
+    files: ['docs/solutions/lock-reclaim.md', 'docs/solutions/lock-now.md'],
     searches: ['reclaim lock'],
     complete: true,
     candidates: [],
@@ -1732,6 +1732,47 @@ describe('validate and publish', () => {
     expect((validated.coverage as Json).uncoveredRuleIds).toEqual([
       ruleIdFor(world.target, 'docs/solutions/lock-now.md'),
     ])
+  })
+
+  it('does not count a rule as covered when a complete batch names it but never lists its learning', () => {
+    const world = buildWorld()
+    const unread = ruleIdFor(world.target, 'docs/solutions/lock-now.md')
+    const { validated, published } = fullRun(world, [], {
+      batch: { files: ['docs/solutions/lock-reclaim.md'] },
+    })
+    expect(validated.pendingOutcome).toBe('degraded')
+    expect(validated.degradeReasons).toContain('uncovered-rules')
+    expect((validated.coverage as Json).uncoveredRuleIds).toEqual([unread])
+    expect((validated.coverage as Json).learningUnreadRuleIds).toEqual([unread])
+    expect(published.outcome).toBe('degraded')
+    expect(readDigest(published)).toContain(
+      `rule ${unread} was not covered: its learning was not among the files the family read`,
+    )
+  })
+
+  it('ends complete when the batch lists the learning of every rule it names', () => {
+    const world = buildWorld()
+    const { validated } = fullRun(world, [])
+    expect(validated.pendingOutcome).toBe('complete')
+    expect((validated.coverage as Json).learningUnreadRuleIds).toEqual([])
+  })
+
+  it('owes no read for a run begun before learning paths were kept', () => {
+    const world = buildWorld()
+    const run = start(world)
+    const snapshotFile = path.join(run.workDir, 'begin.json')
+    const snapshot = JSON.parse(fs.readFileSync(snapshotFile, 'utf8')) as {
+      ruleVersions: Array<Record<string, unknown>>
+    }
+    for (const rule of snapshot.ruleVersions) delete rule.path
+    fs.writeFileSync(snapshotFile, JSON.stringify(snapshot))
+    const file = writeBatch(
+      run.workDir,
+      'batch-1.json',
+      batchJson(world, run.runId, { files: [] }),
+    )
+    const validated = ok(validate(world, run, [file]))
+    expect(validated.pendingOutcome).toBe('complete')
   })
 
   it('degrades when a project is never touched', () => {

@@ -424,6 +424,11 @@ export function parseBatch(text: string, runId: string): BatchParse {
 export interface Coverage {
   /** Indexed rules that no complete batch reported. */
   readonly uncoveredRuleIds: readonly string[]
+  /**
+   * Rules a complete batch named but none listed the learning of among its
+   * files. They are also in `uncoveredRuleIds`; this says why.
+   */
+  readonly learningUnreadRuleIds: readonly string[]
   /** Allowed projects that no batch reported reading. */
   readonly untouchedProjects: readonly string[]
   /** Families that stopped before covering their rules. */
@@ -434,29 +439,52 @@ export interface CoverageInput {
   readonly ruleIds: readonly string[]
   readonly projects: readonly string[]
   readonly batches: readonly Batch[]
+  /**
+   * The learning path of each rule, relative to its project. A batch covers a
+   * rule only when it lists that path among its files, so a rule whose entry
+   * alone was read is not covered. A rule with no path here owes no read.
+   */
+  readonly learningPaths?: ReadonlyMap<string, string>
 }
 
 /**
  * Whether the batches cover what the index issued. A model that is told to
  * report nothing still has to name every rule id in a complete batch and every
- * project it read, so silence cannot pass for a clean scan. A run with no
- * rules has nothing to cover.
+ * project it read, so silence cannot pass for a clean scan. A complete batch
+ * that names a rule without listing its learning among its files has not read
+ * what the code-mismatch test checks, so the rule is held back. The list is
+ * the family's own report: it catches a learning that was skipped, not one
+ * that was listed and never opened. A run with no rules has nothing to cover.
  */
 export function checkCoverage(input: CoverageInput): Coverage {
   const incompleteFamilies = input.batches
     .filter((batch) => !batch.complete)
     .map((batch) => batch.family)
   if (input.ruleIds.length === 0) {
-    return { uncoveredRuleIds: [], untouchedProjects: [], incompleteFamilies }
+    return {
+      uncoveredRuleIds: [],
+      learningUnreadRuleIds: [],
+      untouchedProjects: [],
+      incompleteFamilies,
+    }
   }
+  const complete = input.batches.filter((batch) => batch.complete)
+  const named = new Set(complete.flatMap((batch) => batch.ruleIds))
   const covered = new Set(
-    input.batches
-      .filter((batch) => batch.complete)
-      .flatMap((batch) => batch.ruleIds),
+    complete.flatMap((batch) => {
+      const listed = new Set(batch.files)
+      return batch.ruleIds.filter((id) => {
+        const learning = input.learningPaths?.get(id)
+        return learning === undefined || listed.has(learning)
+      })
+    }),
   )
   const touched = new Set(input.batches.flatMap((batch) => batch.projects))
   return {
     uncoveredRuleIds: input.ruleIds.filter((id) => !covered.has(id)),
+    learningUnreadRuleIds: input.ruleIds.filter(
+      (id) => named.has(id) && !covered.has(id),
+    ),
     untouchedProjects: input.projects.filter((root) => !touched.has(root)),
     incompleteFamilies,
   }

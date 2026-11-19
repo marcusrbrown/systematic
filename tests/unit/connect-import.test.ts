@@ -251,7 +251,7 @@ function publishLocalLesson(
       family: 'locking',
       ruleIds: [ruleId, ruleIdFor(world.target, 'docs/solutions/lock-now.md')],
       projects: [world.source, world.target],
-      files: ['docs/solutions/lock-reclaim.md'],
+      files: ['docs/solutions/lock-reclaim.md', 'docs/solutions/lock-now.md'],
       searches: ['reclaim lock'],
       complete: true,
       candidates: [
@@ -1337,7 +1337,7 @@ describe('import: a record the helper itself published', () => {
         ruleIdFor(ci.target, 'docs/solutions/lock-now.md'),
       ],
       projects: [ci.source, ci.target],
-      files: ['docs/solutions/lock-reclaim.md'],
+      files: ['docs/solutions/lock-reclaim.md', 'docs/solutions/lock-now.md'],
       searches: ['reclaim lock'],
       complete: true,
       candidates: [
@@ -1814,7 +1814,7 @@ describe('import: a code-mismatch candidate carries its reason and evidence', ()
           ruleIdFor(ci.target, 'docs/solutions/lock-now.md'),
         ],
         projects: [ci.source, ci.target],
-        files: ['docs/solutions/lock-now.md'],
+        files: ['docs/solutions/lock-reclaim.md', 'docs/solutions/lock-now.md'],
         searches: ['reclaim lock'],
         complete: true,
         candidates: [

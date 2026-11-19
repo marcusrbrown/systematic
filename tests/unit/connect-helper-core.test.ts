@@ -417,6 +417,17 @@ describe('parseBatch', () => {
     ).toEqual({ ok: false, reason: 'batch-version' })
   })
 
+  it('takes at most 50 files, the cap the prompt and the contract state', () => {
+    const files = (count: number): string[] =>
+      Array.from({ length: count }, (_, i) => `docs/solutions/${i}.md`)
+    expect(
+      parseBatch(JSON.stringify({ ...batch, files: files(50) }), 'run-1').ok,
+    ).toBe(true)
+    expect(
+      parseBatch(JSON.stringify({ ...batch, files: files(51) }), 'run-1').ok,
+    ).toBe(false)
+  })
+
   it('rejects a wrongly typed complete flag or candidates list', () => {
     for (const bad of [
       { ...batch, complete: 'yes' },
@@ -457,6 +468,7 @@ describe('checkCoverage', () => {
     })
     expect(coverage).toEqual({
       uncoveredRuleIds: [],
+      learningUnreadRuleIds: [],
       untouchedProjects: [],
       incompleteFamilies: [],
     })
@@ -496,6 +508,7 @@ describe('checkCoverage', () => {
       checkCoverage({ ruleIds: [], projects: ['/p'], batches: [] }),
     ).toEqual({
       uncoveredRuleIds: [],
+      learningUnreadRuleIds: [],
       untouchedProjects: [],
       incompleteFamilies: [],
     })
@@ -508,6 +521,121 @@ describe('checkCoverage', () => {
       batches: [batchOf({ ruleIds: ['zzz'], projects: ['/p'] })],
     })
     expect(coverage.uncoveredRuleIds).toEqual(['a'])
+  })
+
+  describe('a rule whose learning the family did not list among the files it read', () => {
+    const learningPaths = new Map([
+      ['a', 'docs/solutions/a.md'],
+      ['b', 'docs/solutions/b.md'],
+    ])
+
+    it('is not covered, though a complete batch names it', () => {
+      const coverage = checkCoverage({
+        ruleIds: ['a', 'b'],
+        projects: ['/p'],
+        learningPaths,
+        batches: [
+          batchOf({
+            ruleIds: ['a', 'b'],
+            projects: ['/p'],
+            files: ['docs/solutions/a.md', 'src/other.ts'],
+          }),
+        ],
+      })
+      expect(coverage.uncoveredRuleIds).toEqual(['b'])
+      expect(coverage.learningUnreadRuleIds).toEqual(['b'])
+    })
+
+    it('is covered when the batch lists the learning', () => {
+      const coverage = checkCoverage({
+        ruleIds: ['a', 'b'],
+        projects: ['/p'],
+        learningPaths,
+        batches: [
+          batchOf({
+            ruleIds: ['a', 'b'],
+            projects: ['/p'],
+            files: ['docs/solutions/a.md', 'docs/solutions/b.md'],
+          }),
+        ],
+      })
+      expect(coverage.uncoveredRuleIds).toEqual([])
+      expect(coverage.learningUnreadRuleIds).toEqual([])
+    })
+
+    it('counts the read in the batch that names the rule, not one from another family', () => {
+      const coverage = checkCoverage({
+        ruleIds: ['a', 'b'],
+        projects: ['/p'],
+        learningPaths,
+        batches: [
+          batchOf({
+            family: 'one',
+            ruleIds: ['a'],
+            projects: ['/p'],
+            files: ['docs/solutions/a.md', 'docs/solutions/b.md'],
+          }),
+          batchOf({
+            family: 'two',
+            ruleIds: ['b'],
+            projects: ['/p'],
+            files: ['docs/solutions/a.md'],
+          }),
+        ],
+      })
+      expect(coverage.uncoveredRuleIds).toEqual(['b'])
+      expect(coverage.learningUnreadRuleIds).toEqual(['b'])
+    })
+
+    it('is not reported as unread when no complete batch names it: it is only uncovered', () => {
+      const coverage = checkCoverage({
+        ruleIds: ['a', 'b'],
+        projects: ['/p'],
+        learningPaths,
+        batches: [
+          batchOf({
+            ruleIds: ['a'],
+            projects: ['/p'],
+            files: ['docs/solutions/a.md'],
+          }),
+          batchOf({
+            family: 'cut',
+            ruleIds: ['b'],
+            projects: ['/p'],
+            files: [],
+            complete: false,
+          }),
+        ],
+      })
+      expect(coverage.uncoveredRuleIds).toEqual(['b'])
+      expect(coverage.learningUnreadRuleIds).toEqual([])
+    })
+
+    it('owes no read for a rule whose learning path the index did not record', () => {
+      const coverage = checkCoverage({
+        ruleIds: ['a', 'c'],
+        projects: ['/p'],
+        learningPaths,
+        batches: [
+          batchOf({
+            ruleIds: ['a', 'c'],
+            projects: ['/p'],
+            files: ['docs/solutions/a.md'],
+          }),
+        ],
+      })
+      expect(coverage.uncoveredRuleIds).toEqual([])
+    })
+
+    it('is a complete batch still: it adds no incomplete family', () => {
+      const coverage = checkCoverage({
+        ruleIds: ['b'],
+        projects: ['/p'],
+        learningPaths,
+        batches: [batchOf({ ruleIds: ['b'], projects: ['/p'], files: [] })],
+      })
+      expect(coverage.incompleteFamilies).toEqual([])
+    })
   })
 })
 

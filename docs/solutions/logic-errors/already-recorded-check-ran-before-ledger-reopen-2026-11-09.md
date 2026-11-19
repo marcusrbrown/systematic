@@ -54,12 +54,12 @@ classifyAgainstLedger(check.candidate, record, input, result)
 
 The two neighbouring defects were fixed in the same pass:
 
-- **A contradiction must span projects.** The shape check required two sources and the target among them, but not a second project. A candidate with two learnings from the target alone is now dropped as `same-project-contradiction` (`contradictionProblem`, `src/lib/connect-helper-core.ts:1128-1146`).
+- **A contradiction must span projects.** The shape check required two sources and the target among them, but not a second project. A candidate with two learnings from the target alone is now dropped as `same-project-contradiction` (`contradictionProblem`, `src/lib/connect-helper-core.ts:1156-1174`).
 - **Lost evidence degrades the run.** A candidate dropped as `changed-since-begin` now adds the degrade reason `evidence-changed` and holds its rule back from the covered set, so the rule is offered again. A plain rejection stays non-degrading (`classifyOne`, `src/ce-connect-helper.ts:1777-1825`; `holdBack`, `src/ce-connect-helper.ts:1765-1775`).
 
 ## Why This Works
 
-`findRecorded` answers "does the target cite this source?" by project name and path (`src/lib/connect-helper-core.ts:1432-1459`). That is the right question for a suppression, and the wrong one for a changed source, because the citation was written at the fingerprint the source had then. The ledger holds the only record of that fingerprint, so only the ledger can say whether the cited text still matches. Suppression is allowed to be a shortcut. It is not allowed to bypass the check that makes the shortcut safe.
+`findRecorded` answers "does the target cite this source?" by project name and path (`src/lib/connect-helper-core.ts:1460-1487`). That is the right question for a suppression, and the wrong one for a changed source, because the citation was written at the fingerprint the source had then. The ledger holds the only record of that fingerprint, so only the ledger can say whether the cited text still matches. Suppression is allowed to be a shortcut. It is not allowed to bypass the check that makes the shortcut safe.
 
 ## Prevention
 
