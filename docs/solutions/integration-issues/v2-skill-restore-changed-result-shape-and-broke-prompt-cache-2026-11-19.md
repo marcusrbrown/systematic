@@ -65,14 +65,14 @@ A result the host did cut is still restored in full, in the same kind it arrived
 
 The regression tests:
 
-- **Unit test.** The test in `tests/unit/opencode-v2-skills.test.ts` throws `the context hook is not registered` (`tests/unit/opencode-v2-skills.test.ts:809`) if the hook is missing, then runs the hook over repeated requests. It covers uncut text (unchanged), cut text (restored as `text`) and cut content (restored as `content`). The error case is at `tests/unit/opencode-v2-skills.test.ts:727`. Before, the test could pass without the hook ever running.
-- **Wire test.** The test in `tests/integration/opencode-v2.test.ts:2106` drives a real v2 host against a scripted `/responses` provider. It loads a skill, sends a follow-up, stops the host, starts a new one on the same session, and prompts again. It reads the raw values with `functionCallOutputs` (`tests/integration/opencode-v2.test.ts:295`) and asserts that every request carries exactly the full skill text as a string.
+- **Unit test.** The test in `tests/unit/opencode-v2-skills.test.ts` throws `the context hook is not registered` (`tests/unit/opencode-v2-skills.test.ts:809`) if the hook is missing, then runs the hook over repeated requests. It covers uncut text (unchanged), cut text (restored as `text`) and cut content (restored as `content`). The error case is at `tests/unit/opencode-v2-skills.test.ts:727`. The old tests checked that cut content was restored but never that an uncut result kept its shape.
+- **Wire test.** The test in `tests/integration/opencode-v2.test.ts:2106` drives a real v2 host against a scripted `/responses` provider. It loads a skill, sends a follow-up, stops the host, starts a new one on the same session, and prompts again. It reads the raw values with `functionCallOutputs` (`tests/integration/opencode-v2.test.ts:295`) and asserts that the three requests carrying that call (the continuation, the follow-up and the one after the restart) each send exactly the full skill text as a string.
 
 With 3.35.3 the same v1/v2 comparison showed 0 shape changes across 189 tool outputs, and v2's uncached tokens per task fell below v1's.
 
 ## Why This Works
 
-The host lowers a single text result to a string and anything else to an array ([`lowerToolResultOutput`, v2.3.2](https://github.com/anomalyco/opencode/blob/v2.3.2/packages/ai/src/protocols/open-responses.ts#L641-L652)). The store is a per-process `Map` (`src/lib/skill-tool.ts:43`) capped by `RESTORE_MAX_ENTRIES` (`src/lib/opencode-v2-skills.ts:80`). The hook is registered with `ctx.session.hook('context', restore)` (`src/lib/opencode-v2-skills.ts:305`) and runs on every request.
+The host sends a `content` result as an array and a `text` result as a string, and it stores a single text part as `text` ([`lowerToolResultOutput`, v2.3.2](https://github.com/anomalyco/opencode/blob/v2.3.2/packages/ai/src/protocols/open-responses.ts#L641-L652)). The store is a per-process `Map` (`src/lib/skill-tool.ts:43`) capped by `RESTORE_MAX_ENTRIES` (`src/lib/opencode-v2-skills.ts:80`). The hook is registered with `ctx.session.hook('context', restore)` (`src/lib/opencode-v2-skills.ts:305`) and runs on every request.
 
 The old rewrite therefore made the request bytes depend on a cache that a restart empties. The new output depends only on the result the host persisted, plus the full text, so a store hit and a store miss produce the same bytes whenever the host did not cut the result.
 
@@ -82,7 +82,7 @@ The old rewrite therefore made the request bytes depend on a cache that a restar
 - Test the wire value, not flattened text. Compare the raw `function_call_output.output` across a live request, a follow-up and a restarted host, and compare it with the expected full text so that a value that is stable but wrong also fails.
 - A unit test for a hook should fail when the hook is not registered.
 - To isolate a cache regression, turn off every plugin's `context` and transform hooks, your own included, before blaming the host. Give upstream a plain-plugin repro rather than a cause inferred from reading code.
-- Restored text over the host's output limit still falls back to the host's preview after a restart, because the store is in memory. That is tracked in #1461. Cache stability is guaranteed only for skills under the limit.
+- Restored text over the host's output limit still falls back to the host's preview after a restart, because the store is in memory. That is tracked in #1461. The fix keeps an uncut skill's bytes the same whether or not the store has the entry. That removes this cause of a prefix break; it does not guarantee a provider cache hit.
 
 ## Related Issues
 
