@@ -629,7 +629,11 @@ export function renderSweepLine(progress: SweepProgress): string {
 
 // ── Candidates ──────────────────────────────────────────────────────────────
 
-export const CANDIDATE_KINDS = ['contradiction', 'transferable-lesson'] as const
+export const CANDIDATE_KINDS = [
+  'contradiction',
+  'transferable-lesson',
+  'code-mismatch',
+] as const
 export type CandidateKind = (typeof CANDIDATE_KINDS)[number]
 
 export const NEXT_STEPS = [
@@ -638,6 +642,14 @@ export const NEXT_STEPS = [
   'investigate',
 ] as const
 export type NextStep = (typeof NEXT_STEPS)[number]
+
+/** Why a learning's claim no longer matches the code. */
+export const MISMATCH_REASONS = ['stale', 'unscoped'] as const
+export type MismatchReason = (typeof MISMATCH_REASONS)[number]
+
+function isMismatchReason(value: unknown): value is MismatchReason {
+  return MISMATCH_REASONS.some((reason) => reason === value)
+}
 
 /** Limits on a candidate's fields. */
 export const CANDIDATE_LIMITS = Object.freeze({
@@ -698,6 +710,9 @@ export interface ValidSource {
   readonly excerpt: string
   /** How a learning cites this text: `<project>:<path>@<fingerprint>`. */
   readonly cite: string
+  /** The line span the researcher named. Only `code-mismatch` evidence carries one. */
+  readonly start?: number
+  readonly end?: number
 }
 
 export interface ValidTargetEvidence {
@@ -724,6 +739,8 @@ export interface ValidCandidate {
   readonly title: string
   readonly summary: string
   readonly nextStep: NextStep
+  /** Why a `code-mismatch` learning is a candidate. Absent for every other kind. */
+  readonly reason?: MismatchReason
   readonly overlapCheck: OverlapCheck
   readonly sources: readonly ValidSource[]
   readonly targetEvidence: readonly ValidTargetEvidence[]
@@ -992,6 +1009,18 @@ function validSymbol(value: unknown): string | undefined {
   return /\s/.test(symbol) || CONTROL.test(symbol) ? undefined : symbol
 }
 
+/** Whether the lines `start..end` of the verified file contain its excerpt. */
+function spanHoldsExcerpt(
+  verified: Extract<Verified, { status: 'ok' }>,
+  start: number,
+  end: number,
+): boolean {
+  return lines(verified.content)
+    .slice(start - 1, end)
+    .join('\n')
+    .includes(verified.excerpt)
+}
+
 function verifyTargetEvidence(
   ctx: ValidationContext,
   target: ProjectFacts,
@@ -1023,10 +1052,9 @@ function verifyTargetEvidence(
   if (verdict.verdict === 'unchecked') {
     return drop('citation-unchecked', verdict.reason)
   }
-  const span = lines(verified.content)
-    .slice(start - 1, end as number)
-    .join('\n')
-  if (!span.includes(verified.excerpt)) return drop('excerpt-outside-span')
+  if (!spanHoldsExcerpt(verified, start, end as number)) {
+    return drop('excerpt-outside-span')
+  }
   return {
     path: verified.path,
     start,
@@ -1055,6 +1083,51 @@ function toValidSource(
 }
 
 /**
+ * Evidence for a `code-mismatch` candidate: any tracked file in any allowed
+ * project, held to a span that contains the excerpt. No symbol and no citation
+ * check; the helper checks provenance and the researcher judges meaning.
+ */
+function verifySpanEvidence(
+  ctx: ValidationContext,
+  item: unknown,
+): ValidSource | Halt {
+  if (!isRecord(item)) return drop('malformed-candidate')
+  const verified = verifyFile(ctx, item.project, item)
+  if (verified.status !== 'ok') return verified
+  const { start, end } = item
+  if (!isSpan(start, end)) return drop('malformed-candidate')
+  if (!spanHoldsExcerpt(verified, start, end as number)) {
+    return drop('excerpt-outside-span')
+  }
+  return { ...toValidSource(verified), start, end: end as number }
+}
+
+/**
+ * A `code-mismatch` candidate names one learning in the target and nothing
+ * else of the target's: no target evidence, a reason, and a refresh only when
+ * positive evidence rides along.
+ */
+function mismatchProblem(
+  nextStep: NextStep,
+  reason: unknown,
+  target: string,
+  sourceCount: number,
+  sourceProjects: ReadonlySet<string>,
+  targetEvidenceCount: number,
+  evidenceCount: number,
+): DropReason | undefined {
+  if (!isMismatchReason(reason)) return 'invalid-structure'
+  if (sourceCount !== 1 || !sourceProjects.has(target)) {
+    return 'invalid-structure'
+  }
+  if (targetEvidenceCount > 0) return 'invalid-structure'
+  if (nextStep === 'compound-learning') return 'invalid-structure'
+  return nextStep === 'refresh-learning' && evidenceCount < 1
+    ? 'invalid-structure'
+    : undefined
+}
+
+/**
  * A contradiction pairs the target's learning with another project's. Two
  * learnings of the target alone are that project's own business, not a
  * cross-project connection.
@@ -1079,7 +1152,12 @@ function shapeProblem(
   target: string,
   sources: readonly unknown[],
   targetEvidenceCount: number,
+  evidenceCount: number,
+  reason: unknown,
 ): DropReason | undefined {
+  if (kind !== 'code-mismatch' && reason !== undefined) {
+    return 'invalid-structure'
+  }
   if (sources.length < 1) return 'invalid-structure'
   const seen = new Set<string>()
   const sourceProjects = new Set<string>()
@@ -1096,6 +1174,20 @@ function shapeProblem(
       target,
       sources.length,
       sourceProjects,
+    )
+  }
+  // Before the transferable-lesson tail: that tail forbids a target-owned
+  // source and forbids refresh-learning, which would validate this kind
+  // backwards.
+  if (kind === 'code-mismatch') {
+    return mismatchProblem(
+      nextStep,
+      reason,
+      target,
+      sources.length,
+      sourceProjects,
+      targetEvidenceCount,
+      evidenceCount,
     )
   }
   if (sourceProjects.has(target) || targetEvidenceCount < 1) {
@@ -1206,6 +1298,8 @@ export function checkCandidate(
     header.target.root,
     sources,
     evidence.length,
+    counter.length,
+    raw.reason,
   )
   if (shape !== undefined) return drop(shape)
 
@@ -1223,7 +1317,9 @@ export function checkCandidate(
   )
   if (isHalt(validEvidence)) return validEvidence
   const validCounter = verifyEach(counter, (item) =>
-    verifySource(ctx, item, false),
+    header.kind === 'code-mismatch'
+      ? verifySpanEvidence(ctx, item)
+      : verifySource(ctx, item, false),
   )
   if (isHalt(validCounter)) return validCounter
 
@@ -1237,6 +1333,9 @@ export function checkCandidate(
       title: header.title,
       summary: header.summary,
       nextStep: header.nextStep,
+      ...(header.kind === 'code-mismatch' && isMismatchReason(raw.reason)
+        ? { reason: raw.reason }
+        : {}),
       overlapCheck: header.overlapCheck,
       sources: validSources,
       targetEvidence: validEvidence,
