@@ -4,6 +4,20 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.35.3](https://github.com/marcusrbrown/systematic/compare/v3.35.2...v3.35.3) (2026-11-19)
+
+### Bug Fixes
+
+* **v2:** keep the host's result shape when restoring skill output ([#1459](https://github.com/marcusrbrown/systematic/issues/1459)) ([4ab4f6e](https://github.com/marcusrbrown/systematic/commit/4ab4f6e0eb158ac33a7412690802337f3ae8e7fa))
+
+### Continuous Integration
+
+* **deps:** update Systematic to v3.35.2 ([#1454](https://github.com/marcusrbrown/systematic/issues/1454)) ([2f08ef5](https://github.com/marcusrbrown/systematic/commit/2f08ef55e860d45fdcec92b71c35e50151f25d46))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.146.0 ([#1455](https://github.com/marcusrbrown/systematic/issues/1455)) ([16853e8](https://github.com/marcusrbrown/systematic/commit/16853e805470d7e00329acd2e05fbdfa54a8299e))
+
 ## [3.35.2](https://github.com/marcusrbrown/systematic/compare/v3.35.1...v3.35.2) (2026-11-18)
 
 ### Bug Fixes
