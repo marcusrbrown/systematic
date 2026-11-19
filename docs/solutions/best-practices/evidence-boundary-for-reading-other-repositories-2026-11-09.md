@@ -42,6 +42,7 @@ tags: [evidence-boundary, hardened-git, symlink-containment, fingerprint, citati
 A file-and-line check alone passes when the cited text has moved, which is exactly the failure that matters, so the check compares the symbol inside the span. Two limits go with it:
 
 - **The claim depends on what authors wrote.** When this was measured, only 46 of 137 learnings in one project carried a `path:line` citation (an earlier count gave 42 to 46). A project with none is `unsupported`, which is not the same as every citation holding (`reportProjectCitations`, `src/lib/connect-evidence.ts:745-785`).
+- **A pass does not show the span supports the sentence.** It shows the symbol is there. A citation shifted to a new line range can land on different code that names the same symbol and still pass. In #1459, shifted citations to test files passed `scripts/content-integrity.ts` while pointing at the wrong tests, and only a review that read the cited lines caught it.
 - **The check is bounded.** It stops at a per-project cap (`maxCitationsPerProject`, 500, `src/lib/connect-evidence.ts:51-68`). In an evaluation over a real project set every project reached the cap, so "cap reached" is a fact to report and not a failure of the run.
 
 The same shape is in `scripts/content-integrity.ts`, which checks the `path:line` citations in `docs/solutions/` for the symbol their sentence names.
