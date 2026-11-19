@@ -170,7 +170,7 @@ task(category='ultrabrain')  # Deep reasoning (GPT-6.1 Sol)
 
 ### Systematic Research Agents
 - `best-practices-researcher` — External research
-- `connections-researcher` — Read-only cross-project search for contradictions and lessons
+- `connections-researcher` — Read-only cross-project search for contradictions, lessons and code mismatches
 - `framework-docs-researcher` — Framework documentation
 - `git-history-analyzer` — Git archaeology
 - `learnings-researcher` — Institutional knowledge

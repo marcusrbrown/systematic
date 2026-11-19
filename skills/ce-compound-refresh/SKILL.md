@@ -16,7 +16,7 @@ Maintain the quality of `docs/solutions/` over time. This workflow reviews exist
 
 Look at `$ARGUMENTS` before anything else. This section applies only when it holds at least one `path:<path>` token; repeat the token for each doc. Without one, skip this section: Mode Detection and the four strategies under Scope Selection work as before.
 
-An exact path scope names the docs to review and nothing else. It is how a contradiction that `ce:connect` found is refreshed. Do these steps in order, before you read any doc and before you run any command, and stop at the first stop:
+An exact path scope names the docs to review and nothing else. It is how a contradiction or a code mismatch that `ce:connect` found is refreshed. Do these steps in order, before you read any doc and before you run any command, and stop at the first stop:
 
 1. **Autofix is refused.** If `mode:autofix` is also present, your whole reply is `Refused: mode:autofix cannot be combined with an exact path scope`. Read nothing, write nothing, delete nothing. An unattended run does not get to choose a list of docs.
 2. **No keyword scope.** If a category, module or keyword scope is also present, stop and say that a path scope cannot be combined with a keyword scope.

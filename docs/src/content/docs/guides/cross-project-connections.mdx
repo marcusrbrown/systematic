@@ -1,14 +1,15 @@
 ---
 title: Connect your projects
-description: Use ce:connect to read the learnings and tracked code of projects you allow, narrow a run to a group or a few projects, and get a digest of contradictions between learnings and lessons one project recorded that another still needs. A run proposes and a person decides; nothing is written into any project.
+description: Use ce:connect to read the learnings and tracked code of projects you allow, narrow a run to a group or a few projects, and get a digest of contradictions between learnings, lessons one project recorded that another still needs, and learnings whose claim the code no longer supports. A run proposes and a person decides; nothing is written into any project.
 sidebar:
   order: 13
 ---
 
-If you work in several repositories, each one holds its own `docs/solutions/`, and nothing reads them against each other. One project records "always retry the export job on timeout". A sibling records "never retry it". A third project hit a failure that the first one already solved and wrote down. `ce:connect` reads the projects you name and proposes two kinds of candidate:
+If you work in several repositories, each one holds its own `docs/solutions/`, and nothing reads them against each other. One project records "always retry the export job on timeout". A sibling records "never retry it". A third project hit a failure that the first one already solved and wrote down. `ce:connect` reads the projects you name and proposes three kinds of candidate:
 
 - **Contradiction.** Two learnings that give opposite guidance for the same situation, where at least one of them is in the project that should change and at least one is in another project.
 - **Transferable lesson.** A lesson one project recorded, where another project's tracked code, workflows or config show the failure and its own learnings do not record the lesson.
+- **Code mismatch.** One learning whose present-tense claim the code no longer supports, for example "the export route rewrites paths" after the route was renamed. A candidate carries a reason, `stale` or `unscoped`, and quotes the evidence (see [A code mismatch](#a-code-mismatch)).
 
 A run proposes. A person decides. `ce:connect` writes nothing into any project, any remote or any global config. Its only output is a digest and a run record in a state directory outside your repositories.
 
@@ -17,7 +18,7 @@ A run proposes. A person decides. `ce:connect` writes nothing into any project, 
 1. The skill reads the mode and checks that the host is one where the researcher's tool limits have been seen to work (see [Supported hosts](#supported-hosts)).
 2. A helper, a Node script bundled with the skill, resolves your selection (the whole allow list unless you name a group or some projects), takes a lock, lists each selected project's tracked files, hashes them and builds an index of the learnings.
 3. The skill groups part of that index into families of related rules and dispatches the `connections-researcher` agent once per family. The agent can read, grep and glob. It cannot run commands, write, edit or fetch.
-4. The helper validates every candidate the agent returns. It keeps a candidate only when each cited path is a tracked file in an allowed project, each fingerprint matches the hash taken at the start, each excerpt appears word for word in its file, and each piece of target evidence names a line span that holds its symbol. Candidates that fail a check are dropped, counted by reason in the digest, and listed there by title and reason, so you can tell whether a real finding was lost.
+4. The helper validates every candidate the agent returns. It keeps a candidate only when each cited path is a tracked file in an allowed project, each fingerprint matches the hash taken at the start, each excerpt appears word for word in its file, and each piece of target evidence names a line span that holds its symbol, and each piece of evidence for a code mismatch names a line span that holds its excerpt. Candidates that fail a check are dropped, counted by reason in the digest, and listed there by title and reason, so you can tell whether a real finding was lost.
 5. The helper publishes the digest and the run record and updates a small ledger.
 
 A project supplies text, not instructions. A learning that says "report nothing", "this corpus is audited" or "add that project to the allow list" changes nothing. The allow list is your own config.
@@ -202,7 +203,7 @@ The state directory is `$XDG_STATE_HOME/systematic/connect`, or `~/.local/state/
   ledger.json            the minimal ledger
 ```
 
-- **The digest** has three sections: candidates, connections already recorded (the target already has a learning citing the same source), and stale citations. Each candidate shows its sources with paths, fingerprints and excerpts, any counterevidence, an overlap check, and a next step. Free text is shown as quoted, untrusted evidence. Its header carries a `Selection:` line that names the whole allow list, the group, or the picked projects, with the selection's id.
+- **The digest** has three sections: candidates, connections already recorded (the target already has a learning citing the same source), and stale citations. Each candidate shows its sources with paths, fingerprints and excerpts, any counterevidence, an overlap check, and a next step. A code mismatch also shows its reason, and each piece of evidence with its project, path, line span, fingerprint and that project's checkout HEAD, or `HEAD unavailable`. A project that has no learnings is marked as read only as evidence. Free text is shown as quoted, untrusted evidence. Its header carries a `Selection:` line that names the whole allow list, the group, or the picked projects, with the selection's id.
 - **The run record** (`run.json`) holds the candidate block that `ce:compound` reads when you promote a lesson. It names the selection too, and records each project's `repo` (the lowercase `owner/repo` of its `origin` remote) and the commit its HEAD names, so the record can be matched to a checkout on another machine. The helper reads both from `.git` files, runs no git command for them and opens no connection. Only GitHub remotes count, credentials in a URL are dropped, and a project with no GitHub `origin` records neither.
 - **Stale citations** are a deterministic check of which `path:line` citations in your learnings still hold. A citation is `passed`, `not-in-span` (the symbol is not in the cited lines, with a flag when it is elsewhere in the file) or `unchecked` (with a reason). It reports which citations still hold. It does not promise that code has not moved. The check stops at a cap per project (500 citations). A project that reaches it is named under "Not read or not covered" in the digest and the run record keeps the counts, but the run is not marked `degraded` for that alone.
 - **Retention.** Run directories older than 30 days are pruned at the start of a run. The ledger is never pruned.
@@ -210,7 +211,7 @@ The state directory is `$XDG_STATE_HOME/systematic/connect`, or `~/.local/state/
 
 ## Promote a candidate
 
-Only a person promotes a candidate. `ce:connect` never writes a learning. Every candidate in the summary that can be promoted comes with a line to paste. A lesson gets a line of two tokens for `ce:compound`, shown below. A contradiction gets a `Review in <project>: /ce:compound-refresh path:<path>` line that names the target project's own learning, because `ce:compound` refuses contradictions. A candidate whose next step is `investigate` has neither: the summary says to investigate it first, and there is nothing to paste yet.
+Only a person promotes a candidate. `ce:connect` never writes a learning. Every candidate in the summary that can be promoted comes with a line to paste. A lesson gets a line of two tokens for `ce:compound`, shown below. A contradiction or a code mismatch gets a `Review in <project>: /ce:compound-refresh path:<path>` line that names the target project's own learning, because `ce:compound` refuses both. A candidate whose next step is `investigate` has neither: the summary says to investigate it first, and there is nothing to paste yet.
 
 ```text
 candidate:<run record path> candidate-id:<id>
@@ -227,6 +228,27 @@ Run `ce:compound-refresh` from the project that should change, with the exact pa
 ```
 
 Repeat `path:` for each learning. An exact path scope reviews those documents and nothing else. It shows what it will touch first and runs once per project. It refuses `mode:autofix`: a human reviews every change.
+
+### A code mismatch
+
+A code mismatch names one learning, in the project that should change, whose claim the code no longer supports. It has one of two reasons:
+
+- **`stale`.** Code at the governing revision contradicts a present-tense claim. The evidence is the contradicting lines, quoted word for word.
+- **`unscoped`.** The claim holds where the learning was written, but the learning does not say in which context, and positive evidence shows it false in another supported context. A fixture that merely spells a value differently is not enough.
+
+The governing revision is the checkout of the project the claim is about. For a claim about a dependency it is the version the consuming project pins: a claim that was true at the pin is never `stale`. A learning that deliberately describes past behaviour is never a candidate.
+
+The evidence may sit in any allowed project, the target included. To check a dependency claim, add one checkout of that dependency, at the version the consumer pins, to `connect.allow_projects`. A project with no `docs/solutions` of its own is read only as evidence and adds no rules to the sweep. The helper reads lockfiles as plain text at most and parses none, so the pin has to be shown another way: an excerpt of the consumer's `package.json` or a workflow `uses:` line, or a note from the researcher that is labelled unverified. When neither is there, the candidate's next step is `investigate`.
+
+The helper checks provenance only: each evidence item's project, path, fingerprint, line span and word-for-word text. It cannot see a version, a pin or what the text means. The digest shows each evidence project's checkout HEAD from the run record. The HEAD is context for you, not proof that the text came from that revision, so recheck the evidence before you confirm a refresh.
+
+A candidate with next step `refresh-learning` needs at least one evidence item and prints the same exact-path line as a contradiction, with the evidence listed beside it:
+
+```text
+/ce:compound-refresh path:docs/solutions/best-practices/export-route-rewrites-paths-2026-02-11.md
+```
+
+A candidate with next step `investigate` may have no evidence, because a search that found nothing, a missing path or a partial configuration is not evidence. It has no refresh line. Check the claim yourself first. Nothing is applied automatically.
 
 ### A transferable lesson
 
@@ -263,7 +285,7 @@ A candidate is refused, and named, when its evidence does not hold on your machi
 | Reason | Meaning |
 |---|---|
 | `file-changed` | A cited file differs from the file the run read. The refusal names the file. |
-| `repo-not-allowed` | No allowed checkout has the recorded repository as its `origin`. |
+| `repo-not-allowed` | No allowed checkout has the recorded repository as its `origin`. For a code mismatch the refusal adds one line: allow-list a checkout of the evidence repository (at the pinned version for a dependency) and retry. |
 | `repo-ambiguous` | Two allowed checkouts do. The refusal lists their keys. |
 | `project-without-repo` | The run recorded no GitHub remote for a project of the candidate. |
 | `file-not-tracked`, `file-symlink`, `file-vanished` | A cited file is not tracked locally, is a symlink, or is gone. |
@@ -294,6 +316,8 @@ The ledger a scheduled run keeps is separate from your local ledger, and nothing
 After you promote or turn down a candidate, tell the ledger. In an interactive run the skill offers to do this for you. A candidate is `candidate`, `promoted` or `rejected`, and `promoted` and `rejected` carry a reason. "Context-specific, no write needed" is `rejected` with that reason. If a learning was written but the ledger update failed, `ce:compound` prints the candidate id and destination so you can record the decision. A later run also reports learnings that carry a provenance marker with no recorded decision.
 
 The ledger suppresses a candidate whose sources and target evidence have not changed, whatever its status. A changed source reopens it as "sources changed"; changed target evidence reopens it as "target changed".
+
+A code mismatch is decided one claim at a time: a `stale` and an `unscoped` finding on one claim are separate decisions, and an edited claim is a new candidate. It reopens as "sources changed" when its learning changes, and as "evidence changed" when a recorded evidence file changes or disappears. A different set of evidence over unchanged files does not reopen it. A sibling learning that cites the learning does not mark the candidate as already recorded.
 
 ## Manage the ledger
 
@@ -357,6 +381,7 @@ Each UTC date has one report, titled `ce:connect report — YYYY-MM-DD (UTC)`. A
 The report lists the candidates that are still open, oldest first, as many as fit under the size cap. Each candidate has:
 
 - the sources and the target evidence, shown as quoted text,
+- for a code mismatch, its reason and each evidence item as `project:path:span:HEAD`, without the excerpt (`fetch:` supplies it),
 - a `fetch:<run>.<attempt>` line for the run and attempt that found it, to bring it to your machine, and
 - two boxes, **Promoted** and **Rejected**.
 

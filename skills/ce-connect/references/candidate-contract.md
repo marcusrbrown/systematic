@@ -45,7 +45,8 @@ Coverage is checked, not reported on trust. An offered rule id that no complete 
 
 | Field | Rule |
 |---|---|
-| `kind` | `contradiction` or `transferable-lesson`. |
+| `kind` | `contradiction`, `transferable-lesson` or `code-mismatch`. |
+| `reason` | `stale` or `unscoped`. Required for `code-mismatch` and refused on any other kind. |
 | `ruleId` | An id from the rules file. One source must be the file that id names. |
 | `target` | The main root of the project that should change. It must be an allowed project. |
 | `title` | One line. |
@@ -54,11 +55,13 @@ Coverage is checked, not reported on trust. An offered rule id that no complete 
 | `overlapCheck` | `queries` (what was searched in the target), `result` (`none-found` or `found`) and an optional `note`. |
 | `sources` | Learnings: `project`, `path`, `fingerprint`, `excerpt`. |
 | `targetEvidence` | Tracked files in the target: `path`, `start`, `end`, `symbol`, `fingerprint`, `excerpt`. |
-| `counterevidence` | Any tracked file, shaped like a source. |
+| `counterevidence` | Any tracked file, shaped like a source. For a `code-mismatch` it is the positive evidence, and each item also names a line span: `start` and `end`. |
 
 A `contradiction` has at least two sources, one of them in the target and at least one in another project, and its next step is `refresh-learning` or `investigate`. A `transferable-lesson` has sources outside the target, at least one `targetEvidence` item, and a next step of `compound-learning` or `investigate`.
 
-The next step also decides the handoff the summary prints. A `compound-learning` lesson gets the `candidate:` and `candidate-id:` tokens for `ce:compound`. A `refresh-learning` contradiction gets the exact-path scope `/ce:compound-refresh path:<docs/solutions/...>` of the target's own learning, because `ce:compound` refuses a contradiction. An `investigate` candidate gets neither.
+A `code-mismatch` names one learning whose present-tense claim the code no longer supports. It has exactly one source, a learning in the target, and no `targetEvidence`. Its `reason` is `stale` (code at the governing revision contradicts the claim) or `unscoped` (the claim holds where the learning was written, the learning names no context, and positive evidence shows it false in another supported context). Its next step is `refresh-learning` or `investigate`, never `compound-learning`, and `refresh-learning` needs at least one `counterevidence` item. The evidence may sit in any allowed project, the target included, and each item must name a span that holds its excerpt. The helper checks provenance only: project, path, fingerprint, span and verbatim text. It cannot see a version, a pin or what the evidence means. The researcher's prompt carries those rules, and the operator rechecks the evidence before confirming a refresh.
+
+The next step also decides the handoff the summary prints. A `compound-learning` lesson gets the `candidate:` and `candidate-id:` tokens for `ce:compound`. A `refresh-learning` contradiction or code mismatch gets the exact-path scope `/ce:compound-refresh path:<docs/solutions/...>` of the target's own learning, because `ce:compound` refuses both; a code mismatch also lists its evidence to recheck before the operator confirms. Each digest entry for a code mismatch shows its reason and each evidence item with its project's checkout HEAD from the run record, or `HEAD unavailable`; the helper hashes working-tree bytes and reads no history, so a HEAD is context, not attestation. An `investigate` candidate gets neither.
 
 ## What the helper checks
 
@@ -68,9 +71,11 @@ Each candidate, in order. The first failure drops that candidate and counts it b
 - Every fingerprint equals the hash the helper took at `begin`, and the file still has it.
 - Every excerpt appears verbatim in its file and is 20 to 1500 characters.
 - Each `targetEvidence` item names a line span and a `symbol`. The symbol must appear in the span and in the excerpt, and the excerpt must lie inside the span.
+- Each `counterevidence` item of a `code-mismatch` names a line span that holds its excerpt, with no symbol. Other kinds carry no span.
+- A `code-mismatch` has a valid `reason`, one learning source in the target, no `targetEvidence` and a next step other than `compound-learning`. A `refresh-learning` has at least one `counterevidence` item.
 - The `ruleId` is one the index issued, and one source is the file it names.
 - Free text is within its cap and holds no control character.
-- The ledger decision: new, suppressed (same sources, same target evidence), `sources changed` or `target changed`.
+- The ledger decision: new, suppressed (same sources, same target evidence), `sources changed` or `target changed`. A `code-mismatch` is one decision per claim and reopens as `evidence changed` when a recorded evidence file changes or is gone.
 
 ## Limits
 

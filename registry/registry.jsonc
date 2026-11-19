@@ -82,7 +82,7 @@
     {
       "name": "agent-connections-researcher",
       "type": "agent",
-      "description": "Reads the learnings of several allowed projects, one rule family at a time, and proposes contradictions between learnings and lessons one project recorded that a sibling still needs. Read-only. Use only through the ce:connect skill.",
+      "description": "Reads the learnings of several allowed projects, one rule family at a time, and proposes contradictions between learnings, lessons one project recorded that a sibling still needs, and learnings whose present-tense claim the code no longer supports. Read-only. Use only through the ce:connect skill.",
       "files": ["agents/research/connections-researcher.md"]
     },
     {
@@ -316,7 +316,7 @@
     {
       "name": "ce-connect",
       "type": "skill",
-      "description": "Use when searching the projects the user has allowed for contradictions between their learnings, or for a lesson that one project recorded and a sibling project still needs. Also use when the user asks what their other projects have learned about a failure.",
+      "description": "Use when searching the projects the user has allowed for contradictions between their learnings, for a lesson that one project recorded and a sibling project still needs, or for a learning whose claim the code no longer supports. Also use when the user asks what their other projects have learned about a failure.",
       "files": [
         "skills/ce-connect/SKILL.md",
         "skills/ce-connect/references/candidate-contract.md",
