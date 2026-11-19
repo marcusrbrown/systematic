@@ -244,6 +244,19 @@ describe('v2 child environment and config', () => {
     expect(provider?.env).toEqual(['SYSTEMATIC_HOST_CONTRACT_KEY'])
   })
 
+  test('the v2 scripted provider can speak the Responses wire, and a v1 host cannot', () => {
+    const config = JSON.parse(
+      withScriptedProvider('{}', 'http://127.0.0.1:1/v1', 'v2', 'responses'),
+    ) as { providers: Record<string, Record<string, unknown>> }
+
+    expect(config.providers['systematic-host-contract-provider']?.package).toBe(
+      '@opencode/ai/providers/openai-compatible-responses',
+    )
+    expect(() =>
+      withScriptedProvider('{}', 'http://127.0.0.1:1/v1', 'v1', 'responses'),
+    ).toThrow('only available on a v2 host')
+  })
+
   test('the v1 scripted provider keeps the npm shape and the plugin key', () => {
     const config = JSON.parse(
       withScriptedProvider(

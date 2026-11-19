@@ -796,25 +796,70 @@ describe('context hook wiring', () => {
     ).toEqual([{ type: 'text', text: loaded.content ?? '' }])
   })
 
-  test('a load that fits under the host limit keeps the host text shape on every request', async () => {
+  test('the registered hook keeps the host result shape on every request: an uncut load is untouched and a cut load is restored in full, as the same kind', async () => {
     const host = await setup()
     const tool = await registeredTool(host)
-    const loaded = await tool.execute(
-      { name: 'git-worktree' },
-      toolContext({ sessionID: 's-fit', id: 'call-fit' }),
-    )
-    const full = loaded.content ?? ''
     const hook = host.hooks.find((candidate) => candidate.name === 'context')
+    // The hook is the subject: without it nothing below runs, so say so.
+    if (hook === undefined)
+      throw new Error('the context hook is not registered')
 
-    for (let request = 0; request < 2; request++) {
+    const sessionID = 's-shape'
+    const full = new Map<string, string>()
+    const fullOf = (id: string) => full.get(id) ?? ''
+    for (const id of ['call-fit', 'call-cut-text', 'call-cut-content']) {
+      const loaded = await tool.execute(
+        { name: 'git-worktree' },
+        toolContext({ sessionID, id }),
+      )
+      full.set(id, loaded.content ?? '')
+      expect(full.get(id)).toContain('<skill_content')
+    }
+
+    // The host builds a fresh request from history each time, so each round
+    // starts from the host's own result and runs the hook again.
+    for (let request = 1; request <= 3; request++) {
       const event = {
-        sessionID: 's-fit',
-        messages: [textToolResultMessage('call-fit', 'systematic_skill', full)],
+        sessionID,
+        messages: [
+          // Under the host limit: its single text part is the whole skill.
+          textToolResultMessage(
+            'call-fit',
+            'systematic_skill',
+            fullOf('call-fit'),
+          ),
+          // Over the limit and cut to one text part, as `{ type: 'text' }`.
+          textToolResultMessage('call-cut-text', 'systematic_skill', 'CUT'),
+          // Over the limit and cut to a preview plus the marker, as `content`.
+          toolResultMessage('call-cut-content', 'systematic_skill', [
+            'CUT',
+            '[showing lines 1-5]',
+          ]),
+        ],
       }
-      await hook?.callback(event)
+
+      await hook.callback(event)
+
+      const [fit, cutText, cutContent] = event.messages as [
+        ToolResultMessage,
+        ToolResultMessage,
+        ReturnType<typeof toolResultMessage>,
+      ]
+      expect(fit.content[0]?.result, `request ${request}: uncut`).toEqual({
+        type: 'text',
+        value: fullOf('call-fit'),
+      })
       expect(
-        (event.messages[0] as ToolResultMessage).content[0]?.result,
-      ).toEqual({ type: 'text', value: full })
+        cutText.content[0]?.result,
+        `request ${request}: cut text`,
+      ).toEqual({ type: 'text', value: fullOf('call-cut-text') })
+      expect(
+        cutContent.content[0]?.result,
+        `request ${request}: cut content`,
+      ).toEqual({
+        type: 'content',
+        value: [{ type: 'text', text: fullOf('call-cut-content') }],
+      })
     }
   })
 
