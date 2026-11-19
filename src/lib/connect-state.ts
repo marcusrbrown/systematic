@@ -1230,6 +1230,23 @@ function evidenceChanged(
   })
 }
 
+/**
+ * A `code-mismatch` entry decided with no evidence (an investigate) learned
+ * nothing a later proposal that brings verified evidence can be checked
+ * against, and evidence is not part of the identity. Without this the entry
+ * would suppress that proposal forever.
+ */
+function evidenceArrived(
+  prior: LedgerEntry,
+  candidate: CandidateRecord,
+): boolean {
+  return (
+    candidate.kind === 'code-mismatch' &&
+    (prior.evidence ?? []).length === 0 &&
+    normalizedEvidence(candidate).length > 0
+  )
+}
+
 function possibleRenames(
   ledger: Ledger,
   candidate: CandidateRecord,
@@ -1269,7 +1286,8 @@ function possibleRenames(
  * - a changed source fingerprint is `reopened` as "sources changed" (with a
  *   refresh pointer when the prior entry was promoted);
  * - otherwise a recorded evidence file that changed or is gone in the run's
- *   inventory is `reopened` as "evidence changed" (same pointer);
+ *   inventory, or evidence a `code-mismatch` entry decided with none now
+ *   gets, is `reopened` as "evidence changed" (same pointer);
  * - otherwise a changed target fingerprint is `reopened` as "target changed".
  */
 export function classifyCandidate(
@@ -1306,7 +1324,7 @@ export function classifyCandidate(
       ...pointer,
     }
   }
-  if (evidenceChanged(prior, evidence)) {
+  if (evidenceChanged(prior, evidence) || evidenceArrived(prior, candidate)) {
     return {
       standing: 'reopened',
       id,

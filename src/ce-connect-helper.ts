@@ -492,6 +492,14 @@ interface SnapshotProject extends DigestProject {
   readonly citationsChecked: number
   /** The citation cap stopped the check. Reported, and not a reason to degrade. */
   readonly citationsTruncated: boolean
+  /**
+   * Tracked files the inventory could not read (unreadable, over the size
+   * limit, or an unsafe path). They are absent from `inventory` without being
+   * gone, so an evidence file named here is unread, not deleted.
+   */
+  readonly skipped: readonly string[]
+  /** More files were skipped than `skipped` names, so an absent file may be one of them. */
+  readonly skipsUnnamed: boolean
   readonly inventory: ReadonlyArray<{
     readonly path: string
     readonly role: InventoryRole
@@ -1013,6 +1021,8 @@ function scanProject(
       citationsChecked: report.citations.length,
       citationsTruncated: report.truncated,
       truncated: inventory.truncated.files || inventory.truncated.hashCap,
+      skipped: inventory.skipped.map((file) => file.path),
+      skipsUnnamed: inventory.skippedCount > inventory.skipped.length,
       inventory: inventory.files.map((file: InventoryFile) => ({
         path: file.path,
         role: file.role,
@@ -1677,14 +1687,17 @@ function standingOf(
 /**
  * How the evidence files of a decided candidate stand in this run's inventory.
  * A project the run did not read, or read only in part, says nothing about a
- * file it does not list, so that file is neither changed nor gone.
+ * file it does not list, so that file is neither changed nor gone. The same
+ * holds for a file the inventory skipped (unreadable, oversize), and for any
+ * absent file when skips were too many to name.
  */
 function evidenceLookup(snapshot: Snapshot): EvidenceLookup {
   const projects = new Map(
     snapshot.projects.map((project) => [
       project.key,
       {
-        complete: !project.truncated,
+        complete: !project.truncated && !project.skipsUnnamed,
+        skipped: new Set(project.skipped),
         files: new Map(project.inventory.map((f) => [f.path, f.sha256])),
       },
     ]),
@@ -1694,6 +1707,7 @@ function evidenceLookup(snapshot: Snapshot): EvidenceLookup {
     if (project === undefined) return { status: 'unread' }
     const fingerprint = project.files.get(rel)
     if (fingerprint !== undefined) return { status: 'present', fingerprint }
+    if (project.skipped.has(rel)) return { status: 'unread' }
     return project.complete ? { status: 'gone' } : { status: 'unread' }
   }
 }

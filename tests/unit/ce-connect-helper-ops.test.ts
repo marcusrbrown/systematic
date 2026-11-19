@@ -4308,6 +4308,98 @@ describe('a decided code-mismatch candidate across runs', () => {
     expect(accepted(validated)).toHaveLength(0)
     expect(validated.suppressed).toBe(1)
   })
+
+  /** Decide a mismatch that recorded src/loader.ts as evidence. */
+  function decidedOnLoader(): MismatchWorld {
+    const built = mismatchWorld()
+    const loader = evidenceItem(
+      built.evidence,
+      'src/loader.ts',
+      LOADER_FILE,
+      'export function loadConfig(raw: Config): string[] {',
+    )
+    const first = fullRun(built.world, [
+      mismatchCandidate(built.world, [loader]),
+    ]).validated
+    decideRejected(built.world, String(accepted(first)[0]?.id))
+    return built
+  }
+
+  function laterInvestigate(world: World): Json {
+    return fullRun(world, [
+      mismatchCandidate(world, [], { nextStep: 'investigate' }),
+    ]).validated
+  }
+
+  it('reopens an evidence-free investigate when a later refresh brings verified evidence, and not for another investigate', () => {
+    const { world, evidence } = mismatchWorld()
+    const first = fullRun(world, [
+      mismatchCandidate(world, [], { nextStep: 'investigate' }),
+    ]).validated
+    const id = String(accepted(first)[0]?.id)
+    decideRejected(world, id)
+
+    const again = laterInvestigate(world)
+    expect(accepted(again)).toHaveLength(0)
+    expect(again.suppressed).toBe(1)
+
+    const refresh = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence)]),
+    ])
+    expect(accepted(refresh.validated)).toMatchObject([
+      { id, standing: 'evidence changed' },
+    ])
+    expect(readDigest(refresh.published)).toContain('evidence changed')
+  })
+
+  it('does not reopen when a recorded file is skipped as oversize', () => {
+    const { world, evidence } = decidedOnLoader()
+    fs.writeFileSync(
+      path.join(evidence, 'src/loader.ts'),
+      'x'.repeat(256 * 1024 + 1),
+    )
+    const validated = laterInvestigate(world)
+    expect(accepted(validated)).toHaveLength(0)
+    expect(validated.suppressed).toBe(1)
+  })
+
+  it('does not reopen when a recorded file is skipped as unreadable', () => {
+    const { world, evidence } = decidedOnLoader()
+    const target = path.join(evidence, 'src/loader.ts')
+    fs.chmodSync(target, 0o000)
+    try {
+      const validated = laterInvestigate(world)
+      expect(accepted(validated)).toHaveLength(0)
+      expect(validated.suppressed).toBe(1)
+    } finally {
+      fs.chmodSync(target, 0o644)
+    }
+  })
+
+  it('does not reopen for an absent recorded file when more files were skipped than the inventory can name', () => {
+    const { world, evidence } = decidedOnLoader()
+    // The inventory names at most 100 skipped files. A path with a `$` cannot
+    // be cited, so each of these is skipped, and the 101st goes unnamed:
+    // src/loader.ts is absent, and may be that one.
+    for (let n = 0; n < 101; n++) {
+      fs.writeFileSync(path.join(evidence, `src/junk$${n}.ts`), 'x\n')
+    }
+    git(evidence, ['add', '-f', '--', 'src'])
+    git(evidence, ['rm', '-q', '-f', '--', 'src/loader.ts'])
+    const validated = laterInvestigate(world)
+    expect(accepted(validated)).toHaveLength(0)
+    expect(validated.suppressed).toBe(1)
+  })
+
+  it('still reopens when a recorded file is deleted from the tracked inventory', () => {
+    const { world, evidence } = decidedOnLoader()
+    git(evidence, ['rm', '-q', '-f', '--', 'src/loader.ts'])
+    const validated = laterInvestigate(world)
+    expect(accepted(validated)).toHaveLength(1)
+    expect(accepted(validated)[0]).toMatchObject({
+      standing: 'evidence changed',
+    })
+  })
 })
 
 // ── code-mismatch: digest, summary and handoff ──────────────────────────────

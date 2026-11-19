@@ -1429,6 +1429,59 @@ describe('a decided code-mismatch candidate', () => {
     ).toMatchObject([{ standing: 'reopened', reason: 'evidence changed' }])
   })
 
+  describe('decided with no evidence recorded', () => {
+    function decidedWithoutEvidence(): Session {
+      const s = session()
+      s.publish('run-1', [mismatch({ evidence: [] })])
+      decide(s, ledgerEntries(s.root)[0]?.id ?? '', 'rejected')
+      return s
+    }
+
+    it('reopens as "evidence changed" when a later proposal brings evidence', () => {
+      const s = decidedWithoutEvidence()
+      expect(publishedOutcomes(s.publish('run-2', [mismatch()]))).toMatchObject(
+        [
+          {
+            standing: 'reopened',
+            reason: 'evidence changed',
+            priorStatus: 'rejected',
+          },
+        ],
+      )
+      expect(ledgerEntries(s.root)[0]).toMatchObject({
+        status: 'candidate',
+        reopened: 'evidence changed',
+        evidence: [
+          { project: EVIDENCE_PROJECT, path: 'Caddyfile', fingerprint: 'E1' },
+        ],
+      })
+    })
+
+    it('stays suppressed when the later proposal has no evidence either', () => {
+      const s = decidedWithoutEvidence()
+      const outcomes = publishedOutcomes(
+        s.publish('run-2', [mismatch({ evidence: [] })]),
+      )
+      expect(outcomes.map((o) => o.standing)).toEqual(['suppressed'])
+    })
+
+    it('is suppressed again once the reopened entry records that evidence', () => {
+      const s = decidedWithoutEvidence()
+      s.publish('run-2', [mismatch()])
+      decide(s, ledgerEntries(s.root)[0]?.id ?? '', 'rejected')
+      const outcomes = publishedOutcomes(s.publish('run-3', [mismatch()]))
+      expect(outcomes.map((o) => o.standing)).toEqual(['suppressed'])
+    })
+  })
+
+  it('does not reopen a decided entry of another kind when it has no evidence', () => {
+    const s = session()
+    s.publish('run-1', [candidate()])
+    decide(s, ledgerEntries(s.root)[0]?.id ?? '', 'rejected')
+    const outcomes = publishedOutcomes(s.publish('run-2', [candidate()]))
+    expect(outcomes.map((o) => o.standing)).toEqual(['suppressed'])
+  })
+
   describe('with two recorded evidence files', () => {
     const FIRST = {
       project: EVIDENCE_PROJECT,
