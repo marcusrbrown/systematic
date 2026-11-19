@@ -941,6 +941,14 @@ export interface LedgerEntry {
   readonly reopened?: ReopenReason
   /** Set when `reopened` stands in for `evidence changed`. */
   readonly reopenedFor?: ReopenedFor
+  /**
+   * How many times the entry has been reopened. Absent means 0 and is what a
+   * new entry has, so a ledger that never reopened one is the bytes it always
+   * was. A decision settles one generation: a caller that made it against an
+   * earlier one is refused. `history` cannot stand in, because it is capped.
+   * The shipped 3.35 reader names the fields it reads and ignores this one.
+   */
+  readonly generation?: number
   readonly history: readonly LedgerHistoryItem[]
   readonly recordedAt: string
 }
@@ -1008,6 +1016,15 @@ function isOptionalReopenedFor(value: unknown): boolean {
 
 function isOptionalText(value: unknown, maxLength: number): boolean {
   return value === undefined || plainText(value, maxLength)
+}
+
+function isGeneration(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+/** A stored generation is a positive integer: the writer leaves 0 out. */
+function isOptionalGeneration(value: unknown): boolean {
+  return value === undefined || (isGeneration(value) && value > 0)
 }
 
 function isLedgerSource(value: unknown): value is LedgerSource {
@@ -1081,6 +1098,7 @@ function isLedgerEntry(value: unknown): value is LedgerEntry {
     isOptionalText(value.destination, MAX_PATH_LENGTH) &&
     (value.reopened === undefined || isReopenReason(value.reopened)) &&
     isOptionalReopenedFor(value.reopenedFor) &&
+    isOptionalGeneration(value.generation) &&
     Array.isArray(value.history) &&
     value.history.every(isHistoryItem) &&
     plainText(value.recordedAt, MAX_STRING_LENGTH)
@@ -1432,6 +1450,11 @@ function reopenedFields(reason: ReopenReason): {
     : { reopened: reason }
 }
 
+/** The generation of an entry: how many times it was reopened, 0 when none is recorded. */
+export function generationOf(entry: LedgerEntry): number {
+  return entry.generation ?? 0
+}
+
 function snapshot(entry: LedgerEntry): LedgerHistoryItem {
   return {
     status: entry.status,
@@ -1511,6 +1534,7 @@ function applyCandidates(
               ...mismatchFields(candidate),
               status: 'candidate',
               ...reopenedFields(outcome.reason),
+              generation: generationOf(entry) + 1,
               history: [...entry.history, snapshot(entry)].slice(-MAX_HISTORY),
               recordedAt,
             }
@@ -2351,6 +2375,13 @@ export interface DecideInput {
    * made in between is not overwritten.
    */
   readonly onlyIfOpen?: boolean
+  /**
+   * The generation of the entry the decision was made against. Applied only if
+   * the entry is still at it when the lock is held; an entry reopened since is
+   * left as it is and the answer is `stale-generation`. Left out, any
+   * generation is decided.
+   */
+  readonly generation?: number
 }
 
 export type DecideResult =
@@ -2362,6 +2393,7 @@ export type DecideResult =
         | 'invalid-input'
         | 'unknown-candidate'
         | 'not-open'
+        | 'stale-generation'
         | 'lock-failed'
         | 'ledger-unreadable'
         | 'write-failed'
@@ -2371,14 +2403,31 @@ function validDecision(input: DecideInput): boolean {
   if (!plainText(input.id, MAX_STRING_LENGTH)) return false
   if (input.status !== 'promoted' && input.status !== 'rejected') return false
   if (!plainText(input.reason.trim(), MAX_REASON_LENGTH)) return false
+  const { generation } = input
+  if (generation !== undefined && !isGeneration(generation)) return false
   return isOptionalText(input.destination, MAX_PATH_LENGTH)
+}
+
+/** Why a decision is not applied to the entry as the lock finds it, if it is not. */
+function refusalOf(
+  input: DecideInput,
+  prior: LedgerEntry,
+): 'not-open' | 'stale-generation' | undefined {
+  if (input.onlyIfOpen === true && prior.status !== 'candidate') {
+    return 'not-open'
+  }
+  const stale =
+    input.generation !== undefined && input.generation !== generationOf(prior)
+  return stale ? 'stale-generation' : undefined
 }
 
 /**
  * Record a decision on a ledger entry. It takes the lock, so a busy lock makes
  * it fail without writing, and rewrites the ledger by temp-and-rename. Both
  * statuses need a reason. With `onlyIfOpen`, an entry that is no longer a
- * candidate is left as it is and the answer is `not-open`.
+ * candidate is left as it is and the answer is `not-open`. With `generation`,
+ * an entry reopened since that generation is left as it is and the answer is
+ * `stale-generation`.
  */
 export function decideLedgerEntry(
   root: string,
@@ -2401,9 +2450,8 @@ export function decideLedgerEntry(
     if (prior === undefined) {
       return { status: 'failed', reason: 'unknown-candidate' }
     }
-    if (input.onlyIfOpen === true && prior.status !== 'candidate') {
-      return { status: 'failed', reason: 'not-open' }
-    }
+    const refused = refusalOf(input, prior)
+    if (refused !== undefined) return { status: 'failed', reason: refused }
     const decided: LedgerEntry = {
       id: prior.id,
       kind: prior.kind,
@@ -2415,6 +2463,9 @@ export function decideLedgerEntry(
         ? {}
         : { mismatchReason: prior.mismatchReason }),
       ...(prior.evidence === undefined ? {} : { evidence: prior.evidence }),
+      ...(prior.generation === undefined
+        ? {}
+        : { generation: prior.generation }),
       status: input.status,
       reason: input.reason.trim(),
       ...(input.status === 'promoted' && input.destination !== undefined

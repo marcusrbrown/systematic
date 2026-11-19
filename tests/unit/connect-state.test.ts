@@ -2286,6 +2286,178 @@ describe('decideLedgerEntry', () => {
   })
 })
 
+describe('the decision generation of a ledger entry', () => {
+  const changed = candidate({
+    sources: [
+      { role: 'solution', path: 'docs/solutions/a.md', fingerprint: 'bbb' },
+    ],
+  })
+  const changedAgain = candidate({
+    sources: [
+      { role: 'solution', path: 'docs/solutions/a.md', fingerprint: 'ccc' },
+    ],
+  })
+
+  let runNumber = 0
+
+  function options(s: Session): LockOptions {
+    return {
+      pid: 7002,
+      processes: fakeProcesses({ 7002: 'd', 7001: 'self' }).table,
+      now: () => s.clock.now,
+    }
+  }
+
+  function opened(): { s: Session; id: string } {
+    const s = session()
+    s.publish('run-1', [candidate()])
+    return { s, id: ledgerEntries(s.root)[0]?.id ?? '' }
+  }
+
+  /** Settle the entry, then reopen it by changing the learning. */
+  function reopen(s: Session, id: string, again: CandidateRecord): void {
+    decideLedgerEntry(
+      s.root,
+      { id, status: 'rejected', reason: 'not useful' },
+      options(s),
+    )
+    runNumber += 1
+    s.publish(`run-g${runNumber}`, [again])
+    s.clock.now += MINUTE
+  }
+
+  it('leaves a new entry without a generation, which reads as generation 0', () => {
+    const { s } = opened()
+    expect(ledgerEntries(s.root)[0]).not.toHaveProperty('generation')
+    const text = readFileText(path.join(s.root, 'ledger.json'))
+    expect(text).not.toContain('generation')
+  })
+
+  it('bumps the generation by one on every reopen, whatever the reason', () => {
+    const { s, id } = opened()
+    reopen(s, id, changed)
+    expect(ledgerEntries(s.root)[0]).toMatchObject({
+      status: 'candidate',
+      reopened: 'sources changed',
+      generation: 1,
+    })
+    reopen(s, id, changedAgain)
+    expect(ledgerEntries(s.root)[0]).toMatchObject({ generation: 2 })
+
+    // A target-evidence reopen counts the same way.
+    decide(s, id, 'rejected')
+    s.publish('run-t', [
+      {
+        ...changedAgain,
+        targetEvidence: [{ path: 'src/x.ts', fingerprint: 't2' }],
+      },
+    ])
+    expect(ledgerEntries(s.root)[0]).toMatchObject({
+      reopened: 'target changed',
+      generation: 3,
+    })
+  })
+
+  it('keeps the generation through a decision, and when a run publishes the entry unchanged', () => {
+    const { s, id } = opened()
+    reopen(s, id, changed)
+    expect(
+      publishedOutcomes(s.publish('run-same', [changed])).map(
+        (o) => o.standing,
+      ),
+    ).toEqual(['suppressed'])
+    expect(ledgerEntries(s.root)[0]).toMatchObject({ generation: 1 })
+    decide(s, id, 'promoted', { destination: 'docs/solutions/x.md' })
+    expect(ledgerEntries(s.root)[0]).toMatchObject({
+      status: 'promoted',
+      generation: 1,
+    })
+  })
+
+  it('applies a decision made against the current generation', () => {
+    const { s, id } = opened()
+    reopen(s, id, changed)
+    expect(
+      decideLedgerEntry(
+        s.root,
+        { id, status: 'rejected', reason: 'now', generation: 1 },
+        options(s),
+      ),
+    ).toMatchObject({ status: 'decided', entry: { id, status: 'rejected' } })
+  })
+
+  it('refuses a decision made against an earlier generation and writes nothing', () => {
+    const { s, id } = opened()
+    reopen(s, id, changed)
+    const before = readFileText(path.join(s.root, 'ledger.json'))
+    for (const generation of [0, 2]) {
+      expect(
+        decideLedgerEntry(
+          s.root,
+          { id, status: 'rejected', reason: 'old', generation },
+          options(s),
+        ),
+      ).toEqual({ status: 'failed', reason: 'stale-generation' })
+    }
+    expect(readFileText(path.join(s.root, 'ledger.json'))).toBe(before)
+    expect(ledgerEntries(s.root)[0]).toMatchObject({ status: 'candidate' })
+    expect(fs.existsSync(path.join(s.root, 'lock'))).toBe(false)
+  })
+
+  it('reads an entry with no generation as generation 0', () => {
+    const { s, id } = opened()
+    expect(
+      decideLedgerEntry(
+        s.root,
+        { id, status: 'rejected', reason: 'now', generation: 0 },
+        options(s),
+      ),
+    ).toMatchObject({ status: 'decided' })
+  })
+
+  it('decides regardless of generation when the caller names none', () => {
+    const { s, id } = opened()
+    reopen(s, id, changed)
+    expect(
+      decideLedgerEntry(
+        s.root,
+        { id, status: 'rejected', reason: 'by hand' },
+        options(s),
+      ),
+    ).toMatchObject({ status: 'decided' })
+  })
+
+  it('refuses a ledger whose generation is not a positive integer', () => {
+    const { s, id } = opened()
+    reopen(s, id, changed)
+    const file = path.join(s.root, 'ledger.json')
+    const ledger = JSON.parse(readFileText(file)) as {
+      entries: Array<Record<string, unknown>>
+    }
+    for (const bad of [0, -1, 1.5, '1', null]) {
+      const [entry] = ledger.entries
+      if (entry === undefined) throw new Error('no entry')
+      fs.writeFileSync(
+        file,
+        JSON.stringify({
+          ...ledger,
+          entries: [{ ...entry, generation: bad }],
+        }),
+      )
+      expect(readLedger(s.root).status).toBe('unreadable')
+    }
+  })
+
+  it('writes a ledger the shipped reader still loads after a reopen', () => {
+    const { s, id } = opened()
+    reopen(s, id, changed)
+    reopen(s, id, changedAgain)
+    const written = readFileText(path.join(s.root, 'ledger.json'))
+    expect(JSON.parse(written).entries[0].generation).toBe(2)
+    expect(shippedReaderAccepts(written)).toBe(true)
+  })
+})
+
 describe('clearLedger', () => {
   it('removes the ledger under the lock and is busy while the lock is held', () => {
     const s = session()

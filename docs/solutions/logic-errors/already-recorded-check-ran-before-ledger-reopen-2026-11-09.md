@@ -50,7 +50,7 @@ if (recorded !== undefined && !reopensForChangedSources(record, input)) {
 classifyAgainstLedger(check.candidate, record, input, result)
 ```
 
-`reopensForChangedSources` asks `classifyCandidate` (`src/lib/connect-state.ts:1280-1345`) and answers true only for a reopen with the reason `sources changed`. A promoted entry then carries the destination as its refresh pointer.
+`reopensForChangedSources` asks `classifyCandidate` (`src/lib/connect-state.ts:1352-1404`) and answers true only for a reopen with the reason `sources changed`. A promoted entry then carries the destination as its refresh pointer.
 
 The two neighbouring defects were fixed in the same pass:
 

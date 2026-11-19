@@ -12,10 +12,18 @@
  *
  * A decision comes from one place: a checkbox line the renderer generated,
  * inside the single delimited section, outside any code fence, whose id is in
- * the manifest of the report that was read and whose candidate is still open.
+ * the manifest of the report that was read, whose candidate is still open and
+ * whose generation is the one the line was generated for.
  * The manifest of a report is stored under the hash its body carries, so a
  * report that was posted keeps its own manifest even when a later render
  * failed to post or posted something else.
+ *
+ * A candidate that reopens (its learning, target or evidence changed) gets a
+ * new generation in the ledger, and the line generated for it names that
+ * generation. A tick made against an earlier one is skipped as stale and never
+ * recorded, so it cannot settle a candidate nobody has decided. A line for a
+ * candidate that never reopened has no generation in it, the format every
+ * report had before generations: a line without one reads as generation 0.
  *
  * Import rule: node builtins and the `connect-*` modules. The `ce:connect`
  * helper bundles this module, so it must never import zod, `config.ts` or
@@ -44,6 +52,7 @@ import {
 import {
   acquireLock,
   decideLedgerEntry,
+  generationOf,
   type InvocationRecord,
   type LedgerEntry,
   type LockBusyReason,
@@ -91,18 +100,24 @@ export function manifestMarker(hash: string): string {
   return `<!-- connect-manifest:${hash} -->`
 }
 
-/** One generated checkbox line. The marker carries the id; nothing else on the line is read. */
+/**
+ * One generated checkbox line. The marker carries the id and, for a candidate
+ * that was reopened, the generation as `:g<n>`; nothing else on the line is
+ * read. Generation 0 is left out, so the line is the one older reports used.
+ */
 export function decisionLine(
   id: string,
   status: DecisionStatus,
   ticked: boolean,
+  generation = 0,
 ): string {
-  return `- [${ticked ? 'x' : ' '}] ${STATUS_LABEL[status]} <!-- connect-decision:${status}:${id} -->`
+  const suffix = generation > 0 ? `:g${generation}` : ''
+  return `- [${ticked ? 'x' : ' '}] ${STATUS_LABEL[status]} <!-- connect-decision:${status}:${id}${suffix} -->`
 }
 
 const MANIFEST_LINE = /^<!-- connect-manifest:([0-9a-f]{16}) -->[ \t]*$/
 const DECISION_LINE =
-  /^- \[([ xX])\] (Promoted|Rejected) <!-- connect-decision:(promoted|rejected):([0-9a-f]{64}) -->[ \t]*$/
+  /^- \[([ xX])\] (Promoted|Rejected) <!-- connect-decision:(promoted|rejected):([0-9a-f]{64})(?::g([1-9][0-9]{0,15}))? -->[ \t]*$/
 const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/
 
 // ── Small helpers ───────────────────────────────────────────────────────────
@@ -262,6 +277,8 @@ export interface ParsedBox {
   readonly id: string
   readonly status: DecisionStatus
   readonly ticked: boolean
+  /** The generation the line names; 0 for a line that names none. */
+  readonly generation: number
 }
 
 export interface ParsedBody {
@@ -320,13 +337,15 @@ function inFence(scan: Scan, line: string): boolean {
 function boxOf(line: string): ParsedBox | undefined {
   const match = DECISION_LINE.exec(line)
   if (match === null) return undefined
-  const [, mark, label, status, id] = match
+  const [, mark, label, status, id, named] = match
   if (id === undefined || label === undefined || mark === undefined) {
     return undefined
   }
   if (status !== 'promoted' && status !== 'rejected') return undefined
   if (STATUS_LABEL[status] !== label) return undefined
-  return { id, status, ticked: mark !== ' ' }
+  const generation = named === undefined ? 0 : Number(named)
+  if (!Number.isSafeInteger(generation)) return undefined
+  return { id, status, ticked: mark !== ' ', generation }
 }
 
 function scanLine(scan: Scan, line: string): void {
@@ -917,6 +936,8 @@ export type RenderResult =
 
 interface Row {
   readonly id: string
+  /** The generation of the ledger entry: how often it was reopened. */
+  readonly generation: number
   readonly payload: Payload | undefined
   readonly isNew: boolean
   readonly block: string
@@ -987,10 +1008,18 @@ function fetchWord(payload: Payload): string {
 function blockOf(
   position: number,
   id: string,
+  generation: number,
   payload: Payload | undefined,
   isNew: boolean,
 ): string {
-  const lines = [`### Candidate ${position}${isNew ? ' (new)' : ''}`, '']
+  const marks = [
+    ...(isNew ? ['new'] : []),
+    ...(generation > 0 ? ['reopened'] : []),
+  ]
+  const lines = [
+    `### Candidate ${position}${marks.length === 0 ? '' : ` (${marks.join(', ')})`}`,
+    '',
+  ]
   if (payload === undefined) {
     lines.push(`Details unavailable for \`${id}\`.`)
   } else {
@@ -1002,8 +1031,8 @@ function blockOf(
   }
   lines.push(
     '',
-    decisionLine(id, 'promoted', false),
-    decisionLine(id, 'rejected', false),
+    decisionLine(id, 'promoted', false, generation),
+    decisionLine(id, 'rejected', false, generation),
     '',
   )
   return lines.join('\n')
@@ -1199,11 +1228,13 @@ function rowsOf(
   return open.map((entry, index) => {
     const payload = payloads.get(entry.id)
     const isNew = payload !== undefined && (payload.firstShown ?? date) === date
+    const generation = generationOf(entry)
     return {
       id: entry.id,
+      generation,
       payload,
       isNew,
-      block: blockOf(index + 1, entry.id, payload, isNew),
+      block: blockOf(index + 1, entry.id, generation, payload, isNew),
     }
   })
 }
@@ -1415,6 +1446,8 @@ export type SkipReason =
   | 'not-in-manifest'
   | 'not-open'
   | 'already-recorded'
+  /** The tick was made against a generation the candidate has since left, or never reached. */
+  | 'stale'
 
 export interface SkippedTick {
   readonly id: string
@@ -1456,17 +1489,22 @@ export type TickResult =
 interface Tick {
   readonly id: string
   readonly status: DecisionStatus
+  readonly generation: number
 }
 
-/** Each ticked (id, status) once, in document order. */
+/**
+ * Each ticked (id, status, generation) once, in document order. The same
+ * candidate ticked at two generations is two ticks, which the candidate's
+ * triage reads as a conflict.
+ */
 function tickedBoxes(boxes: readonly ParsedBox[]): Tick[] {
   const seen = new Set<string>()
   const out: Tick[] = []
   for (const box of boxes) {
-    const key = `${box.id}:${box.status}`
+    const key = `${box.id}:${box.status}:${box.generation}`
     if (!box.ticked || seen.has(key)) continue
     seen.add(key)
-    out.push({ id: box.id, status: box.status })
+    out.push({ id: box.id, status: box.status, generation: box.generation })
   }
   return out
 }
@@ -1481,10 +1519,10 @@ function emptyApplied(section: BodySection): TickResult {
   }
 }
 
-function groupById(ticks: readonly Tick[]): Map<string, DecisionStatus[]> {
-  const byId = new Map<string, DecisionStatus[]>()
+function groupById(ticks: readonly Tick[]): Map<string, Tick[]> {
+  const byId = new Map<string, Tick[]>()
   for (const tick of ticks) {
-    byId.set(tick.id, [...(byId.get(tick.id) ?? []), tick.status])
+    byId.set(tick.id, [...(byId.get(tick.id) ?? []), tick])
   }
   return byId
 }
@@ -1503,18 +1541,19 @@ type Verdict =
 /** What to do with the ticks one candidate has, given the manifest and the ledger. */
 function judge(
   id: string,
-  statuses: readonly DecisionStatus[],
+  ticks: readonly Tick[],
   manifest: Manifest,
   entry: LedgerEntry | undefined,
   reason: string,
 ): Verdict | undefined {
-  const [status] = statuses
-  if (status === undefined) return undefined
+  const [first] = ticks
+  if (first === undefined) return undefined
+  const { status } = first
   const skip = (why: SkipReason): Verdict => ({
     kind: 'skip',
     skipped: { id, status, reason: why },
   })
-  if (statuses.length > 1) {
+  if (ticks.length > 1) {
     return { kind: 'skip', skipped: { id, reason: 'conflict' } }
   }
   if (!manifest.ids.includes(id)) return skip('not-in-manifest')
@@ -1524,11 +1563,14 @@ function judge(
       unresolved: { id, status, reason: 'unknown-candidate' },
     }
   }
+  // A tick settles the generation it was made against. A line that names none
+  // was made against generation 0.
+  if (first.generation !== generationOf(entry)) return skip('stale')
   if (entry.status === status && entry.reason === reason) {
     return skip('already-recorded')
   }
   if (entry.status !== 'candidate') return skip('not-open')
-  return { kind: 'record', tick: { id, status } }
+  return { kind: 'record', tick: first }
 }
 
 function triage(
@@ -1540,13 +1582,17 @@ function triage(
   const out: Triage = { record: [], skipped: [], unresolved: [] }
   if (manifest === undefined) {
     for (const tick of ticks) {
-      out.unresolved.push({ ...tick, reason: 'manifest-missing' })
+      out.unresolved.push({
+        id: tick.id,
+        status: tick.status,
+        reason: 'manifest-missing',
+      })
     }
     return out
   }
-  for (const [id, statuses] of groupById(ticks)) {
+  for (const [id, group] of groupById(ticks)) {
     const entry = entries.find((item) => item.id === id)
-    const verdict = judge(id, statuses, manifest, entry, reason)
+    const verdict = judge(id, group, manifest, entry, reason)
     if (verdict?.kind === 'record') out.record.push(verdict.tick)
     else if (verdict?.kind === 'skip') out.skipped.push(verdict.skipped)
     else if (verdict?.kind === 'unresolved') {
@@ -1565,13 +1611,21 @@ function failureOf(
     : 'write-failed'
 }
 
+/** Why a decision the lock refused leaves the tick skipped: the candidate moved on since the ledger was read. */
+function skipReasonOf(reason: string): SkipReason | undefined {
+  if (reason === 'not-open') return 'not-open'
+  return reason === 'stale-generation' ? 'stale' : undefined
+}
+
 /**
  * Record the ticks of a report body. A tick counts when its box is a generated
  * line in the section of the body, its id is in the manifest the body names,
- * and the candidate is open; a decision already recorded with the same reason
- * is left as it is, so a second pass changes nothing. Each decision is made
- * only if the candidate is still open under the lock, so one recorded since
- * the ledger was read is skipped as `not-open`, never overwritten.
+ * and the candidate is open at the generation the line names; a tick for any
+ * other generation is skipped as `stale`. A decision already recorded with the
+ * same reason is left as it is, so a second pass changes nothing. Each decision
+ * is made only if the candidate is still open at that generation under the
+ * lock, so one recorded since the ledger was read is skipped as `not-open`, and
+ * a candidate reopened since is skipped as `stale`, never overwritten.
  */
 export function applyTicks(
   root: string,
@@ -1603,20 +1657,27 @@ export function applyTicks(
   for (const tick of sorted.record) {
     const decided = decideLedgerEntry(
       root,
-      { id: tick.id, status: tick.status, reason, onlyIfOpen: true },
+      {
+        id: tick.id,
+        status: tick.status,
+        reason,
+        onlyIfOpen: true,
+        generation: tick.generation,
+      },
       lockOptions(options),
     )
     if (decided.status === 'busy') {
       return { status: 'busy', reason: decided.reason, accepted }
     }
-    if (decided.status === 'failed' && decided.reason === 'not-open') {
-      skipped.push({ id: tick.id, status: tick.status, reason: 'not-open' })
+    if (decided.status === 'failed') {
+      const why = skipReasonOf(decided.reason)
+      if (why === undefined) {
+        return { status: 'failed', reason: failureOf(decided.reason), accepted }
+      }
+      skipped.push({ id: tick.id, status: tick.status, reason: why })
       continue
     }
-    if (decided.status === 'failed') {
-      return { status: 'failed', reason: failureOf(decided.reason), accepted }
-    }
-    accepted.push(tick)
+    accepted.push({ id: tick.id, status: tick.status })
   }
   return {
     status: 'applied',

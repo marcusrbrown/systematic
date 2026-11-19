@@ -37,7 +37,7 @@ Reclaim is a rename, not a delete. `reclaimLock` moves the lock directory to a u
 
 ### 2. Publishing is one rename; the ledger follows
 
-`publishRun` stages `runs/<id>.tmp/`, renames it to `runs/<id>/`, and only then rewrites the ledger (`src/lib/connect-state.ts:1682-1804`). The rename is the commit. A crash has two windows, and each leaves a state the next run can read:
+`publishRun` stages `runs/<id>.tmp/`, renames it to `runs/<id>/`, and only then rewrites the ledger (`src/lib/connect-state.ts:1810-1873`). The rename is the commit. A crash has two windows, and each leaves a state the next run can read:
 
 - Before the rename: nothing is committed. The next run removes the leftover `.tmp` directory (`pruneRuns`) and proposes the candidate as new.
 - After the rename and before the ledger write: the run exists, the ledger does not know its candidates, and the next run proposes them once more. After that the ledger suppresses them.
@@ -54,7 +54,7 @@ One run is bounded at 6 families of at most 8 rules each, so at most 48 rules (`
 
 Three rules keep this honest:
 
-- Coverage is recorded only on commit, in the same ledger rewrite as the run (`applyCoverage`, `src/lib/connect-state.ts:1604-1680`). A run that fails to commit covers nothing.
+- Coverage is recorded only on commit, in the same ledger rewrite as the run (`applyCoverage`, `src/lib/connect-state.ts:1682-1748`). A run that fails to commit covers nothing.
 - Only the offered rules must be covered. The rest of the index waits for a later run and is not a reason to degrade this one (`src/ce-connect-helper.ts:2011-2022`, `checkCoverage` is called with `snapshot.offer.offered`).
 - A rule whose candidate was lost because its evidence changed during the run is held back and not counted as covered (`heldBackRuleIds` in the same span).
 
@@ -66,7 +66,7 @@ Three choices keep a nondeterministic researcher from re-proposing what a person
 
 - **Rule ids come from the helper and depend on location only.** `ruleIdFor` hashes the project root and the relative path (`src/lib/connect-helper-core.ts:79-89`). An edited learning keeps its id, so it reopens its entry instead of creating a new one. A candidate must carry an id from the issued index (`unknown-rule-id`, in `parseHeader`, `src/lib/connect-helper-core.ts:1270-1297`) and the id must belong to one of its own sources (`rule-source-mismatch`, in `checkCandidate`, `src/lib/connect-helper-core.ts:1240-1305`), so the model cannot choose its own identity.
 - **Identity excludes fingerprints.** For the original kinds (contradiction and transferable-lesson), `candidateIdentity` hashes kind, target, rule id and the normalized (role, path) of each source (`src/lib/connect-state.ts:860-881`). A changed file is the same entry. A `code-mismatch` also hashes its reason and a claim fingerprint, so two claims in one learning, or two reasons on one claim, are separate entries. Its evidence files are still not part of its identity.
-- **Reopen only on a change both runs can see.** For the original kinds, `classifyCandidate` compares source fingerprints, and compares target-evidence fingerprints only for paths that both the stored entry and the new candidate cite (`sameTargetEvidence`, `src/lib/connect-state.ts:1246-1255`). If nothing the two runs share changed, the standing is `suppressed` whatever the prior status (promoted, rejected or candidate). A changed source reopens as "sources changed" with a refresh pointer when the prior entry was promoted. A source with no fingerprint is `unresolved`, not `changed` (`src/lib/connect-state.ts:1262-1327`). A `code-mismatch` entry also reopens, as "evidence changed", when a file it recorded as evidence has changed or is gone in the run's inventory, or when evidence arrives for an entry decided with none. An evidence file in a project the run did not read changes nothing, and an import judges only the files it re-cites (`evidenceChanged` and `evidenceArrived`, `src/lib/connect-state.ts`).
+- **Reopen only on a change both runs can see.** For the original kinds, `classifyCandidate` compares source fingerprints, and compares target-evidence fingerprints only for paths that both the stored entry and the new candidate cite (`sameTargetEvidence`, `src/lib/connect-state.ts:1265-1273`). If nothing the two runs share changed, the standing is `suppressed` whatever the prior status (promoted, rejected or candidate). A changed source reopens as "sources changed" with a refresh pointer when the prior entry was promoted. A source with no fingerprint is `unresolved`, not `changed` (`src/lib/connect-state.ts:1352-1404`). A `code-mismatch` entry also reopens, as "evidence changed", when a file it recorded as evidence has changed or is gone in the run's inventory, or when evidence arrives for an entry decided with none. An evidence file in a project the run did not read changes nothing, and an import judges only the files it re-cites (`evidenceChanged` and `evidenceArrived`, `src/lib/connect-state.ts`).
 
 `ledger show` pages the ledger 500 entries at a time with `total` and `nextOffset` (`MAX_LEDGER_ENTRIES_SHOWN`, `src/ce-connect-helper.ts:2613-2613`).
 

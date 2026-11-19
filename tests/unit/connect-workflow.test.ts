@@ -3105,6 +3105,54 @@ describe('post: ticks made while a run was executing', () => {
     expect(issuesOf(box).find((i) => i.number === number)?.state).toBe('closed')
   })
 
+  it('carries no tick onto a candidate the run reopened, and the next run records none', () => {
+    const box = makeBox()
+    const { number, body } = firstDay(box)
+    // The operator ticks Rejected while the run executes, and the run reopens
+    // that candidate: its learning changed, so the entry is a generation on.
+    setIssueBody(box, number, tick(body, 1, 'rejected'))
+    const ledgerFile = path.join(stateRootOf(box), 'ledger.json')
+    const ledger = JSON.parse(ledgerBytes(box)) as {
+      entries: Array<{ id: string; generation?: number }>
+    }
+    for (const entry of ledger.entries) {
+      if (entry.id === idOf(1)) entry.generation = 1
+    }
+    fs.writeFileSync(ledgerFile, JSON.stringify(ledger))
+
+    const second = nextDay(box, DATE_ONE)
+    expect(second.body).toContain(decisionLine(idOf(1), 'rejected', false, 1))
+    const out = publish(box, second.render, DATE_ONE)
+    expect(out.settle.exitCode).toBe(0)
+
+    const posted = liveBody(box, number)
+    expect(posted).not.toContain('- [x]')
+    expect(posted).toBe(trimmed(second.body))
+    runStep(box, 'prepare', 'Find the open report', FOUND)
+    expect(recordTicks(box, number).stdout).toContain('accepted 0')
+    expect(statusOf(box, 1)).toBe('candidate')
+  })
+
+  it('records, as stale, a tick left on the old body of a candidate that reopened', () => {
+    const box = makeBox()
+    const { number, body } = firstDay(box)
+    setIssueBody(box, number, tick(body, 1, 'rejected'))
+    const ledger = JSON.parse(ledgerBytes(box)) as {
+      entries: Array<{ id: string; generation?: number }>
+    }
+    for (const entry of ledger.entries) {
+      if (entry.id === idOf(1)) entry.generation = 1
+    }
+    fs.writeFileSync(
+      path.join(stateRootOf(box), 'ledger.json'),
+      JSON.stringify(ledger),
+    )
+    runStep(box, 'prepare', 'Find the open report', FOUND)
+    const result = recordTicks(box, number)
+    expect(result.stdout).toContain('accepted 0, skipped 1')
+    expect(statusOf(box, 1)).toBe('candidate')
+  })
+
   it('carries an upper-case X the way the tick reader counts it', () => {
     const box = makeBox()
     const { number, body } = firstDay(box)

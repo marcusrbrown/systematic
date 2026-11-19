@@ -389,8 +389,8 @@ describe('parseReportBody', () => {
     expect(parsed.section).toBe('ok')
     expect(parsed.manifest).toBe(MARKER)
     expect(parsed.boxes).toEqual([
-      { id: idOf(1), status: 'promoted', ticked: true },
-      { id: idOf(1), status: 'rejected', ticked: false },
+      { id: idOf(1), status: 'promoted', ticked: true, generation: 0 },
+      { id: idOf(1), status: 'rejected', ticked: false, generation: 0 },
     ])
   })
 
@@ -401,7 +401,7 @@ describe('parseReportBody', () => {
     )
     const parsed = parseReportBody(text.replaceAll('\n', '\r\n'))
     expect(parsed.boxes).toEqual([
-      { id: idOf(1), status: 'rejected', ticked: true },
+      { id: idOf(1), status: 'rejected', ticked: true, generation: 0 },
     ])
   })
 
@@ -2189,6 +2189,262 @@ describe('applyTicks', () => {
 })
 
 // ── Reading a body file ─────────────────────────────────────────────────────
+
+describe('the decision generation of a report', () => {
+  /** The ledger as the state module leaves it after a reopen: still a candidate, one generation on. */
+  function reopen(root: string, index: number, generation: number): void {
+    const read = readLedger(root)
+    if (read.status !== 'ok') throw new Error('ledger unreadable in a test')
+    writeLedger(
+      root,
+      read.ledger.entries.map((entry) =>
+        entry.id === idOf(index)
+          ? {
+              ...entry,
+              status: 'candidate',
+              generation,
+              reopened: 'sources changed',
+            }
+          : entry,
+      ),
+    )
+  }
+
+  /** A tick the way the report generated it, or the way an older report did when the generation is left out. */
+  function tickLine(
+    index: number,
+    status: 'promoted' | 'rejected',
+    generation = 0,
+  ): string {
+    return decisionLine(idOf(index), status, true, generation)
+  }
+
+  function withTick(body: string, line: string): string {
+    return body.replace(DECISIONS_END, `${line}\n${DECISIONS_END}`)
+  }
+
+  function bodyOf(root: string): string {
+    return rendered(root).body
+  }
+
+  it('writes a generation 0 line exactly as a report did before generations', () => {
+    expect(decisionLine(idOf(1), 'rejected', false)).toBe(
+      `- [ ] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`,
+    )
+    expect(decisionLine(idOf(1), 'rejected', true, 0)).toBe(
+      `- [x] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`,
+    )
+  })
+
+  it('writes a later generation into the line', () => {
+    expect(decisionLine(idOf(1), 'promoted', false, 3)).toBe(
+      `- [ ] Promoted <!-- connect-decision:promoted:${idOf(1)}:g3 -->`,
+    )
+  })
+
+  it('reads the generation of a line, and reads a line without one as generation 0', () => {
+    const body = [
+      manifestMarker('0123456789abcdef'),
+      DECISIONS_BEGIN,
+      decisionLine(idOf(1), 'promoted', true),
+      decisionLine(idOf(2), 'rejected', true, 7),
+      DECISIONS_END,
+    ].join('\n')
+    expect(parseReportBody(body).boxes).toEqual([
+      { id: idOf(1), status: 'promoted', ticked: true, generation: 0 },
+      { id: idOf(2), status: 'rejected', ticked: true, generation: 7 },
+    ])
+  })
+
+  it('ignores a generation that is zero, has a leading zero or is not a number', () => {
+    for (const text of ['g0', 'g01', 'g', 'gx', 'g-1', 'g1.5', '2']) {
+      const line = `- [x] Rejected <!-- connect-decision:rejected:${idOf(1)}:${text} -->`
+      const body = [DECISIONS_BEGIN, line, DECISIONS_END].join('\n')
+      expect(parseReportBody(body).boxes).toEqual([])
+    }
+  })
+
+  it('lists a reopened candidate again with both boxes unticked and the new generation', () => {
+    const root = seeded(2)
+    const before = bodyOf(root)
+    applyTicks(root, {
+      body: ticked(before, [[1, 'rejected']]),
+      issue: 5,
+    })
+    expect(statusOf(root, 1)).toBe('rejected')
+
+    // The learning changed: the candidate is open again at generation 1.
+    reopen(root, 1, 1)
+    writeInvocation(root, '901-1', {}, null)
+    const after = rendered(root, { runId: '901', date: DAY_TWO }).body
+
+    expect(after).toContain(decisionLine(idOf(1), 'promoted', false, 1))
+    expect(after).toContain(decisionLine(idOf(1), 'rejected', false, 1))
+    expect(after).not.toContain(decisionLine(idOf(1), 'rejected', false))
+    expect(after).not.toContain('- [x]')
+    // Only the reopened candidate says so; the one that never reopened keeps the line it always had.
+    expect(after.match(/\(reopened\)/g)).toHaveLength(1)
+    expect(after).toContain(decisionLine(idOf(2), 'rejected', false))
+  })
+
+  it('skips a tick made before a reopen as stale and leaves the candidate open', () => {
+    const root = seeded(2)
+    const ticks = ticked(bodyOf(root), [
+      [1, 'rejected'],
+      [2, 'rejected'],
+    ])
+    reopen(root, 1, 1)
+    const before = ledgerBytes(root)
+
+    const result = applyTicks(root, { body: ticks, issue: 8 })
+
+    expect(result).toMatchObject({
+      status: 'applied',
+      accepted: [{ id: idOf(2), status: 'rejected' }],
+      skipped: [{ id: idOf(1), status: 'rejected', reason: 'stale' }],
+      unresolved: [],
+    })
+    expect(statusOf(root, 1)).toBe('candidate')
+    expect(statusOf(root, 2)).toBe('rejected')
+    const read = readLedger(root)
+    if (read.status !== 'ok') throw new Error('ledger')
+    expect(read.ledger.entries[0]).toMatchObject({ generation: 1 })
+    expect(ledgerBytes(root)).not.toBe(before)
+  })
+
+  it('applies a tick made against the current generation', () => {
+    const root = seeded(2)
+    reopen(root, 1, 2)
+    const body = bodyOf(root)
+
+    const open = decisionLine(idOf(1), 'rejected', false, 2)
+    expect(body).toContain(open)
+    const result = applyTicks(root, {
+      body: body.replace(open, tickLine(1, 'rejected', 2)),
+      issue: 11,
+    })
+
+    expect(result).toMatchObject({
+      status: 'applied',
+      accepted: [{ id: idOf(1), status: 'rejected' }],
+      skipped: [],
+    })
+    expect(statusOf(root, 1)).toBe('rejected')
+    const read = readLedger(root)
+    if (read.status !== 'ok') throw new Error('ledger')
+    // Settling a generation keeps it, so the same body read again is already recorded.
+    expect(read.ledger.entries[0]).toMatchObject({ generation: 2 })
+  })
+
+  it('applies an old-format tick to an entry that never reopened', () => {
+    const root = seeded(1)
+    const body = bodyOf(root)
+    const old = `- [x] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`
+    expect(body).toContain(old.replace('[x]', '[ ]'))
+    const result = applyTicks(root, {
+      body: body.replace(old.replace('[x]', '[ ]'), old),
+      issue: 12,
+    })
+    expect(result).toMatchObject({
+      accepted: [{ id: idOf(1), status: 'rejected' }],
+      skipped: [],
+    })
+  })
+
+  it('skips an old-format tick as stale once the entry has reopened', () => {
+    const root = seeded(1)
+    const body = bodyOf(root)
+    const open = `- [ ] Rejected <!-- connect-decision:rejected:${idOf(1)} -->`
+    expect(body).toContain(open)
+    reopen(root, 1, 1)
+    const result = applyTicks(root, {
+      body: body.replace(open, open.replace('[ ]', '[x]')),
+      issue: 12,
+    })
+    expect(result).toMatchObject({
+      accepted: [],
+      skipped: [{ id: idOf(1), status: 'rejected', reason: 'stale' }],
+    })
+    expect(statusOf(root, 1)).toBe('candidate')
+  })
+
+  it('skips a tick for a generation the ledger has not reached', () => {
+    const root = seeded(1)
+    const forged = withTick(bodyOf(root), tickLine(1, 'rejected', 4))
+    const result = applyTicks(root, { body: forged, issue: 3 })
+    expect(result).toMatchObject({
+      accepted: [],
+      skipped: [{ id: idOf(1), status: 'rejected', reason: 'stale' }],
+    })
+    expect(statusOf(root, 1)).toBe('candidate')
+  })
+
+  it('treats two ticks for one candidate from different generations as a conflict', () => {
+    const root = seeded(1)
+    reopen(root, 1, 1)
+    const body = bodyOf(root)
+    const forged = withTick(
+      withTick(body, tickLine(1, 'rejected', 1)),
+      tickLine(1, 'rejected', 0),
+    )
+    const result = applyTicks(root, { body: forged, issue: 3 })
+    expect(result).toMatchObject({
+      accepted: [],
+      skipped: [{ id: idOf(1), reason: 'conflict' }],
+    })
+    expect(statusOf(root, 1)).toBe('candidate')
+  })
+
+  it('skips a tick as stale when the candidate reopens after the ticks were read', () => {
+    const root = seeded(2)
+    const body = ticked(bodyOf(root), [
+      [1, 'rejected'],
+      [2, 'rejected'],
+    ])
+    const result = applyTicks(
+      root,
+      { body, issue: 14 },
+      { hooks: { afterTriage: () => reopen(root, 1, 1) } },
+    )
+    expect(result).toMatchObject({
+      status: 'applied',
+      accepted: [{ id: idOf(2), status: 'rejected' }],
+      skipped: [{ id: idOf(1), status: 'rejected', reason: 'stale' }],
+    })
+    expect(statusOf(root, 1)).toBe('candidate')
+  })
+
+  it('reports an old tick as stale, not as already recorded, once the new generation was settled with the same reason', () => {
+    const root = seeded(1)
+    const old = ticked(bodyOf(root), [[1, 'rejected']])
+    reopen(root, 1, 1)
+    const fresh = withTick(bodyOf(root), tickLine(1, 'rejected', 1))
+    applyTicks(root, { body: fresh, issue: 16 })
+    expect(statusOf(root, 1)).toBe('rejected')
+    const bytes = ledgerBytes(root)
+
+    const result = applyTicks(root, { body: old, issue: 16 })
+    expect(result).toMatchObject({
+      accepted: [],
+      skipped: [{ id: idOf(1), status: 'rejected', reason: 'stale' }],
+    })
+    expect(ledgerBytes(root)).toBe(bytes)
+  })
+
+  it('does nothing the second time for a reopened candidate it settled', () => {
+    const root = seeded(1)
+    reopen(root, 1, 1)
+    const body = withTick(bodyOf(root), tickLine(1, 'rejected', 1))
+    applyTicks(root, { body, issue: 15 })
+    const bytes = ledgerBytes(root)
+    const again = applyTicks(root, { body, issue: 15 })
+    expect(again).toMatchObject({
+      accepted: [],
+      skipped: [{ id: idOf(1), reason: 'already-recorded' }],
+    })
+    expect(ledgerBytes(root)).toBe(bytes)
+  })
+})
 
 describe('readReportBody', () => {
   it('reads a regular file', () => {
