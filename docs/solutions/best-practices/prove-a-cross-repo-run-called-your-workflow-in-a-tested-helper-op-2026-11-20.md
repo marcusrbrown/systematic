@@ -53,7 +53,9 @@ The allowed origins are github.com origins. A set `GH_HOST` or a GHE remote must
 
 ### Put the decision in a helper op the skill pipes `gh` output into
 
-The skill sends the text `gh` printed, unchanged, on stdin; it never reads the list, picks an entry or checks a hash (`skills/ce-connect/references/fetch-and-import.md:75`). The op is `verify-provenance`, called twice: with the attempt's list alone it answers which commit to compare (`selected`), and with the same text and the compare status after `--status` it answers whether that commit is in `main`'s history (`accepted`) (`skills/ce-connect/references/fetch-and-import.md:94-131`). It reads no network, file, lock or configuration, and stdin is the request itself, so text that is not JSON is judged as `provenance-unprovable` and not refused as a malformed request (`src/ce-connect-helper.ts:3797-3799`, `src/ce-connect-helper.ts:3733-3743`).
+The skill sends the text `gh` printed, unchanged, on stdin; it never reads the list, picks an entry or checks a hash (`skills/ce-connect/references/fetch-and-import.md:75`). The op is `verify-provenance`, called twice: with the attempt's list alone it answers which commit to compare (`selected`), and with the same text and the compare status after `--status` it answers whether that status is one it accepts for the selected entry (`accepted`) (`skills/ce-connect/references/fetch-and-import.md:94-131`). It reads no network, file, lock or configuration, and stdin is the request itself, so text that is not JSON is judged as `provenance-unprovable` and not refused as a malformed request (`src/ce-connect-helper.ts:3797-3799`, `src/ce-connect-helper.ts:3733-3743`).
+
+**The helper judges only the evidence it is given.** It does not check that the two answers belong together: the `status` is judged on its own against `behind` and `identical`, and nothing ties it to the `sha` the first call selected or to the compare direction (`src/lib/connect-provenance.ts:87-107`, `verifyProvenance`; `src/ce-connect-helper.ts:3445-3458`, `verifyProvenanceOp`). The skill carries that part. It must compare the `sha` the helper selected, with `main` as the base, and send back that same request's status with the same text (`skills/ce-connect/references/fetch-and-import.md:117-131`). Wording tests pin those steps, not a model's obedience (`tests/unit/connect-skill-contract.test.ts:768-780`), so a status from the wrong commit or the wrong direction would still be accepted if it says `behind`.
 
 **Two answer shapes, on purpose.** The pure function returns `{status: 'selected' | 'accepted', sha}` or `{status: 'refused', reason}` (`src/lib/connect-provenance.ts:19-25`, `ProvenanceVerdict`). The op wraps that in the helper's envelope: `{ok: true, op, outcome: 'complete', stage, sha}` on success and `{ok: false, op, outcome: 'failed', reason}` on refusal, where `stage` carries the function's `status` (`src/ce-connect-helper.ts:217-226`, `failure` and `success`; `src/ce-connect-helper.ts:3451-3458`). The skill reads `ok`, `stage` and `reason` (`skills/ce-connect/references/fetch-and-import.md:109-111`). Reading `status` from the op's answer finds nothing. Both shapes are pinned (`tests/unit/connect-provenance.test.ts:19-23`; `tests/unit/ce-connect-helper-ops.test.ts:3127-3177`).
 
@@ -67,7 +69,7 @@ The check is real and it is narrow. The guide lists three limits (`docs/src/cont
 
 ## Why This Matters
 
-Prose rules at a trust gate are model-level; a helper op makes the same rules deterministic and keeps the two failure modes apart, so the user gets the right remedy for each.
+Prose rules at a trust gate are model-level; a helper op makes the rules about the evidence it is given deterministic and keeps the two failure modes apart, so the user gets the right remedy for each. How the evidence was gathered stays with the skill.
 
 ## When to Apply
 

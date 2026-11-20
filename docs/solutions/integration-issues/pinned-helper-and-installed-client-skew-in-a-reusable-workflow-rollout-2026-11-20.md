@@ -78,16 +78,20 @@ The procedure is in the plan for the change that moved the schedule (`docs/plans
 3. **Merge, then dispatch once.**
 4. **Check the first run.**
    - The `prepare` log says the cache restored from the recorded key, and the sweep progress continues instead of restarting.
-   - The run edits the existing report issue in place and opens no second one.
+   - The report matches the run's UTC date. The `post` job edits the open report in place only when its title date equals the run's UTC date, and otherwise creates a new report (`.github/workflows/connect.yaml:1199-1204`, `.github/workflows/connect.yaml:1223-1229`, `number`; the date comes from `.github/workflows/connect.yaml:105-113`, `Compute UTC date`). Then `Close superseded reports` carries the ticks onto the new report and closes the old one (`.github/workflows/connect.yaml:1244-1291`). Both outcomes are success. To check the in-place edit, dispatch on the same UTC date as the open report; either way, no second open report is left.
    - Ticks left on the report are accepted and logged.
    - A bare fetch word from a row written before the cutover still imports.
    - The run's top-level path is the wrapper's, which the bare path accepts.
    - The `Action inputs parsed` line shows `"hasModelOverride":true` ([share one composite agent step](../best-practices/share-one-composite-agent-step-between-the-headless-and-interactive-workflows-2026-11-13.md), item 9). The agent step passes `repo-skills: "false"` (`.github/workflows/connect.yaml:569`), and the guide says to confirm in the log that the caller's repository content is not loaded (`docs/src/content/docs/guides/cross-project-connections.mdx:515`).
-5. **If any check fails, revert the change and leave every cache untouched.**
+5. **If a check fails, do not just revert the merge.** A revert undoes neither a cache save nor an issue edit. `render` saves the cache under `connect-v1-<run_id>-<attempt>` and confirms it before `post` starts (`.github/workflows/connect.yaml:667`, `.github/workflows/connect.yaml:904-930`, `.github/workflows/connect.yaml:1017`), and the restore matches the prefix `connect-v1-` (`.github/workflows/connect.yaml:253-255`). After a failed `post`, a reverted workflow can therefore restore the failed run's cache. Recover in this order:
+   1. Pause scheduled and manual runs by disabling the workflow ([GitHub: disabling and enabling a workflow](https://docs.github.com/en/actions/managing-workflow-runs-and-deployments/managing-workflow-runs/disabling-and-enabling-a-workflow)).
+   2. Check which caches and report edits actually landed: list the `connect-v1-` caches and read the open report's body and title.
+   3. Reconcile. Keep the pre-cutover cache key recorded in step 2. Delete a cache saved by the failed run only after confirming its key carries that run's id; the workflow's recovery message uses `gh cache delete` but lists every `connect-v1-` cache (`.github/workflows/connect.yaml:293`), so delete that one cache id and not the whole list.
+   4. Only then revert the merge and re-enable the workflow.
 
 ## Why This Works
 
-A guard that tests the contract the callee needs, an operation the helper lists and a fetch word that names the caller, turns a version skew into a red run that names its fix, before paid work and before any state is saved. The client floor is outside the workflow's reach, so it lives where the user reads: the guide and the skill reference. Draining covers what a rename breaks silently, which is that queueing stops spanning the two names.
+A guard that tests the contract the callee needs, an operation the helper lists and a fetch word that names the caller, turns a version skew into a red run that names its fix. Only the `prepare` probe stops paid work. The `render` guard runs after the agent step and after the hand-off upload (`.github/workflows/connect.yaml:649`, `.github/workflows/connect.yaml:667`, `.github/workflows/connect.yaml:781-811`), so it stops cache persistence and report publication, not the earlier work. The client floor is outside the workflow's reach, so it lives where the user reads: the guide and the skill reference. Draining covers what a rename breaks silently, which is that queueing stops spanning the two names.
 
 ## Prevention
 
