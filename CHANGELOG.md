@@ -4,6 +4,20 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.37.0](https://github.com/marcusrbrown/systematic/compare/v3.36.0...v3.37.0) (2026-11-20)
+
+### Features
+
+* **connect:** let other repositories call the scheduled ce:connect workflow ([#1476](https://github.com/marcusrbrown/systematic/issues/1476)) ([d26ae35](https://github.com/marcusrbrown/systematic/commit/d26ae352be27919df0912628b9d2ab73180cf8a7))
+
+### Documentation
+
+* **solutions:** record the reusable workflow callee contract, cross-repo run provenance, pinned-helper rollout skew and cross-owner probing ([#1478](https://github.com/marcusrbrown/systematic/issues/1478)) ([5a3bc08](https://github.com/marcusrbrown/systematic/commit/5a3bc08d140032af6e7b2b43cb6d13986a7f933e))
+
+### Continuous Integration
+
+* **deps:** update Systematic to v3.36.0 ([#1474](https://github.com/marcusrbrown/systematic/issues/1474)) ([122017c](https://github.com/marcusrbrown/systematic/commit/122017ce75478b356f2e00021cbad3e16d20de98))
+
 ## [3.36.0](https://github.com/marcusrbrown/systematic/compare/v3.35.3...v3.36.0) (2026-11-20)
 
 ### Features
