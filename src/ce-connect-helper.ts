@@ -3425,19 +3425,31 @@ function parseTicksRequest(request: unknown): TicksRequest | undefined {
   return number < 1 ? undefined : { bodyFile, issue: number }
 }
 
-/** The date, the GitHub run and attempt, and whether a cache came back. Their values are checked by the renderer. */
+/**
+ * The date, the GitHub run and attempt, whether a cache came back, and the
+ * calling repository when one is sent. Their values are checked by the
+ * renderer. Only the fields named here are read, so a field a later release
+ * adds is ignored by this one.
+ */
 function parseRenderRequest(request: unknown): RenderRequest | undefined {
   if (!isRecord(request)) return undefined
-  const { date, runId, attempt, cacheRestored } = request
+  const { date, runId, attempt, cacheRestored, repo } = request
   if (
     typeof date !== 'string' ||
     typeof runId !== 'string' ||
     typeof attempt !== 'string' ||
-    typeof cacheRestored !== 'boolean'
+    typeof cacheRestored !== 'boolean' ||
+    (repo !== undefined && typeof repo !== 'string')
   ) {
     return undefined
   }
-  return { date, runId, attempt, cacheRestored }
+  return {
+    date,
+    runId,
+    attempt,
+    cacheRestored,
+    ...(repo === undefined ? {} : { repo }),
+  }
 }
 
 function ciOptions(deps: HelperDeps): CiOptions {

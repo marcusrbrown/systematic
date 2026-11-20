@@ -3845,6 +3845,60 @@ describe('the report operations at the helper entry', () => {
     expect(fs.existsSync(path.join(world.stateRoot, 'report.md'))).toBe(false)
   })
 
+  it('names the caller repository in the fetch words when the request carries one', () => {
+    const world = reportWorld(2)
+    const body = ok(render(world, { repo: 'fro-bot/agent' }))
+    expect(body.fetches).toEqual(['fro-bot/agent:900.1'])
+    const text = fs.readFileSync(String(body.bodyFile), 'utf8')
+    expect(text).toContain('/ce:connect fetch:fro-bot/agent:900.1`')
+    expect(parseReportBody(text).boxes).toHaveLength(4)
+  })
+
+  it.each([
+    'marcusrbrown/metacogs',
+    'marcusrbrown/systematic-fork',
+    'fro-bot/systematic',
+  ])("names %s, which only shares part of Systematic's identity", (repo) => {
+    const world = reportWorld(1)
+    const body = ok(render(world, { repo }))
+    expect(body.fetches).toEqual([`${repo}:900.1`])
+    const text = fs.readFileSync(String(body.bodyFile), 'utf8')
+    expect(text).toContain(`/ce:connect fetch:${repo}:900.1\``)
+    expect(text).not.toMatch(/fetch:\d/)
+  })
+
+  it('keeps the bare word for Systematic, and for a request that sends no repository', () => {
+    for (const over of [{}, { repo: 'MarcusRBrown/Systematic' }]) {
+      const world = reportWorld(2)
+      expect(ok(render(world, over)).fetches).toEqual(['900.1'])
+    }
+  })
+
+  it('reads only the fields it knows, so an unknown field is ignored', () => {
+    const world = reportWorld(1)
+    expect(ok(render(world, { somethingNew: 'x' })).fetches).toEqual(['900.1'])
+  })
+
+  it.each([
+    { repo: '' },
+    { repo: 7 },
+    { repo: null },
+    { repo: ['fro-bot/agent'] },
+    { repo: 'fro-bot' },
+    { repo: 'fro-bot/agent/extra' },
+    { repo: 'fro-bot/..' },
+    { repo: 'fro bot/agent' },
+    { repo: `${'o'.repeat(40)}/agent` },
+    { repo: `fro-bot/${'r'.repeat(101)}` },
+  ])('refuses the render request %j and renders nothing', (over) => {
+    const world = reportWorld(1)
+    expect(
+      failed(runHelperOp('render-report', { ...RENDER, ...over }, world.deps))
+        .reason,
+    ).toBe('invalid-request')
+    expect(fs.existsSync(path.join(world.stateRoot, 'report.md'))).toBe(false)
+  })
+
   it.each([
     {},
     { bodyFile: 'relative/body.md', issue: 1 },

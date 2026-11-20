@@ -51,7 +51,7 @@ createHash('sha256').update(JSON.stringify([
 - **Re-citing evidence recomputes it.** `withEvidence` drops the stored revision and hashes the new evidence, so a decision from the earlier digest is refused (`src/lib/connect-state.ts:1438-1449`).
 - **`decide` refuses a stale revision under the ledger lock** as `stale-revision` (`src/lib/connect-state.ts:2456-2466`, `refusalOf`). The skill tells the model to send the value from the digest's `Revision:` line, never its own, and not to retry on a refusal (`skills/ce-connect/SKILL.md:209-213`).
 - **The box marker carries the revision** as `:r<12 hex>` (`src/lib/connect-ci.ts:112-120`, `decisionLine`). A tick is recorded only when its revision equals the entry's (`src/lib/connect-ci.ts:1683-1687`, `judge`). A box with no revision is skipped as `unversioned`, and one with another revision as `stale`.
-- **One bundle per proposal.** The text, the revision and the run and attempt that hold the evidence travel together. `mergedPayloads` keeps whichever of this run's bundle and the stored one has the ledger's revision (`src/lib/connect-ci.ts:1277-1309`). `rowsOf` makes a row only from a bundle with that revision, and counts every other entry as unverified (`src/lib/connect-ci.ts:1326-1351`).
+- **One bundle per proposal.** The text, the revision and the run and attempt that hold the evidence travel together. `mergedPayloads` keeps whichever of this run's bundle and the stored one has the ledger's revision (`src/lib/connect-ci.ts:1328-1360`). `rowsOf` makes a row only from a bundle with that revision, and counts every other entry as unverified (`src/lib/connect-ci.ts:1377-1403`).
 
 ## Why This Works
 

@@ -37,9 +37,9 @@ Both defects were found in review before the change merged. The starvation follo
 
 **List only what can be acted on.** `rowsOf` makes a row only for an entry with a bundle for its live revision. Every other open entry goes into an `unverified` list (`src/lib/connect-ci.ts:1326-1351`).
 
-**Collapse the rest into one bounded section.** `unverifiedSection` counts the entries and names at most `MAX_UNVERIFIED_IDS` of them, 20, oldest first, then says how many more (`src/lib/connect-ci.ts:1128-1146`; `src/lib/connect-ci.ts:73-74`). It has no boxes, and the manifest does not hold its ids.
+**Collapse the rest into one bounded section.** `unverifiedSection` counts the entries and names at most `MAX_UNVERIFIED_IDS` of them, 20, oldest first, then says how many more (`src/lib/connect-ci.ts:1179-1197`; `src/lib/connect-ci.ts:73-74`). It has no boxes, and the manifest does not hold its ids.
 
-**Budget the section inside the cap.** `assembleReport` puts the section in the body, so every length check includes it (`src/lib/connect-ci.ts:1154-1189`). `fitReport` tries the full id list first and measures how many rows fit beside it. If the oldest row would not fit, it halves the list, down to the count alone (`src/lib/connect-ci.ts:1217-1231`):
+**Budget the section inside the cap.** `assembleReport` puts the section in the body, so every length check includes it (`src/lib/connect-ci.ts:1205-1240`). `fitReport` tries the full id list first and measures how many rows fit beside it. If the oldest row would not fit, it halves the list, down to the count alone (`src/lib/connect-ci.ts:1268-1282`):
 
 ```ts
 for (let named = Math.min(MAX_UNVERIFIED_IDS, input.unverified.length); named > 0; named = Math.floor(named / 2)) {
