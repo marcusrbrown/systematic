@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
+  isGithubOwnerRepo,
   normalizeGithubRemote,
   readRepoIdentity,
 } from '../../src/lib/connect-repo-identity.js'
@@ -73,6 +74,59 @@ describe('normalizeGithubRemote', () => {
       'https://user:ghp_secrettoken@github.com/o/r.git',
     )
     expect(result).toBe('o/r')
+  })
+})
+
+// ── The shared owner/repo shape ─────────────────────────────────────────────
+
+describe('isGithubOwnerRepo', () => {
+  it.each([
+    'fro-bot/agent',
+    'marcusrbrown/systematic',
+    'Owner/Repo',
+    'o/r',
+    'owner/my.repo-name_1',
+    'owner/.github',
+    `${'o'.repeat(39)}/${'r'.repeat(100)}`,
+  ])('accepts %j', (value) => {
+    expect(isGithubOwnerRepo(value)).toBe(true)
+  })
+
+  it.each([
+    '',
+    ' ',
+    'fro-bot',
+    'fro-bot/',
+    '/agent',
+    'fro-bot//agent',
+    'fro bot/agent',
+    'fro-bot/age nt',
+    'fro-bot/agent/extra',
+    'fro-bot/agent\n',
+    'fro-bot/agent`',
+    'fro-bot/agent:1',
+    '-fro/agent',
+    'fro-/agent',
+    'fro_bot/agent',
+    'fro-bot/..',
+    'fro-bot/.',
+    '../agent',
+    './agent',
+    `${'o'.repeat(40)}/agent`,
+    `fro-bot/${'r'.repeat(101)}`,
+    'fro-bot/agént',
+    'fro-bot/agent.git/',
+  ])('refuses %j', (value) => {
+    expect(isGithubOwnerRepo(value)).toBe(false)
+  })
+
+  it('is the rule a remote URL is read by, so an owner it refuses is never an origin', () => {
+    expect(
+      normalizeGithubRemote('https://github.com/fro-/agent'),
+    ).toBeUndefined()
+    expect(normalizeGithubRemote('https://github.com/fro-bot/agent')).toBe(
+      'fro-bot/agent',
+    )
   })
 })
 

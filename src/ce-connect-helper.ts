@@ -94,7 +94,10 @@ import {
   type Verification,
   verifyRecord,
 } from './lib/connect-import.js'
-import { readRepoIdentity } from './lib/connect-repo-identity.js'
+import {
+  isGithubOwnerRepo,
+  readRepoIdentity,
+} from './lib/connect-repo-identity.js'
 import {
   acquireLock,
   type CandidateRecord,
@@ -153,7 +156,7 @@ import { isMainModule } from './lib/main-module.js'
  */
 
 export const CE_CONNECT_USAGE =
-  'Usage: node connect.mjs <begin|validate|publish|decide|import|apply-ticks|render-report|ledger show [--offset N]|ledger clear|ledger unlock>'
+  'Usage: node connect.mjs <begin|validate|publish|decide|import|apply-ticks|render-report|allowed-origins|ledger show [--offset N]|ledger clear|ledger unlock>'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -194,6 +197,7 @@ const OPS = [
   'import',
   'apply-ticks',
   'render-report',
+  'allowed-origins',
   'ledger-show',
   'ledger-clear',
   'ledger-unlock',
@@ -2821,7 +2825,6 @@ function ledgerUnlock(deps: HelperDeps): HelperResult {
 
 // ── import ──────────────────────────────────────────────────────────────────
 
-const GITHUB_REPO = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/
 const GITHUB_RUN_ID = /^[0-9]{1,20}$/
 const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 const MAX_DIRECTORY_LENGTH = 4096
@@ -2846,7 +2849,7 @@ function parseImportRequest(request: unknown): ImportRequest | undefined {
   }
   if (!isRecord(provenance)) return undefined
   const { repo, runId, commit } = provenance
-  if (typeof repo !== 'string' || !GITHUB_REPO.test(repo)) return undefined
+  if (typeof repo !== 'string' || !isGithubOwnerRepo(repo)) return undefined
   if (typeof runId !== 'string' || !GITHUB_RUN_ID.test(runId)) return undefined
   if (
     commit !== undefined &&
@@ -3393,6 +3396,38 @@ function importRun(request: unknown, deps: HelperDeps): HelperResult {
   return importWrite(parsed, sourceRunId, verified, state.root, deps)
 }
 
+// ── allowed-origins ─────────────────────────────────────────────────────────
+
+/**
+ * The GitHub origins of the allowed checkouts, for a named `fetch:`. The skill
+ * asks before it downloads anything: a repository that is not listed is
+ * refused. Origins are read as `import` reads them (`readRepoIdentity`), so a
+ * checkout with no GitHub origin is not listed. An origin that two or more
+ * allowed checkouts share is listed once and named in `ambiguous`: `import`
+ * refuses every candidate of such a repository as `repo-ambiguous`.
+ *
+ * Reads configuration and `.git` files only. It takes no lock, creates no state
+ * and writes nothing, and the answer carries no path, no credential and no
+ * config warning: those can name the user's machine.
+ */
+function allowedOrigins(deps: HelperDeps): HelperResult {
+  const environment = describeEnvironment(deps)
+  const seen = new Set<string>()
+  const shared = new Set<string>()
+  for (const { mainRoot } of environment.resolved.resolved) {
+    const { repo } = readRepoIdentity(mainRoot)
+    if (repo === undefined) continue
+    if (seen.has(repo)) shared.add(repo)
+    seen.add(repo)
+  }
+  return success('allowed-origins', {
+    outcome: 'complete',
+    origins: [...seen].sort(),
+    ambiguous: [...shared].sort(),
+    configUnreadable: environment.configUnreadable,
+  })
+}
+
 // ── apply-ticks and render-report ───────────────────────────────────────────
 
 const ISSUE_DIGITS = /^[0-9]{1,10}$/
@@ -3566,6 +3601,8 @@ export function runHelperOp(
         return applyTicksOp(request, deps)
       case 'render-report':
         return renderReportOp(request, deps)
+      case 'allowed-origins':
+        return allowedOrigins(deps)
       case 'ledger-show':
         return ledgerShow(request, deps)
       case 'ledger-clear':

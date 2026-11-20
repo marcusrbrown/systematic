@@ -43,7 +43,7 @@ found.push({ index, ticked: box[1] !== ' ', key: box[3] + ':' + box[4] + ':' + (
 
 A late tick under the old renderer is carried between two old-format bodies. A tick never crosses between formats. Until the pin moves, the pinned helper still records old-format ticks by id. Once the workflow runs a release with revisions, the tick step does the rest:
 
-- `judge` skips a tick whose box has no revision as `unversioned` and records nothing, whatever the ledger says (`src/lib/connect-ci.ts:1683-1687`).
+- `judge` skips a tick whose box has no revision as `unversioned` and records nothing, whatever the ledger says (`src/lib/connect-ci.ts:1664-1668`).
 - The `prepare` job prints how many ticks were skipped that way and tells the operator to tick the current report (`.github/workflows/connect.yaml:341`).
 - The guide tells the operator to settle open rows on the current report before moving the pin ([Settle a candidate on a report](../../src/content/docs/guides/cross-project-connections.mdx)).
 
@@ -53,7 +53,7 @@ The carrier's only job is to keep a tick on the same candidate at the same conte
 
 ## Prevention
 
-- **Test the consumer against the old producer's output.** When a consumer ships beside a producer that a pin holds back, build the fixture bodies in the old producer's format. `decisionLine` called without a revision writes it (`src/lib/connect-ci.ts:112-120`). Run the real carrier on them and assert the late tick survives (`tests/unit/connect-workflow.test.ts:3208-3216`).
+- **Test the consumer against the old producer's output.** When a consumer ships beside a producer that a pin holds back, build the fixture bodies in the old producer's format. `decisionLine` called without a revision writes it (`src/lib/connect-ci.ts:113-121`). Run the real carrier on them and assert the late tick survives (`tests/unit/connect-workflow.test.ts:3208-3216`).
 - **Test both crossings.** A tick on a box with no revision is not carried onto a box with one, and the reverse (`tests/unit/connect-workflow.test.ts:3218-3222`, `tests/unit/connect-workflow.test.ts:3224-3228`). The same revision carries, and another revision does not (`tests/unit/connect-workflow.test.ts:3230-3237`).
 - **Test the rollout hazard, not just the format.** A legacy tick behind a cache rollback records nothing, whatever manifest ids it names. A legacy tick is skipped as `unversioned` whether or not the candidate ever reopened (`tests/unit/connect-ci.test.ts:2447-2465`, `tests/unit/connect-ci.test.ts:2467-2485`).
 - **Treat a pin as a second deployment.** Ask which parts of a change run from the pin and which from the checkout, and what each side sees while only one of them has moved. The carrier is a copy of the renderer's box format, so a format change touches both and must be safe in both orders.

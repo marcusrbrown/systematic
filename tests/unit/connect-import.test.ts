@@ -553,6 +553,70 @@ describe('import: a record from a CI run, checked against local clones', () => {
   })
 })
 
+describe('import: two repositories that share a run id', () => {
+  /** The `good` record, cut down to the candidates of one kind. */
+  function only(kind: string): Json {
+    const record = fixtureRecord('good')
+    const block = record.candidateBlock as Json
+    block.candidates = list(block.candidates).filter((c) => c.kind === kind)
+    return record
+  }
+
+  it('imports each independently and records the named repository in its run', () => {
+    const world = buildWorld()
+    const runId = '123456789'
+    const first = ok(
+      importOp(world, downloaded(only('transferable-lesson')), {
+        provenance: { repo: 'fro-bot/agent', runId },
+      }),
+    )
+    const second = ok(
+      importOp(world, downloaded(only('contradiction')), {
+        provenance: { repo: 'acme/other', runId },
+      }),
+    )
+    expect(first.imported).toBe(1)
+    expect(second.imported).toBe(1)
+    expect(runDirs(world)).toHaveLength(2)
+    expect(first.runDir).not.toBe(second.runDir)
+
+    const repoOf = (body: Json): unknown =>
+      (
+        JSON.parse(fs.readFileSync(String(body.runRecordPath), 'utf8')) as {
+          provenance: Json
+        }
+      ).provenance
+    expect(repoOf(first)).toEqual({ repo: 'fro-bot/agent', runId })
+    expect(repoOf(second)).toEqual({ repo: 'acme/other', runId })
+    expect(String(first.summary)).toContain(
+      'GitHub run `123456789` of `fro-bot/agent`',
+    )
+    expect(String(second.summary)).toContain(
+      'GitHub run `123456789` of `acme/other`',
+    )
+    expect(ledgerEntries(world)).toHaveLength(2)
+  })
+
+  it('keys duplicates on the candidate, not on the repository: the same candidate from another repository is already imported', () => {
+    const world = buildWorld()
+    const runId = '123456789'
+    const first = ok(
+      importOp(world, downloaded(only('transferable-lesson')), {
+        provenance: { repo: 'fro-bot/agent', runId },
+      }),
+    )
+    const again = ok(
+      importOp(world, downloaded(only('transferable-lesson')), {
+        provenance: { repo: 'acme/other', runId },
+      }),
+    )
+    expect(first.imported).toBe(1)
+    expect(again.imported).toBe(0)
+    expect(again.alreadyImported).toBe(1)
+    expect(runDirs(world)).toHaveLength(1)
+  })
+})
+
 // ── Mapping ─────────────────────────────────────────────────────────────────
 
 describe('import: mapping recorded repositories to local checkouts', () => {
@@ -937,6 +1001,15 @@ describe('import: the downloaded record is untrusted input', () => {
       { directory: dir, provenance: { ...PROVENANCE, runId: 'abc' } },
       { directory: dir, provenance: { ...PROVENANCE, commit: 'zz' } },
       { directory: dir, provenance: { ...PROVENANCE, repo: 'a/b/c' } },
+      // The shape the report and the skill name a repository by, nothing looser.
+      { directory: dir, provenance: { ...PROVENANCE, repo: 'fro-/agent' } },
+      { directory: dir, provenance: { ...PROVENANCE, repo: 'fro-bot/..' } },
+      { directory: dir, provenance: { ...PROVENANCE, repo: 'fro-bot/.' } },
+      { directory: dir, provenance: { ...PROVENANCE, repo: 'fro bot/agent' } },
+      {
+        directory: dir,
+        provenance: { ...PROVENANCE, repo: `${'o'.repeat(40)}/r` },
+      },
     ]
     for (const request of bad) {
       expect(failed(runHelperOp('import', request, world.deps)).reason).toBe(

@@ -23,6 +23,7 @@ import {
   NEXT_STEPS,
 } from '../../src/lib/connect-helper-core.js'
 import { REFUSAL_TEXT } from '../../src/lib/connect-import.js'
+import { isGithubOwnerRepo } from '../../src/lib/connect-repo-identity.js'
 import { parseFrontmatter } from '../../src/lib/frontmatter.js'
 import { READ_ONLY_AGENT_NAMES } from '../../src/lib/opencode-v2-tool-guard.js'
 import { CURATED_PERSONAS } from '../../src/lib/pi-subagents-personas.js'
@@ -247,6 +248,115 @@ describe('ce:connect fetch', () => {
     })
   })
 
+  describe('the named fetch word', () => {
+    /** The pattern the skill states for a named value, read from its own text. */
+    const namedPattern = (): RegExp => {
+      const stated = fetchSection.match(/named value must match `(\^[^`]+\$)`/)
+      expect(stated).not.toBeNull()
+      return new RegExp(stated?.[1] ?? '$^')
+    }
+    const LONGEST = `${'o'.repeat(39)}/${'r'.repeat(100)}`
+
+    test('shows the named form in the argument hint, beside the bare one', () => {
+      const hint = String(skill.data['argument-hint'])
+      expect(hint).toContain('fetch:<owner>/<repo>:<run>.<attempt>')
+      expect(hint).toContain('fetch:<run>[.<attempt>]')
+    })
+
+    test('names the form, requires the attempt and keeps a bare word meaning Systematic', () => {
+      expect(fetchSection).toMatch(/`fetch:<owner>\/<repo>:<run>\.<attempt>`/)
+      expect(fetchSection).toMatch(/attempt is required/)
+      expect(fetchSection).toMatch(/bare word always means Systematic/)
+      expect(fetchSection).toMatch(
+        /bare word and a named word are different words/,
+      )
+    })
+
+    test('accepts a named word with a repository, a run and an attempt', () => {
+      const accepts = namedPattern()
+      for (const value of [
+        'fro-bot/agent:900.1',
+        'Fro-Bot/Agent:900.12',
+        'o/r:1.1',
+        'owner/.github:7.2',
+        `${LONGEST}:43525490720.1`,
+      ]) {
+        expect(accepts.test(value)).toBe(true)
+      }
+    })
+
+    test('rejects a missing attempt, a bad repository and anything a run or attempt rule refuses', () => {
+      const rejects = namedPattern()
+      for (const value of [
+        '',
+        'fro-bot/agent',
+        'fro-bot/agent:900',
+        'fro-bot/agent:900.',
+        'fro-bot/agent:0.1',
+        'fro-bot/agent:900.0',
+        'fro-bot/agent:900.01',
+        'fro-bot/agent:900.1.2',
+        'fro-bot/agent:900.1;id',
+        'fro-bot/agent:900.1\n',
+        ':900.1',
+        '/agent:900.1',
+        'fro-bot/:900.1',
+        '-fro/agent:900.1',
+        'fro-/agent:900.1',
+        'fro_bot/agent:900.1',
+        'fro-bot/..:900.1',
+        'fro-bot/.:900.1',
+        'fro-bot/agent/extra:900.1',
+        'fro bot/agent:900.1',
+        'fro-bot/agent :900.1',
+        `${'o'.repeat(40)}/agent:900.1`,
+        `fro-bot/${'r'.repeat(101)}:900.1`,
+        `fro-bot/agent:${'1'.repeat(21)}.1`,
+        `fro-bot/agent:900.${'1'.repeat(11)}`,
+      ]) {
+        expect(rejects.test(value), value).toBe(false)
+      }
+    })
+
+    test("states the repository part by the helper's own rule", () => {
+      const pattern = namedPattern()
+      for (const repo of [
+        'fro-bot/agent',
+        'Fro-Bot/Agent',
+        'o/r',
+        'owner/.github',
+        LONGEST,
+        '',
+        'fro-bot',
+        'fro-bot/',
+        '/agent',
+        'fro-bot//agent',
+        'fro bot/agent',
+        'fro-bot/agent/extra',
+        '-fro/agent',
+        'fro-/agent',
+        'fro_bot/agent',
+        'fro-bot/..',
+        'fro-bot/.',
+        '../agent',
+        `${'o'.repeat(40)}/agent`,
+        `fro-bot/${'r'.repeat(101)}`,
+        'fro-bot/agént',
+      ]) {
+        expect(pattern.test(`${repo}:900.1`), repo).toBe(
+          isGithubOwnerRepo(repo),
+        )
+      }
+    })
+
+    test('refuses a malformed named word before any command, with its own line', () => {
+      expect(fetchSection).toContain(
+        'invalid-request: fetch: a named word is <owner>/<repo>:<run>.<attempt>',
+      )
+      expect(fetchSection).toMatch(/before any value reaches a command/)
+    })
+  })
+
   test('stands alone: it conflicts with a selection and with a different fetch word', () => {
     expect(fetchSection).toContain(
       'conflicting-selection: fetch: cannot be combined with group: or projects:',
@@ -286,18 +396,21 @@ describe('ce:connect fetch reference', () => {
       'gh api "repos/marcusrbrown/systematic/actions/runs/',
     )
     expect(text).toMatch(/`gh run view --json` has no workflow path/)
-    expect(order('### 1. Check the run', '### 3. Download')).toBe(true)
+    expect(order('### 2. Check the run', '### 5. Download')).toBe(true)
     expect(order('unsupported-run-event', 'gh run download')).toBe(true)
     expect(order('not-a-connect-run', 'gh run download')).toBe(true)
   })
 
-  test('uses a fixed repository and takes none from the user or the record', () => {
-    expect(text).toMatch(/The repository is fixed: `marcusrbrown\/systematic`/)
+  test('fixes the repository of a bare word and takes no repository from the record', () => {
+    expect(text).toMatch(
+      /The repository of a bare word is fixed: `marcusrbrown\/systematic`/,
+    )
     expect(text).toMatch(/Never take a repository, a path or a workflow name/)
+    expect(text).toMatch(/never from a downloaded file/)
   })
 
   describe('the artifact choice', () => {
-    const choose = section(text, '### 2. Choose the artifact', '### 3.')
+    const choose = section(text, '### 4. Choose the artifact', '### 5.')
 
     test('with a bare run, picks the highest attempt of connect-run-<run>-<attempt> for that run id', () => {
       expect(text).toContain('connect-run-<run>-<attempt>')
@@ -336,6 +449,7 @@ describe('ce:connect fetch reference', () => {
     expect(text).toContain(
       'gh run download <run> --repo marcusrbrown/systematic',
     )
+    expect(text).toContain('gh run download <run> --repo <repo>')
     expect(text).toMatch(/Remove `<DEST>`/)
     expect(text).toMatch(/Do not open it and do not list the directory/)
     expect(text).toMatch(/holds one file, `run.json`, at its root/)
@@ -343,7 +457,10 @@ describe('ce:connect fetch reference', () => {
 
   test('hands the helper a directory and where the run came from, and asks nothing', () => {
     expect(text).toContain('connect.mjs" import')
-    expect(text).toContain('"provenance": {"repo": "marcusrbrown/systematic"')
+    expect(text).toContain('"provenance": {"repo": "<repo>"')
+    expect(text).toMatch(
+      /`<repo>` is `marcusrbrown\/systematic` for a bare word/,
+    )
     expect(text).toMatch(/dispatches no agent, asks nothing/)
     expect(text).toMatch(/never touches the network/)
   })
@@ -378,8 +495,8 @@ describe('ce:connect fetch reference', () => {
       /print `helper-unavailable` and its hint, then `Connect failed`/,
     )
     expect(text).toMatch(/\| `helper-unavailable` \|/)
-    expect(order('### 4. Import', '### 5. Report')).toBe(true)
-    expect(order('`helper-unavailable` and its hint', '### 5. Report')).toBe(
+    expect(order('### 6. Import', '### 7. Report')).toBe(true)
+    expect(order('`helper-unavailable` and its hint', '### 7. Report')).toBe(
       true,
     )
   })
@@ -434,8 +551,263 @@ describe('ce:connect fetch reference', () => {
     expect(skillText).toContain('references/fetch-and-import.md')
     expect(outcomesText).toContain('## Reading a fetch')
     expect(outcomesText).toContain('`fetch:<run>`')
+    expect(outcomesText).toContain('`fetch:<owner>/<repo>:<run>.<attempt>`')
+    expect(outcomesText).toMatch(/named word without an attempt/i)
     expect(outcomesText).toMatch(/`import` answered `complete`/)
     expect(outcomesText).toMatch(/`import` answered `degraded`/)
+  })
+})
+
+describe('ce:connect named fetch reference', () => {
+  const text = fs.readFileSync(
+    path.join(SKILL_DIR, 'references/fetch-and-import.md'),
+    'utf8',
+  )
+  const at = (needle: string): number => {
+    const found = text.indexOf(needle)
+    expect(found, needle).not.toBe(-1)
+    return found
+  }
+  const before = (a: string, b: string): boolean => at(a) < at(b)
+  const resolve = section(text, '### 1. Resolve the repository', '### 2.')
+  const check = section(text, '### 2. Check the run', '### 3.')
+  const bareCheck = section(check, '#### Bare word', '#### Named word')
+  const namedCheck = check.slice(check.indexOf('#### Named word'))
+  const prove = section(text, '### 3. Prove the provenance', '### 4.')
+  const choose = section(text, '### 4. Choose the artifact', '### 5.')
+  const reasons = section(
+    text,
+    '## Reasons the skill prints',
+    '## Reasons a candidate is refused',
+  )
+
+  test('states the named grammar with the attempt required, and a bare word as Systematic', () => {
+    expect(text).toContain('`fetch:<owner>/<repo>:<run>.<attempt>`')
+    expect(text).toMatch(/attempt is required/)
+    expect(text).toMatch(/A bare word means Systematic/)
+  })
+
+  test('runs the steps in the order: origin, run, provenance, artifact, download, import, report', () => {
+    const headings = [
+      '### 1. Resolve the repository',
+      '### 2. Check the run, before any download',
+      '### 3. Prove the provenance',
+      '### 4. Choose the artifact',
+      '### 5. Download into a fresh directory',
+      '### 6. Import',
+      '### 7. Report',
+    ]
+    headings.slice(1).forEach((heading, i) => {
+      expect(before(headings[i] ?? '', heading), heading).toBe(true)
+    })
+  })
+
+  describe('the allowed origins, asked before any call or download', () => {
+    test('asks the helper for the allowed origins before the first gh command', () => {
+      expect(resolve).toContain('connect.mjs" allowed-origins')
+      expect(before('connect.mjs" allowed-origins', 'gh api "repos/')).toBe(
+        true,
+      )
+      expect(
+        before(
+          'connect.mjs" allowed-origins',
+          'gh run download <run> --repo <repo>',
+        ),
+      ).toBe(true)
+      expect(resolve).not.toMatch(/gh (?:api|run) /)
+    })
+
+    test('matches the named repository to an origin without regard to case', () => {
+      expect(resolve).toMatch(
+        /`Fro-Bot\/Agent` matches the origin `fro-bot\/agent`/,
+      )
+    })
+
+    test('compares the lowercase word with the origins and uses that form from then on', () => {
+      expect(resolve).toMatch(/lowercase/)
+      expect(resolve).toMatch(/`origins`/)
+    })
+
+    test('refuses a repository that is not an allowed origin, downloads nothing and names the remedy', () => {
+      expect(resolve).toContain('`origin-not-allowed`')
+      expect(resolve).toMatch(/Nothing was downloaded/)
+      expect(resolve).toMatch(/allow-list a checkout of that repository/)
+      expect(resolve).toMatch(/no `gh` command/)
+    })
+
+    test('stops on an origin two allowed checkouts share, as import would refuse it', () => {
+      expect(resolve).toContain('`ambiguous`')
+      expect(resolve).toContain('`repo-ambiguous`')
+    })
+
+    test('treats an unusable helper as helper-unavailable and never reads the config itself', () => {
+      expect(resolve).toContain('`helper-unavailable`')
+      expect(resolve).toMatch(/Never read the configuration yourself/)
+    })
+
+    test('does not print a local path', () => {
+      expect(resolve).toMatch(/never prints a local path/i)
+    })
+  })
+
+  describe('a named word: the run', () => {
+    test('reads the run of the named repository and accepts only schedule and workflow_dispatch', () => {
+      expect(namedCheck).toContain('gh api "repos/<repo>/actions/runs/<run>"')
+      expect(namedCheck).toMatch(/`schedule` or `workflow_dispatch`/)
+      expect(namedCheck).toContain('`unsupported-run-event`')
+      expect(namedCheck).toContain('`run-not-found`')
+      expect(namedCheck).toContain('`gh-not-authenticated`')
+    })
+
+    test("trusts no path of the run: a wrapper's own path proves nothing", () => {
+      expect(namedCheck).toMatch(/wrapper's own path proves nothing/)
+      expect(namedCheck).not.toContain('.github/workflows/connect')
+    })
+  })
+
+  describe('a named word: the provenance of the exact attempt', () => {
+    test('reads the named attempt first and stops when it does not exist', () => {
+      expect(prove).toContain('actions/runs/<run>/attempts/<attempt>')
+      expect(prove).toMatch(/attempt does not exist[^\n]*`run-not-found`/)
+      expect(
+        before('actions/runs/<run>/attempts/<attempt>', 'compare/main...<sha>'),
+      ).toBe(true)
+    })
+
+    test('takes the Systematic connect.yaml entry by its path before the @, never by position, and uses its sha', () => {
+      expect(prove).toContain(
+        'marcusrbrown/systematic/.github/workflows/connect.yaml',
+      )
+      expect(prove).toMatch(/before the `@`/)
+      expect(prove).toMatch(/never by (?:its )?(?:position|index)/i)
+      expect(prove).toMatch(/`sha`/)
+      expect(prove).toMatch(/40 lowercase hex/)
+      expect(prove).toMatch(/Do not use `ref` or the text after the `@`/)
+    })
+
+    test('compares owner/repo without regard to case, and the workflow file path exactly', () => {
+      expect(prove).toMatch(
+        /comparing `marcusrbrown\/systematic` without regard to case and the rest exactly/,
+      )
+      // A mixed-case owner and repo is a valid call, so it is accepted.
+      expect(prove).toMatch(
+        /`MarcusRBrown\/Systematic\/\.github\/workflows\/connect\.yaml@<sha>` matches/,
+      )
+      // A mixed-case file path is another file, so it is refused as another workflow.
+      expect(prove).toMatch(
+        /`marcusrbrown\/systematic\/\.github\/Workflows\/connect\.yaml`[^\n]*does not match[^\n]*`not-a-connect-run`/,
+      )
+      expect(prove).not.toMatch(/equals exactly `marcusrbrown/)
+    })
+
+    test('compares the default branch with the sha, in that direction, and accepts behind or identical only', () => {
+      expect(prove).toContain(
+        'gh api "repos/marcusrbrown/systematic/compare/main...<sha>" --jq .status',
+      )
+      expect(text).not.toContain('<sha>...main')
+      expect(prove).toMatch(/`behind` or `identical`/)
+      for (const word of ['`ahead`', '`diverged`', '404']) {
+        expect(prove).toContain(word)
+      }
+    })
+
+    test('fails closed with its own reason when the proof is missing, and uses not-a-connect-run only for a proven other workflow', () => {
+      expect(prove).toContain('`provenance-unprovable`')
+      for (const case_ of [
+        'absent',
+        'null',
+        'empty',
+        'more than one',
+        'API call fails',
+      ]) {
+        expect(prove, case_).toContain(case_)
+      }
+      expect(prove).toMatch(/`not-a-connect-run`[^\n]*(?:fork|other workflow)/)
+      expect(prove).toMatch(/never download/i)
+    })
+
+    test('finishes before any download', () => {
+      expect(before('### 3. Prove the provenance', '### 5. Download')).toBe(
+        true,
+      )
+      expect(before('`provenance-unprovable`', 'gh run download <run>')).toBe(
+        true,
+      )
+    })
+  })
+
+  describe('a bare word', () => {
+    test('stays on the fixed repository and skips the origin check and the provenance proof', () => {
+      expect(resolve).toMatch(/bare word[^\n]*skip to step 2/i)
+      expect(bareCheck).toContain(
+        'gh api "repos/marcusrbrown/systematic/actions/runs/<run>"',
+      )
+      expect(bareCheck).toMatch(/skip step 3/i)
+    })
+
+    test('accepts a direct run and a wrapper run by the top-level path, with any @ref dropped', () => {
+      expect(bareCheck).toContain('`.github/workflows/connect.yaml`')
+      expect(bareCheck).toContain('`.github/workflows/connect-scheduled.yaml`')
+      expect(bareCheck).toMatch(/Drop a trailing `@<ref>`/)
+    })
+
+    test('refuses any other workflow path and any other event', () => {
+      expect(bareCheck).toMatch(/Any other path[^\n]*`not-a-connect-run`/)
+      expect(bareCheck).toContain('`.github/workflows/fro-bot.yaml`')
+      expect(bareCheck).toMatch(/`schedule` or `workflow_dispatch`/)
+      expect(bareCheck).toContain('`unsupported-run-event`')
+    })
+
+    test('never reads referenced_workflows or an attempt record', () => {
+      expect(text).toMatch(/A bare word never reads `referenced_workflows`/)
+      expect(bareCheck).not.toContain('referenced_workflows')
+      expect(bareCheck).not.toContain('attempts/')
+      expect(resolve).not.toContain('referenced_workflows')
+      expect(text.indexOf('--jq .referenced_workflows')).toBeGreaterThan(
+        text.indexOf('### 3. Prove the provenance'),
+      )
+    })
+
+    test('keeps the newest-attempt rule for a bare run with no attempt', () => {
+      expect(choose).toMatch(/With a bare `fetch:<run>`[^\n]*highest attempt/)
+    })
+  })
+
+  test('downloads the exact attempt of a named word and never falls back to another', () => {
+    expect(choose).toMatch(
+      /With `fetch:<owner>\/<repo>:<run>\.<attempt>`[^\n]*exactly `connect-run-<run>-<attempt>`/,
+    )
+    expect(choose).toMatch(/repos\/<repo>\/actions\/runs\/<run>\/artifacts/)
+    expect(choose).toMatch(/never fall back to another attempt/i)
+  })
+
+  test('imports with the named repository, and says the commit is the caller wrapper commit', () => {
+    expect(text).toMatch(
+      /`<repo>` is `marcusrbrown\/systematic` for a bare word/,
+    )
+    expect(text).toMatch(/named repository for a named word/)
+    expect(text).toMatch(
+      /`head_sha`[^\n]*(?:caller|wrapper)[^\n]*not the callee/i,
+    )
+  })
+
+  test('lets the import check the candidate projects after a named fetch passes', () => {
+    expect(text).toMatch(
+      /`import` still checks every project[^\n]*its own check/,
+    )
+    expect(text).toContain('`repo-not-allowed`')
+  })
+
+  test('documents each new and reused stop reason in the reasons table', () => {
+    for (const reason of [
+      'origin-not-allowed',
+      'provenance-unprovable',
+      'repo-ambiguous',
+      'not-a-connect-run',
+      'run-not-found',
+    ]) {
+      expect(reasons, reason).toMatch(new RegExp(`\\| \`${reason}\` \\|`))
+    }
   })
 })
 

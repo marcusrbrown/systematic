@@ -31,15 +31,15 @@ Both defects were found in review before the change merged. The starvation follo
 
 **Keeping every open entry as a row.** The cap counts characters, not usefulness. Rows with no verified details have no boxes and no Fetch entry, but they still take space and they sort first.
 
-**Fitting the rows, then appending the collapsed section.** Appending up to 20 ids after the 60,000-character renderer cap (`src/lib/connect-ci.ts:70-71`, `REPORT_MAX_CHARS`) could add about 1,360 characters, past the workflow's 60,500 cap (`.github/workflows/connect.yaml:48-50`, `REPORT_BODY_CAP`). The 500-character slack under that cap also has to hold the 133-character cache-save line (`.github/workflows/connect.yaml:837`). The verifier compares the final body to the cap (`.github/workflows/connect.yaml:948`).
+**Fitting the rows, then appending the collapsed section.** Appending up to 20 ids after the 60,000-character renderer cap (`src/lib/connect-ci.ts:71-72`, `REPORT_MAX_CHARS`) could add about 1,360 characters, past the workflow's 60,500 cap (`.github/workflows/connect.yaml:48-50`, `REPORT_BODY_CAP`). The 500-character slack under that cap also has to hold the 133-character cache-save line (`.github/workflows/connect.yaml:837`). The verifier compares the final body to the cap (`.github/workflows/connect.yaml:948`).
 
 ## Solution
 
-**List only what can be acted on.** `rowsOf` makes a row only for an entry with a bundle for its live revision. Every other open entry goes into an `unverified` list (`src/lib/connect-ci.ts:1326-1351`).
+**List only what can be acted on.** `rowsOf` makes a row only for an entry with a bundle for its live revision. Every other open entry goes into an `unverified` list (`src/lib/connect-ci.ts:1307-1332`).
 
-**Collapse the rest into one bounded section.** `unverifiedSection` counts the entries and names at most `MAX_UNVERIFIED_IDS` of them, 20, oldest first, then says how many more (`src/lib/connect-ci.ts:1179-1197`; `src/lib/connect-ci.ts:73-74`). It has no boxes, and the manifest does not hold its ids.
+**Collapse the rest into one bounded section.** `unverifiedSection` counts the entries and names at most `MAX_UNVERIFIED_IDS` of them, 20, oldest first, then says how many more (`src/lib/connect-ci.ts:1160-1178`; `src/lib/connect-ci.ts:74-75`). It has no boxes, and the manifest does not hold its ids.
 
-**Budget the section inside the cap.** `assembleReport` puts the section in the body, so every length check includes it (`src/lib/connect-ci.ts:1205-1240`). `fitReport` tries the full id list first and measures how many rows fit beside it. If the oldest row would not fit, it halves the list, down to the count alone (`src/lib/connect-ci.ts:1268-1282`):
+**Budget the section inside the cap.** `assembleReport` puts the section in the body, so every length check includes it (`src/lib/connect-ci.ts:1186-1221`). `fitReport` tries the full id list first and measures how many rows fit beside it. If the oldest row would not fit, it halves the list, down to the count alone (`src/lib/connect-ci.ts:1249-1263`):
 
 ```ts
 for (let named = Math.min(MAX_UNVERIFIED_IDS, input.unverified.length); named > 0; named = Math.floor(named / 2)) {

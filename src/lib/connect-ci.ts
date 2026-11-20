@@ -50,6 +50,7 @@ import {
   renderSweepLine,
   sanitizeText,
 } from './connect-helper-core.js'
+import { isGithubOwnerRepo } from './connect-repo-identity.js'
 import {
   acquireLock,
   decideLedgerEntry,
@@ -997,35 +998,15 @@ export interface Assembled {
   readonly fresh: number
 }
 
-/** A GitHub owner: 1 to 39 letters, digits and hyphens, with no hyphen at either end. */
-const OWNER_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
-/** A GitHub repository name: 1 to 100 letters, digits, `.`, `_` and `-`. */
-const REPO_NAME = /^[A-Za-z0-9._-]{1,100}$/
-
 /** The repository whose fetch words stay bare. */
 const SYSTEMATIC_REPO = 'marcusrbrown/systematic'
-
-/** `owner/repo`, shaped as GitHub allows and nothing else: it is printed into a command the report asks a person to run. */
-function validRepo(repo: string): boolean {
-  const parts = repo.split('/')
-  const [owner, name] = parts
-  return (
-    parts.length === 2 &&
-    owner !== undefined &&
-    name !== undefined &&
-    OWNER_NAME.test(owner) &&
-    REPO_NAME.test(name) &&
-    name !== '.' &&
-    name !== '..'
-  )
-}
 
 function validRequest(request: RenderRequest): boolean {
   return (
     validDate(request.date) &&
     isDigits(request.runId) &&
     isDigits(request.attempt) &&
-    (request.repo === undefined || validRepo(request.repo))
+    (request.repo === undefined || isGithubOwnerRepo(request.repo))
   )
 }
 

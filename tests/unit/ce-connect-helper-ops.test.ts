@@ -2959,6 +2959,139 @@ describe('the import operation at the helper entry', () => {
   })
 })
 
+// ── The allowed-origins operation ──────────────────────────────────────────
+
+describe('the allowed-origins operation', () => {
+  const SECRET = 'ghp_secrettoken'
+
+  /** A world whose source and target have GitHub origins; `extras` lets a test add more. */
+  function originWorld(
+    source: string | null,
+    target: string | null,
+    options: WorldOptions = {},
+  ): World {
+    const world = buildWorld(options)
+    if (source !== null) git(world.source, ['remote', 'add', 'origin', source])
+    if (target !== null) git(world.target, ['remote', 'add', 'origin', target])
+    return world
+  }
+
+  const origins = (world: World): Json =>
+    ok(runHelperOp('allowed-origins', {}, world.deps))
+
+  it('is named in the usage line', () => {
+    const errors: string[] = []
+    runConnectHelper({ argv: [], errorSink: (line) => errors.push(line) })
+    expect(errors.join('\n')).toContain('|render-report|allowed-origins|')
+  })
+
+  it('lists the lowercase owner/repo of each allowed checkout, sorted', () => {
+    const world = originWorld(
+      `https://user:${SECRET}@GitHub.com/Org/Source.git`,
+      'git@github.com:Acme/Target',
+    )
+    expect(origins(world)).toMatchObject({
+      op: 'allowed-origins',
+      origins: ['acme/target', 'org/source'],
+      ambiguous: [],
+      configUnreadable: false,
+    })
+  })
+
+  it('lists nothing for a checkout with no origin or a non-GitHub origin', () => {
+    const world = originWorld(null, 'https://gitlab.com/acme/target.git')
+    expect(origins(world).origins).toEqual([])
+  })
+
+  it('lists an origin once and names it ambiguous when two allowed checkouts share it', () => {
+    const world = originWorld(
+      'https://github.com/org/shared.git',
+      'git@github.com:Org/Shared',
+    )
+    expect(origins(world)).toMatchObject({
+      origins: ['org/shared'],
+      ambiguous: ['org/shared'],
+    })
+  })
+
+  it('answers with an empty list for an empty allow list, and says when the config is unreadable', () => {
+    const empty = buildWorld({ allow: () => [] })
+    expect(origins(empty)).toMatchObject({ origins: [], ambiguous: [] })
+
+    const broken = buildWorld()
+    fs.writeFileSync(
+      path.join(broken.home, '.config', 'opencode', 'systematic.json'),
+      '{ not json',
+    )
+    expect(origins(broken)).toMatchObject({
+      origins: [],
+      configUnreadable: true,
+    })
+  })
+
+  it('never prints a local path, a credential or a config warning', () => {
+    const world = originWorld(
+      `https://user:${SECRET}@github.com/org/source.git`,
+      'git@github.com:acme/target',
+      { allow: (source, target) => [source, target, '/no/such/project'] },
+    )
+    const text = JSON.stringify(origins(world))
+    for (const secret of [
+      world.source,
+      world.target,
+      world.home,
+      path.dirname(world.source),
+      SECRET,
+      'no/such',
+    ]) {
+      expect(text).not.toContain(secret)
+    }
+  })
+
+  it('reads configuration only: no lock, no state root and no write, even while a run holds the lock', () => {
+    const world = originWorld(
+      'https://github.com/org/source.git',
+      'git@github.com:acme/target',
+    )
+    const before = snapshotTree(world.home)
+    expect(fs.existsSync(world.stateRoot)).toBe(false)
+    expect(origins(world).origins).toEqual(['acme/target', 'org/source'])
+    expect(fs.existsSync(world.stateRoot)).toBe(false)
+    expect(snapshotTree(world.home)).toEqual(before)
+
+    fs.mkdirSync(world.stateRoot, { recursive: true, mode: 0o700 })
+    const held = acquireLock(world.stateRoot)
+    expect(held.status).toBe('acquired')
+    const during = snapshotTree(world.stateRoot)
+    expect(origins(world).origins).toEqual(['acme/target', 'org/source'])
+    expect(snapshotTree(world.stateRoot)).toEqual(during)
+    if (held.status === 'acquired') releaseLock(held.lock)
+  })
+
+  it('takes no request: stdin is not read, and a terminal does not matter', () => {
+    const world = originWorld(
+      'https://github.com/org/source.git',
+      'git@github.com:acme/target',
+    )
+    const lines: string[] = []
+    const code = runConnectHelper({
+      argv: ['allowed-origins'],
+      isTTY: true,
+      deps: world.deps,
+      readRequest: () => {
+        throw new Error('stdin must not be read')
+      },
+      outputSink: (line) => lines.push(line),
+    })
+    expect(code).toBe(0)
+    expect(JSON.parse(lines[0] ?? '{}')).toMatchObject({
+      ok: true,
+      op: 'allowed-origins',
+      origins: ['acme/target', 'org/source'],
+    })
+  })
+})
+
 // ── The invocation record of a CI run ──────────────────────────────────────
 
 describe('the invocation record of a CI run', () => {
