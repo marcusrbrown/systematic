@@ -3934,7 +3934,10 @@ describe('the report operations at the helper entry', () => {
         op: 'render-report',
         outcome: 'busy',
         red: false,
-        shown: 2,
+        // A busy run kept no payload store, so no candidate has a bundle to list.
+        open: 2,
+        shown: 0,
+        unverified: 2,
         stateUpdated: false,
       })
       const text = fs.readFileSync(String(body.bodyFile), 'utf8')
@@ -4522,7 +4525,7 @@ describe('an open candidate whose report details were stored before revisions', 
   const boxes = (body: string): string[] =>
     body.split('\n').filter((line) => line.startsWith('- ['))
 
-  const NO_DETAILS = 'No verified details for this revision.'
+  const NO_DETAILS = '## No verified details'
 
   it('shows no verified details, no boxes and no fetch link after an upgrade, even when a later run proposes the candidate again unchanged', () => {
     const { world, evidence } = mismatchWorld()
@@ -4554,7 +4557,7 @@ describe('an open candidate whose report details were stored before revisions', 
     markRun(world, again.run.runId, '901-1')
     const body = renderBody(world, '901', '1')
     expect(body).toContain(NO_DETAILS)
-    expect(body).toContain(`Candidate id: \`${id}\``)
+    expect(body).toContain(`\`${id}\``)
     expect(boxes(body)).toEqual([])
     expect(body).not.toContain('fetch:')
     expect(body).not.toContain('Title: ')

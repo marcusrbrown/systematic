@@ -70,6 +70,9 @@ import {
 /** A report body is never longer than this many characters. */
 export const REPORT_MAX_CHARS = 60_000
 
+/** The most candidate ids the section for rows with no verified details names; the rest are counted. */
+export const MAX_UNVERIFIED_IDS = 20
+
 /** The manifests kept: the newest reports a person can still be looking at. */
 export const MANIFESTS_KEPT = 14
 
@@ -928,9 +931,13 @@ export type RenderResult =
       readonly bodyFile: string
       /** The hash in the body's manifest marker. */
       readonly manifest: string
+      /** Every open candidate, listed or not. */
       readonly open: number
       readonly shown: number
+      /** The listable candidates the size cap left out. */
       readonly hidden: number
+      /** The open candidates with no bundle for their live revision, counted in one section. */
+      readonly unverified: number
       /** Candidates listed for the first time on this date. */
       readonly fresh: number
       /** The `<run>.<attempt>` fetch words of the listed candidates, in the order they appear. */
@@ -957,7 +964,7 @@ export type RenderResult =
 
 interface Row {
   readonly id: string
-  readonly payload: Payload | undefined
+  readonly payload: Payload
   readonly isNew: boolean
   readonly block: string
 }
@@ -968,7 +975,10 @@ interface BodyInput {
   readonly cacheRestored: boolean
   /** The report was rendered without the lock, so no payload or manifest was recorded. */
   readonly stateUpdated: boolean
+  /** The open entries that have a bundle for their live revision: the only rows with boxes. */
   readonly rows: readonly Row[]
+  /** The ids of the other open entries, oldest first. */
+  readonly unverified: readonly string[]
 }
 
 interface Assembled {
@@ -1024,14 +1034,11 @@ function fetchWord(payload: Payload): string {
   return `${payload.runId}.${payload.attempt}`
 }
 
-/** The row of a candidate with no bundle for the revision the ledger holds: no fetch link and no boxes. */
-const NO_DETAILS = 'No verified details for this revision.'
-
 function blockOf(
   position: number,
   entry: LedgerEntry,
   revision: string,
-  payload: Payload | undefined,
+  payload: Payload,
   isNew: boolean,
 ): string {
   const { id } = entry
@@ -1043,10 +1050,6 @@ function blockOf(
     `### Candidate ${position}${marks.length === 0 ? '' : ` (${marks.join(', ')})`}`,
     '',
   ]
-  if (payload === undefined) {
-    lines.push(NO_DETAILS, `Candidate id: \`${id}\``, '')
-    return lines.join('\n')
-  }
   lines.push(
     `- Fetch: \`/ce:connect fetch:${fetchWord(payload)}\` (run ${payload.runId}, attempt ${payload.attempt})`,
     '',
@@ -1080,7 +1083,6 @@ function fetchLines(rows: readonly Row[]): {
 } {
   const byFetch = new Map<string, number[]>()
   rows.forEach((row, index) => {
-    if (row.payload === undefined) return
     const word = fetchWord(row.payload)
     const list = byFetch.get(word) ?? []
     list.push(index + 1)
@@ -1116,7 +1118,35 @@ function hiddenLine(hidden: number): string {
   return `**${hidden} open ${noun} not shown.** They stay open and appear here, oldest first, as the ones above are settled.`
 }
 
-function assemble(input: BodyInput, shown: number): Assembled {
+/**
+ * The one section for open entries with no bundle for their live revision.
+ * They have no boxes, so they are only counted, and a bounded number of ids is
+ * named, oldest first. They are never full rows, so they cannot crowd out the
+ * rows that can be settled.
+ */
+function unverifiedSection(ids: readonly string[]): string[] {
+  if (ids.length === 0) return []
+  const named = ids.slice(0, MAX_UNVERIFIED_IDS).map((id) => `\`${id}\``)
+  const more = ids.length - named.length
+  const count =
+    ids.length === 1
+      ? '1 open candidate has'
+      : `${ids.length} open candidates have`
+  return [
+    UNVERIFIED_HEADING,
+    '',
+    `${count} no verified details for the current revision, so there is nothing to tick. Oldest first: ${named.join(', ')}${more > 0 ? `, and ${more} more` : ''}.`,
+    '',
+  ]
+}
+
+const UNVERIFIED_HEADING = '## No verified details'
+
+function assemble(
+  input: BodyInput,
+  shown: number,
+  withUnverified = true,
+): Assembled {
   const rows = input.rows.slice(0, shown)
   const ids = rows.map((row) => row.id)
   const hash = manifestHash(ids)
@@ -1145,19 +1175,27 @@ function assemble(input: BodyInput, shown: number): Assembled {
   for (const row of rows) out.push(row.block)
   out.push(DECISIONS_END, '')
   if (shown < open) out.push(hiddenLine(open - shown), '')
+  if (withUnverified) out.push(...unverifiedSection(input.unverified))
   return { body: out.join('\n'), ids, hash, fetches: fetch.fetches, fresh }
 }
 
-/** The most candidates whose report fits the cap: the oldest, whole, and never a block cut. */
+/**
+ * The most candidates whose report fits the cap: the oldest, whole, and never a
+ * block cut. The section for rows with no verified details is not measured: it
+ * is a heading and at most `MAX_UNVERIFIED_IDS` ids, well inside the room the
+ * cap leaves under GitHub's limit, and the rows it describes cannot be settled.
+ */
 function fit(input: BodyInput): number {
   const total = input.rows.length
-  if (assemble(input, total).body.length <= REPORT_MAX_CHARS) return total
+  const fits = (count: number): boolean =>
+    assemble(input, count, false).body.length <= REPORT_MAX_CHARS
+  if (fits(total)) return total
   // With a hidden line the length only grows with the count, so a search works.
   let low = 0
   let high = total - 1
   while (low < high) {
     const middle = Math.ceil((low + high) / 2)
-    if (assemble(input, middle).body.length <= REPORT_MAX_CHARS) low = middle
+    if (fits(middle)) low = middle
     else high = middle - 1
   }
   return low
@@ -1260,21 +1298,27 @@ function rowsOf(
   open: readonly LedgerEntry[],
   payloads: ReadonlyMap<string, Payload>,
   date: string,
-): Row[] {
-  return open.map((entry, index) => {
+): { rows: Row[]; unverified: string[] } {
+  const rows: Row[] = []
+  const unverified: string[] = []
+  for (const entry of open) {
     const held = payloads.get(entry.id)
     const revision = revisionOf(entry)
-    // Details are shown, with a fetch link and boxes, only from a bundle that
-    // is for the revision the ledger holds. Anything else is not shown at all.
-    const payload = held?.revision === revision ? held : undefined
-    const isNew = payload !== undefined && (payload.firstShown ?? date) === date
-    return {
-      id: entry.id,
-      payload,
-      isNew,
-      block: blockOf(index + 1, entry, revision, payload, isNew),
+    // A row, with its fetch link and boxes, comes only from a bundle for the
+    // revision the ledger holds. Any other entry is counted in one section.
+    if (held === undefined || held.revision !== revision) {
+      unverified.push(entry.id)
+      continue
     }
-  })
+    const isNew = (held.firstShown ?? date) === date
+    rows.push({
+      id: entry.id,
+      payload: held,
+      isNew,
+      block: blockOf(rows.length + 1, entry, revision, held, isNew),
+    })
+  }
+  return { rows, unverified }
 }
 
 interface Stores {
@@ -1345,12 +1389,14 @@ function renderState(
     proposed(run, new Set(open.map((entry) => entry.id)), request),
   )
   const outcome = outcomeOf(invocation)
+  const { rows, unverified } = rowsOf(open, payloads, request.date)
   const input: BodyInput = {
     outcome,
     facts: factLines(invocation, run),
     cacheRestored: request.cacheRestored,
     stateUpdated: recordState,
-    rows: rowsOf(open, payloads, request.date),
+    rows,
+    unverified,
   }
   const shown = fit(input)
   const result = assemble(input, shown)
@@ -1387,7 +1433,8 @@ function renderState(
     manifest: result.hash,
     open: open.length,
     shown,
-    hidden: open.length - shown,
+    hidden: rows.length - shown,
+    unverified: unverified.length,
     fresh: result.fresh,
     fetches: result.fetches,
     outcome,

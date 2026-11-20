@@ -10,6 +10,7 @@ import {
   fenceText,
   MANIFEST_FILE,
   MANIFESTS_KEPT,
+  MAX_UNVERIFIED_IDS,
   manifestMarker,
   neutraliseText,
   PAYLOAD_FILE,
@@ -243,7 +244,8 @@ function manifestsOf(root: string): Array<{ hash: string; ids: string[] }> {
 }
 
 /** The generated line of candidate `index`, at its fixture entry's revision unless one is named. */
-const NO_DETAILS = 'No verified details for this revision.'
+/** The heading of the one section that collapses the rows with no bundle for their live revision. */
+const NO_DETAILS = '## No verified details'
 
 function boxLine(
   index: number,
@@ -657,7 +659,8 @@ describe('renderReport', () => {
     writeLedger(root, [entryOf(1), entryOf(2)])
     const { body, fetches } = rendered(root)
     expect(body).toContain(NO_DETAILS)
-    expect(body).toContain(`Candidate id: \`${idOf(2)}\``)
+    expect(body).toContain(`\`${idOf(2)}\``)
+    expect(body).not.toContain('### Candidate 2')
     expect(body).not.toContain(`connect-decision:promoted:${idOf(2)}`)
     expect(body).not.toContain(`connect-decision:rejected:${idOf(2)}`)
     expect(body).not.toContain('Details unavailable')
@@ -665,6 +668,7 @@ describe('renderReport', () => {
     expect(body).toContain(boxLine(1, 'rejected', false))
     expect(fetches).toEqual(['900.1'])
     expect(body).toContain('for candidates 1\n')
+    expect(body).toContain('1 open, 1 listed')
   })
 
   it('notes a ledger that was not restored, with the sweep line and the fetch line', () => {
@@ -1188,11 +1192,13 @@ describe('renderReport', () => {
           expect(result.outcome).toBe('busy')
           expect(result.red).toBe(false)
           expect(result.stateUpdated).toBe(false)
-          expect(result.shown).toBe(2)
+          // No payload store exists, so neither candidate has a bundle to list.
+          expect(result).toMatchObject({ open: 2, shown: 0, unverified: 2 })
           expect(result.body).toContain('Connect busy')
           expect(result.body).toMatch(/State not updated/)
           // Nothing stored describes the two candidates, so neither has boxes.
-          expect(result.body.split(NO_DETAILS)).toHaveLength(3)
+          expect(result.body.split(NO_DETAILS)).toHaveLength(2)
+          expect(result.body).toContain(`\`${idOf(1)}\`, \`${idOf(2)}\``)
           expect(parseReportBody(result.body).boxes).toHaveLength(0)
           expect(fs.readFileSync(path.join(root, REPORT_FILE), 'utf8')).toBe(
             result.body,
@@ -1307,7 +1313,7 @@ describe('renderReport', () => {
       expect(result.body).toMatch(/ended with no final line/)
     })
 
-    it('still lists open candidates when the run failed', () => {
+    it('still reports open candidates when the run failed, by id, since the run left no details', () => {
       const root = seeded(2)
       writeInvocation(
         root,
@@ -1315,7 +1321,9 @@ describe('renderReport', () => {
         { outcome: 'failed', finalLine: 'Connect failed', reason: 'aborted' },
         null,
       )
-      expect(rendered(root).shown).toBe(2)
+      const result = rendered(root)
+      expect(result).toMatchObject({ open: 2, shown: 0, unverified: 2 })
+      expect(result.body).toContain(`\`${idOf(1)}\`, \`${idOf(2)}\``)
     })
 
     it('writes nothing when no invocation record carries this run marker', () => {
@@ -1571,7 +1579,7 @@ describe('renderReport', () => {
         { sweep: { total: 'many' }, selection: 'all', projects: 'none' },
       )
       const result = rendered(root)
-      expect(result.shown).toBe(1)
+      expect(result).toMatchObject({ open: 1, shown: 0, unverified: 1 })
       expect(result.body).toContain(NO_DETAILS)
       expect(result.body).not.toContain('connect-decision:')
     })
@@ -1579,7 +1587,7 @@ describe('renderReport', () => {
     it('does not throw on a candidate block that is not a list', () => {
       const root = seeded(1)
       writeRunRecord(root, [], { candidateBlock: 'nope' })
-      expect(rendered(root).shown).toBe(1)
+      expect(rendered(root)).toMatchObject({ open: 1, unverified: 1 })
     })
 
     it('treats an invocation record with the wrong types as absent', () => {
@@ -2747,13 +2755,12 @@ describe("a report binds a candidate's text to the revision of its boxes", () =>
       writeRunRecord(root, [])
       writeInvocation(root, '901-1', {}, null)
       const result = rendered(root, { runId: '901', date: DAY_TWO })
-      const [row] = result.body
-        .split('### Candidate 1')[1]
-        ?.split('### Candidate 2') ?? ['']
-      expect(row).toContain(NO_DETAILS)
-      expect(row).toContain(`Candidate id: \`${idOf(1)}\``)
-      expect(row).not.toContain('fetch:')
-      expect(row).not.toContain('connect-decision:')
+      // Candidate 1 has no row: its id is in the collapsed line and nowhere else.
+      expect(result.body).not.toContain('### Candidate 2')
+      const collapsed = result.body.split(NO_DETAILS)[1] ?? ''
+      expect(collapsed).toContain(`\`${idOf(1)}\``)
+      expect(result.body.split(idOf(1))).toHaveLength(2)
+      expect(result.body).not.toContain(`connect-decision:rejected:${idOf(1)}`)
       expect(result.body).not.toContain('Evidence of run 800')
       expect(result.fetches).not.toContain('800.1')
       expect(fetchLinesOf(result.body).join('\n')).not.toContain('800.1')
@@ -2864,6 +2871,222 @@ describe("a report binds a candidate's text to the revision of its boxes", () =>
       const body = rendered(root).body
       expect(boxesOf(body, 1)).toEqual([])
       expect(body).toContain(NO_DETAILS)
+    })
+  })
+})
+
+describe('the report lists the rows that can be settled before the rows that cannot', () => {
+  /** `legacy` older entries with no bundle, then one newer entry with a bundle at its live revision. */
+  function backlog(legacy: number): { root: string; newer: number } {
+    const root = seeded(1)
+    const newer = legacy + 1
+    writeLedger(
+      root,
+      Array.from({ length: newer }, (_, i) => entryOf(i + 1)),
+    )
+    // The run proposes only the newer candidate: the older ones have no stored text.
+    writeRunRecord(root, [blockCandidate(newer)])
+    return { root, newer }
+  }
+
+  const collapsedOf = (body: string): string => {
+    const [, rest = ''] = body.split(NO_DETAILS)
+    return rest.split('\n## ')[0] ?? ''
+  }
+
+  it('shows a newer candidate with a bundle in full when an older backlog with none would fill the report', () => {
+    const { root, newer } = backlog(700)
+    const result = rendered(root)
+
+    // Seven hundred full rows would not fit under the cap; one actionable row and a short section do.
+    expect(result.body.length).toBeLessThan(REPORT_MAX_CHARS)
+    expect(result.body).toContain(`Title: Lesson ${newer}`)
+    expect(result.body).toContain(
+      `/ce:connect fetch:900.1\` for candidates 1\n`,
+    )
+    expect(
+      result.body
+        .split('\n')
+        .filter((line) => line.includes(idOf(newer)) && line.startsWith('- [')),
+    ).toEqual([
+      boxLine(newer, 'promoted', false),
+      boxLine(newer, 'rejected', false),
+    ])
+    expect(result).toMatchObject({
+      open: 701,
+      shown: 1,
+      hidden: 0,
+      unverified: 700,
+      fetches: ['900.1'],
+    })
+    expect(parseReportBody(result.body).manifest).toBe(result.manifest)
+
+    // The legacy ids are in the collapsed line only, oldest first, and no box has one.
+    const collapsed = collapsedOf(result.body)
+    expect(collapsed).toContain('700 open candidates have no verified details')
+    expect(collapsed).toContain(
+      Array.from(
+        { length: MAX_UNVERIFIED_IDS },
+        (_, i) => `\`${idOf(i + 1)}\``,
+      ).join(', '),
+    )
+    for (let n = 1; n <= 700; n++) {
+      const count = result.body.split(idOf(n)).length - 1
+      expect(count).toBe(n <= MAX_UNVERIFIED_IDS ? 1 : 0)
+    }
+    expect(result.body).not.toContain('### Candidate 2')
+    expect(result.body).not.toContain('open candidates are not shown')
+  })
+
+  it('records the tick on that candidate on the next apply, and leaves the backlog open', () => {
+    const { root, newer } = backlog(700)
+    const body = rendered(root).body
+    const result = applyTicks(root, {
+      body: body.replace(
+        boxLine(newer, 'rejected', false),
+        boxLine(newer, 'rejected', true),
+      ),
+      issue: 30,
+    })
+    expect(result).toMatchObject({
+      status: 'applied',
+      accepted: [{ id: idOf(newer), status: 'rejected' }],
+      skipped: [],
+      unresolved: [],
+    })
+    expect(statusOf(root, newer)).toBe('rejected')
+    for (const n of [1, 2, 700]) expect(statusOf(root, n)).toBe('candidate')
+  })
+
+  it('leaves the backlog out of the manifest and the Fetch index, so a tick on one cannot count', () => {
+    const { root, newer } = backlog(30)
+    const result = rendered(root)
+    const manifest = readJson(root, MANIFEST_FILE) as {
+      manifests: Array<{ hash: string; ids: string[] }>
+    }
+    expect(
+      manifest.manifests.find((item) => item.hash === result.manifest)?.ids,
+    ).toEqual([idOf(newer)])
+    expect(result.fetches).toEqual(['900.1'])
+    // A forged tick for a backlog id names no box of this report.
+    const forged = result.body.replace(
+      '<!-- connect-decisions:end -->',
+      `${boxLine(1, 'rejected', true)}\n<!-- connect-decisions:end -->`,
+    )
+    expect(applyTicks(root, { body: forged, issue: 31 })).toMatchObject({
+      accepted: [],
+      skipped: [{ id: idOf(1), reason: 'not-in-manifest' }],
+    })
+    expect(statusOf(root, 1)).toBe('candidate')
+  })
+
+  it('keeps actionable rows under their own cap and wording, whatever the backlog', () => {
+    // Enough rows with bundles to overflow, plus a backlog with none.
+    const root = seeded(1)
+    // Under the 200 candidates a run record is read for.
+    const total = 190
+    writeLedger(
+      root,
+      Array.from({ length: total + 5 }, (_, i) => entryOf(i + 1)),
+    )
+    writeRunRecord(
+      root,
+      Array.from({ length: total }, (_, i) =>
+        blockCandidate(i + 6, {
+          summary: `Summary ${'x'.repeat(400)}`,
+        }),
+      ),
+    )
+    const result = rendered(root)
+    expect(result.body.length).toBeLessThanOrEqual(REPORT_MAX_CHARS)
+    expect(result.shown).toBeLessThan(total)
+    expect(result.open).toBe(total + 5)
+    expect(result.unverified).toBe(5)
+    expect(result.hidden).toBe(total - result.shown)
+    // The oldest actionable rows are the ones shown: 6, 7, 8, ...
+    expect(result.body).toContain(`### Candidate 1`)
+    expect(result.body).toContain(`Title: Lesson 6\n`)
+    expect(result.body).toContain(
+      `**${result.hidden} open candidates are not shown.** They stay open and appear here, oldest first, as the ones above are settled.`,
+    )
+    expect(collapsedOf(result.body)).toContain(
+      '5 open candidates have no verified details',
+    )
+  })
+
+  it('shows the same actionable rows whatever the size of the backlog, since the section is not measured against the cap', () => {
+    const shownWith = (legacy: number): number => {
+      const root = seeded(1)
+      writeLedger(
+        root,
+        Array.from({ length: legacy + 150 }, (_, i) => entryOf(i + 1)),
+      )
+      writeRunRecord(
+        root,
+        Array.from({ length: 150 }, (_, i) =>
+          blockCandidate(legacy + i + 1, {
+            // Rows of the same size whatever their number.
+            title: 'Lesson',
+            summary: `S ${'x'.repeat(500)}`,
+            sources: [],
+          }),
+        ),
+      )
+      const result = rendered(root)
+      expect(result.body.length).toBeLessThanOrEqual(REPORT_MAX_CHARS + 3000)
+      return result.shown
+    }
+    const none = shownWith(0)
+    expect(none).toBeLessThan(150)
+    expect(shownWith(5000)).toBe(none)
+  })
+
+  describe('the collapsed section', () => {
+    const idsIn = (body: string): string[] =>
+      [...collapsedOf(body).matchAll(/`([0-9a-f]{64})`/g)].map((m) =>
+        String(m[1]),
+      )
+
+    it('names at most the cap of ids, oldest first, and says how many more there are', () => {
+      const { root } = backlog(MAX_UNVERIFIED_IDS + 5)
+      const collapsed = collapsedOf(rendered(root).body)
+      expect(collapsed).toContain(
+        `${MAX_UNVERIFIED_IDS + 5} open candidates have no verified details`,
+      )
+      expect(collapsed).toContain(', and 5 more')
+      expect(idsIn(rendered(root).body)).toEqual(
+        Array.from({ length: MAX_UNVERIFIED_IDS }, (_, i) => idOf(i + 1)),
+      )
+    })
+
+    it('names every id and no "more" when the backlog is exactly the cap', () => {
+      const { root } = backlog(MAX_UNVERIFIED_IDS)
+      const body = rendered(root).body
+      expect(idsIn(body)).toHaveLength(MAX_UNVERIFIED_IDS)
+      expect(collapsedOf(body)).not.toContain(' more')
+    })
+
+    it('says "more" for one over the cap and uses the singular for one candidate', () => {
+      expect(
+        collapsedOf(rendered(backlog(MAX_UNVERIFIED_IDS + 1).root).body),
+      ).toContain(', and 1 more')
+      const one = collapsedOf(rendered(backlog(1).root).body)
+      expect(one).toContain('1 open candidate has no verified details')
+      expect(one).not.toContain('more')
+    })
+
+    it('is absent when every open candidate has a bundle', () => {
+      const body = rendered(seeded(2)).body
+      expect(body).not.toContain(NO_DETAILS)
+    })
+
+    it('sits outside the section ticks are read from, so it adds no box', () => {
+      const { root } = backlog(MAX_UNVERIFIED_IDS + 5)
+      const body = rendered(root).body
+      expect(parseReportBody(body).boxes).toHaveLength(2)
+      expect(body.indexOf(NO_DETAILS)).toBeGreaterThan(
+        body.indexOf('<!-- connect-decisions:end -->'),
+      )
     })
   })
 })

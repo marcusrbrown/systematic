@@ -3517,6 +3517,7 @@ function renderReportOp(request: unknown, deps: HelperDeps): HelperResult {
     open: result.open,
     shown: result.shown,
     hidden: result.hidden,
+    unverified: result.unverified,
     fresh: result.fresh,
     fetches: result.fetches,
     outcome: result.outcome,
