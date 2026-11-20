@@ -472,7 +472,7 @@ Read these before you add a project.
 - **Some paths cannot be cited.** A file whose path contains a single quote, a dollar sign or a backtick is skipped, and so is a project whose root has one. The digest names the reason under "Not read or not covered".
 - **A fetched record is untrusted.** It comes from a runner you do not control, and only the helper opens it. The helper re-verifies fingerprints and excerpts against your files, but the title and summary were written by a researcher on that runner and are not checked against evidence. Read every candidate before you promote it.
 - **A scheduled run's agent can reach its credential.** The agent step can read the provider credential and the job's token, and nothing screens the report or the artifacts for secret values. The mitigations narrow the damage and do not prevent a leak. See [What the credential can reach](#what-the-credential-can-reach).
-- **A report's ticks are only as good as the report.** A tick settles a candidate by id. Nothing checks that you promoted it. The ledger of a scheduled run is separate from yours.
+- **A report's ticks are only as good as the report.** A tick settles the candidate with the matching id and revision. Nothing checks that you promoted it. The ledger of a scheduled run is separate from yours.
 - **Promoted learnings never copy another project's text.** They are written in the target project's own words and cite their sources by project, path and fingerprint.
 - **Only a human promotes.** Nothing in `ce:connect` writes a learning, edits a project, or records a decision without you.
 

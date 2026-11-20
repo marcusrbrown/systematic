@@ -1,6 +1,7 @@
 ---
 title: Evaluate a model-driven tool with a pre-registered protocol, and drop any outcome label that every run trips
 date: 2026-11-09
+last_updated: 2026-11-20
 category: best-practices
 module: ce-connect
 problem_type: best_practice
@@ -16,6 +17,7 @@ applies_when:
   - "Choosing outcome labels such as complete and degraded for a bounded run"
   - "Planting known defects to measure whether a tool finds them"
   - "A human judges model output and the result will gate a decision"
+  - "Accepting a model-driven check against named positive cases and negative controls"
 tags:
   - evaluation
   - pre-registration
@@ -53,6 +55,15 @@ Plant the defects in a scratch copy of one project and make the copy small enoug
 - **Define "found" before the runs.** A planted contradiction counts as found when a published contradiction cites both documents of its pair as sources (`tests/manual/connect-eval/PRE-REGISTRATION.md:146`). A candidate that cites one planted document as a source and the other as counterevidence is an ordinary candidate. Scoring it as a seed was a classification mistake made once during the evaluation.
 - **Plant controls.** A control is a same-subject pair that does not conflict. A control reported in any repetition fails the check, and counts once in the precision denominator (`tests/manual/connect-eval/PRE-REGISTRATION.md:83-84`).
 - **Report planted defects found in the main sweep with no threshold**, since they are synthetic pairs inside one project (`tests/manual/connect-eval/PRE-REGISTRATION.md:78`).
+
+### Design an acceptance run so that a miss means something
+
+The `code-mismatch` check was run against five named cases and a real model researcher: a stale claim, an unscoped claim, a current claim, a still-true control and a historical control. All three attempts failed, and the unscoped case stays open ([#1463](https://github.com/marcusrbrown/systematic/issues/1463)). Four lessons came out of the runs.
+
+- **Controls work at claim level.** The still-true control was chosen as a whole learning, and the researcher flagged a claim in it. Triage judged that claim stale, with caveats: the document is a postmortem that may describe history, the live deployment was not verified, and the operator's recheck is pending. A control chosen at learning level cannot tell a false positive from a real finding. Pin each control to one verified claim, and score any other candidate on that learning as an ordinary candidate that counts in precision.
+- **Check that the slice can reach the target before dispatch.** The first attempt failed on two offered cases (the unscoped miss and the control firing). The Current case was never offered: it sat at position 285, slice `floor(285/48)+1 = 6`, and only four slices ran. Compute each named case's slice from the helper's order before dispatch, so an unoffered case is not read as a silent one.
+- **Remove a prompt line that has no measured effect, and disclose the miss.** The unscoped case missed because the learning was never read, then because it was read and the claim was never compared with the other host version. The line added for the third attempt had no measured effect and was removed before merge, so it never shipped. The miss is reported as a failed case, and it counts as solved only after a fresh run reports it.
+- **Pooled small samples are not a rate.** Precision was judged on 8 of 10 candidates in the first attempt (one was citation drift only), 5 of 5 in the second and 3 of 3 in the third, all stale-reason candidates. Report each sample with its denominator and the reasons for each miss. Pooled, they are not a rate.
 
 ### Put the whole candidate inside the question
 
@@ -98,6 +109,7 @@ A registration written after the numbers cannot be told apart from fitting. The 
 - When a run is bounded and outcomes are labeled by whether a bound was hit.
 - When a person's judgment of model output will gate a decision.
 - When an evaluation harness runs on scratch clones of real repositories.
+- Before accepting a model-driven check against named positive cases and controls.
 
 ## Examples
 
@@ -115,3 +127,4 @@ Frozen files digest after the change: sha256:<64 hex>
 - [A perfect measurement is evidence about the instrument, not the system](a-perfect-measurement-means-a-broken-instrument-2026-08-16.md)
 - [Mining real needs cannot settle whether an external decision store matters](mining-real-needs-cannot-settle-whether-a-decision-store-matters-2026-11-02.md)
 - [Hand-probe a cross-corpus capability before building it](hand-probe-a-cross-corpus-capability-before-building-2026-11-09.md)
+- [A skill that wraps an untrusted-text researcher needs baseline pressure tests](skill-around-an-untrusted-researcher-needs-baseline-pressure-tests-2026-11-09.md)
