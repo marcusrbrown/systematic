@@ -1,6 +1,7 @@
 ---
 title: Reading other people's repositories needs an evidence boundary, a modest citation claim, and a user-only allow list
 date: 2026-11-09
+last_updated: 2026-11-20
 category: best-practices
 module: ce-connect
 problem_type: architecture_pattern
@@ -78,7 +79,7 @@ Everything above governs what the helper reads and what it accepts as evidence. 
 - The researcher's read, grep and glob tools are not path-scoped. They can open any file the user can, inside the allow list or not.
 - Session MCP tools are not denied.
 - The candidate title and summary are written by the researcher and are not checked against evidence, so text from those reads can reach chat replies and run records, and so the model provider.
-- Coverage is the researcher's own report.
+- Coverage is the researcher's own report. The helper does not count a rule as covered when the complete batch that names it omits its learning from `files`: the run degrades with `uncovered-rules` and the rule is offered again (`coverageReasons`, `src/ce-connect-helper.ts:1924-1930`). A listed file is not proof the file was read.
 
 Read every candidate before promoting it, and treat a digest like the learnings it quotes. The user guide's [Limits section](../../src/content/docs/guides/cross-project-connections.mdx) lists these in full.
 
