@@ -781,6 +781,8 @@ interface RunSummary {
   /** The checkout HEAD of each project, by the same root. */
   readonly commitByRoot: Heads
   readonly candidates: readonly unknown[]
+  /** Open entries the run proposed again unchanged: details at the revision the ledger holds. */
+  readonly stillOpen: readonly unknown[]
 }
 
 function selectionLabel(value: unknown): string | undefined {
@@ -857,9 +859,9 @@ function commitMap(value: unknown): Map<string, string> {
   return out
 }
 
-function candidatesOf(value: unknown): unknown[] {
-  if (!isRecord(value) || !Array.isArray(value.candidates)) return []
-  return (value.candidates as unknown[]).slice(0, MAX_CANDIDATES)
+function candidatesOf(value: unknown, key = 'candidates'): unknown[] {
+  if (!isRecord(value) || !Array.isArray(value[key])) return []
+  return (value[key] as unknown[]).slice(0, MAX_CANDIDATES)
 }
 
 function readRunSummary(root: string, runId: string): RunSummary | undefined {
@@ -879,6 +881,7 @@ function readRunSummary(root: string, runId: string): RunSummary | undefined {
     repoByRoot: repoMap(record.projects),
     commitByRoot: commitMap(record.projects),
     candidates: candidatesOf(record.candidateBlock),
+    stillOpen: candidatesOf(record.candidateBlock, 'stillOpen'),
   }
 }
 
@@ -1178,32 +1181,56 @@ function openOldestFirst(entries: readonly LedgerEntry[]): LedgerEntry[] {
     })
 }
 
-/** Payloads this run proposes for candidates the ledger shows open. */
+/** The payload a run record entry gives, filed under the run and attempt that hold its evidence. */
+function payloadOf(
+  raw: Record<string, unknown>,
+  id: string,
+  run: RunSummary | undefined,
+  origin: { readonly runId: string; readonly attempt: string },
+): Payload | undefined {
+  const text = payloadText(
+    raw,
+    run?.commitByRoot ?? new Map(),
+    run?.repoByRoot ?? new Map(),
+  )
+  if (text === undefined) return undefined
+  const target = typeof raw.target === 'string' ? raw.target : undefined
+  const repo = target === undefined ? undefined : run?.repoByRoot.get(target)
+  return {
+    id,
+    ...text,
+    ...(repo === undefined ? {} : { repo }),
+    runId: origin.runId,
+    attempt: origin.attempt,
+    ...revisionField(raw.revision),
+  }
+}
+
+/**
+ * Payloads this run proposes for candidates the ledger shows open. A candidate
+ * the run only saw again, unchanged, refreshes the text of the payload already
+ * stored for it, and keeps the run and attempt that hold its evidence: the
+ * artifact of this run does not list it as a candidate to fetch.
+ */
 function proposed(
   run: RunSummary | undefined,
   open: ReadonlySet<string>,
   request: RenderRequest,
+  stored: ReadonlyMap<string, Payload>,
 ): Map<string, Payload> {
   const out = new Map<string, Payload>()
-  for (const raw of run?.candidates ?? []) {
-    if (!isRecord(raw) || !isCandidateId(raw.id) || !open.has(raw.id)) continue
-    const text = payloadText(
-      raw,
-      run?.commitByRoot ?? new Map(),
-      run?.repoByRoot ?? new Map(),
-    )
-    if (text === undefined) continue
-    const target = typeof raw.target === 'string' ? raw.target : undefined
-    const repo = target === undefined ? undefined : run?.repoByRoot.get(target)
-    out.set(raw.id, {
-      id: raw.id,
-      ...text,
-      ...(repo === undefined ? {} : { repo }),
-      runId: request.runId,
-      attempt: request.attempt,
-      ...revisionField(raw.revision),
-    })
+  const add = (
+    raw: unknown,
+    origin: (id: string) => typeof request | Payload | undefined,
+  ) => {
+    if (!isRecord(raw) || !isCandidateId(raw.id) || !open.has(raw.id)) return
+    const from = origin(raw.id)
+    if (from === undefined) return
+    const payload = payloadOf(raw, raw.id, run, from)
+    if (payload !== undefined) out.set(raw.id, payload)
   }
+  for (const raw of run?.stillOpen ?? []) add(raw, (id) => stored.get(id))
+  for (const raw of run?.candidates ?? []) add(raw, () => request)
   return out
 }
 
@@ -1346,7 +1373,12 @@ function renderState(
   const payloads = mergedPayloads(
     open,
     loaded.stores.payloads,
-    proposed(run, new Set(open.map((entry) => entry.id)), request),
+    proposed(
+      run,
+      new Set(open.map((entry) => entry.id)),
+      request,
+      loaded.stores.payloads,
+    ),
   )
   const outcome = outcomeOf(invocation)
   const input: BodyInput = {

@@ -4458,6 +4458,187 @@ describe('a reopen whose ledger write failed', () => {
   })
 })
 
+describe('an open candidate a later run proposes again unchanged', () => {
+  const RENDER = {
+    date: '2026-11-12',
+    runId: '900',
+    attempt: '1',
+    cacheRestored: true,
+  }
+
+  /** What a CI render needs from the run that just published: the record that names it. */
+  function markRun(world: World, runId: string, marker: string): void {
+    fs.writeFileSync(
+      path.join(world.stateRoot, INVOCATION_FILE),
+      JSON.stringify({
+        version: 1,
+        marker,
+        phase: 'terminal',
+        outcome: 'complete',
+        finalLine: 'Connect complete',
+        runId,
+        projects: [],
+      }),
+    )
+  }
+
+  function renderBody(world: World, runId: string, attempt: string): string {
+    const rendered = ok(
+      runHelperOp('render-report', { ...RENDER, runId, attempt }, world.deps),
+    )
+    return fs.readFileSync(String(rendered.bodyFile), 'utf8')
+  }
+
+  /** The ledger entries as they are on disk, without the coverage records every run rewrites. */
+  function entriesOf(world: World): string {
+    const ledger = JSON.parse(
+      fs.readFileSync(path.join(world.stateRoot, 'ledger.json'), 'utf8'),
+    ) as { entries: unknown }
+    return JSON.stringify(ledger.entries)
+  }
+
+  /** Strip every revision: the ledger, the payload store and the kept run record as 3.35.3 left them. */
+  function downgradeState(world: World, runId: string): void {
+    const recordFile = path.join(world.stateRoot, 'runs', runId, 'run.json')
+    const record = JSON.parse(fs.readFileSync(recordFile, 'utf8')) as {
+      candidateBlock: { candidates: Array<Record<string, unknown>> }
+    }
+    for (const item of record.candidateBlock.candidates) delete item.revision
+    fs.writeFileSync(recordFile, JSON.stringify(record))
+    for (const [name, key] of [
+      ['ledger.json', 'entries'],
+      ['ci-payloads.json', 'payloads'],
+    ] as const) {
+      const file = path.join(world.stateRoot, name)
+      const doc = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<
+        string,
+        Array<Record<string, unknown>>
+      >
+      for (const item of doc[key] ?? []) delete item.revision
+      fs.writeFileSync(file, JSON.stringify(doc))
+    }
+  }
+
+  const boxes = (body: string): string[] =>
+    body.split('\n').filter((line) => line.startsWith('- ['))
+
+  it('gets matching details and revision-tagged boxes back after an upgrade, without touching the ledger', () => {
+    const { world, evidence } = mismatchWorld()
+    const proposal = () => [mismatchCandidate(world, [proxyEvidence(evidence)])]
+    const first = fullRun(world, proposal())
+    const id = String(accepted(first.validated)[0]?.id)
+    markRun(world, first.run.runId, '900-1')
+    renderBody(world, '900', '1')
+
+    // The cache from before revisions: no revision on the entry, none on its text.
+    downgradeState(world, first.run.runId)
+    markRun(world, first.run.runId, '900-1')
+    const hidden = renderBody(world, '900', '1')
+    expect(hidden).toContain('are being refreshed')
+    expect(boxes(hidden)).toEqual([])
+
+    // Research proposes the same candidate again, and the helper suppresses it as unchanged.
+    const entries = entriesOf(world)
+    const again = fullRun(world, proposal())
+    expect(accepted(again.validated)).toHaveLength(0)
+    expect(again.validated.suppressed).toBe(1)
+    expect(readDigest(again.published)).not.toContain(id)
+    expect(entriesOf(world)).toBe(entries)
+
+    markRun(world, again.run.runId, '901-1')
+    const body = renderBody(world, '901', '1')
+    const [revision] = [...body.matchAll(/:r([0-9a-f]{12}) -->/g)].map((m) =>
+      String(m[1]),
+    )
+    expect(revision).toMatch(/^[0-9a-f]{12}$/)
+    expect(body).toContain('Title: ')
+    expect(body).not.toContain('are being refreshed')
+    expect(boxes(body)).toEqual([
+      `- [ ] Promoted <!-- connect-decision:promoted:${id}:r${revision} -->`,
+      `- [ ] Rejected <!-- connect-decision:rejected:${id}:r${revision} -->`,
+    ])
+    // The box carries the revision a decision from that digest would be checked against.
+    expect(
+      ok(
+        runHelperOp(
+          'decide',
+          {
+            id,
+            status: 'rejected',
+            reason: 'Checked by hand; not needed.',
+            revision,
+          },
+          world.deps,
+        ),
+      ).status,
+    ).toBe('decided')
+  })
+
+  it('keeps the fetch word of the run that holds the candidate, not the run that only saw it again', () => {
+    const { world, evidence } = mismatchWorld()
+    const proposal = () => [mismatchCandidate(world, [proxyEvidence(evidence)])]
+    const first = fullRun(world, proposal())
+    markRun(world, first.run.runId, '900-1')
+    renderBody(world, '900', '1')
+    downgradeState(world, first.run.runId)
+    const again = fullRun(world, proposal())
+    markRun(world, again.run.runId, '901-1')
+    expect(renderBody(world, '901', '1')).toContain('fetch:900.1')
+  })
+
+  it('creates no text for an open entry that no stored payload describes, so no fetch word can point at the wrong run', () => {
+    const { world, evidence } = mismatchWorld()
+    const proposal = () => [mismatchCandidate(world, [proxyEvidence(evidence)])]
+    fullRun(world, proposal())
+    const again = fullRun(world, proposal())
+    markRun(world, again.run.runId, '901-1')
+    const body = renderBody(world, '901', '1')
+    expect(body).toContain('Details unavailable')
+    expect(body).not.toContain('Title: ')
+    expect(body).not.toContain('fetch:901')
+  })
+
+  it('lists nothing and touches nothing for an entry that was decided', () => {
+    const { world, evidence } = mismatchWorld()
+    const proposal = () => [mismatchCandidate(world, [proxyEvidence(evidence)])]
+    const first = fullRun(world, proposal())
+    const id = String(accepted(first.validated)[0]?.id)
+    decideRejected(world, id)
+    const entries = entriesOf(world)
+    const again = fullRun(world, proposal())
+    expect(again.validated.suppressed).toBe(1)
+    expect(entriesOf(world)).toBe(entries)
+    const block = readRunRecord(again.published).candidateBlock as Json
+    expect(block).not.toHaveProperty('stillOpen')
+    markRun(world, again.run.runId, '901-1')
+    expect(renderBody(world, '901', '1')).not.toContain(id)
+  })
+
+  it('does not offer a candidate whose citations differ from what the ledger watches', () => {
+    const { world, evidence } = mismatchWorld()
+    const first = fullRun(world, [
+      mismatchCandidate(world, [proxyEvidence(evidence)]),
+    ])
+    const again = fullRun(world, [
+      mismatchCandidate(world, [
+        proxyEvidence(evidence),
+        evidenceItem(
+          evidence,
+          'src/loader.ts',
+          LOADER_FILE,
+          'export function loadConfig(raw: Config): string[] {',
+        ),
+      ]),
+    ])
+    expect(again.validated.suppressed).toBe(1)
+    // Its revision would differ from the ledger's, so no details could match a box.
+    expect(
+      readRunRecord(again.published).candidateBlock as Json,
+    ).not.toHaveProperty('stillOpen')
+    expect(first.run.runId).not.toBe(again.run.runId)
+  })
+})
+
 describe('a decided code-mismatch candidate across runs', () => {
   function firstRun(): MismatchWorld & { id: string } {
     const built = mismatchWorld()

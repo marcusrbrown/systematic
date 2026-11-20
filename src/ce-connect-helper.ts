@@ -129,6 +129,7 @@ import {
   readRunRecord,
   recordsEvidenceOf,
   releaseLock,
+  revisionOf,
   revisionOfCandidate,
   rewriteRunFiles,
   writeInvocationRecord,
@@ -606,6 +607,18 @@ interface AcceptedCandidate {
   readonly evidenceHeads?: ReadonlyArray<string | undefined>
 }
 
+/**
+ * An open, undecided entry a run proposed again unchanged. The ledger is not
+ * touched and the digest does not list it. The run record keeps its details at
+ * the revision the ledger holds, so a report can store text for it that a box
+ * may sit under.
+ */
+interface StillOpenCandidate {
+  readonly id: string
+  readonly candidate: ValidCandidate
+  readonly revision: string
+}
+
 interface BatchSummary {
   readonly family: string
   readonly complete: boolean
@@ -631,6 +644,8 @@ interface ValidatedState {
   readonly heldBackRuleIds: readonly string[]
   readonly sweep: SweepProgress
   readonly accepted: readonly AcceptedCandidate[]
+  /** Absent in a state written before this field existed. */
+  readonly stillOpen?: readonly StillOpenCandidate[]
   readonly recorded: readonly RecordedConnection[]
   readonly batches: readonly BatchSummary[]
 }
@@ -1635,6 +1650,7 @@ function contextFrom(snapshot: Snapshot): ValidationContext {
 
 interface Classified {
   readonly accepted: AcceptedCandidate[]
+  readonly stillOpen: StillOpenCandidate[]
   readonly recorded: RecordedConnection[]
   readonly dropped: Record<string, number>
   /** Each dropped candidate by name, up to `droppedListLimit`; `dropped` holds the full counts. */
@@ -1723,6 +1739,31 @@ function evidenceLookup(snapshot: Snapshot): EvidenceLookup {
   }
 }
 
+/**
+ * Keep the details of an unchanged candidate whose entry is open, when they are
+ * for exactly what the entry holds: a candidate cited differently has another
+ * revision, and its text could not match the entry's box. Nothing is written
+ * to the ledger.
+ */
+function keepIfStillOpen(
+  outcome: ReturnType<typeof classifyCandidate>,
+  record: CandidateRecord,
+  candidate: ValidCandidate,
+  ledger: Ledger,
+  result: Classified,
+): void {
+  if (
+    outcome.standing !== 'suppressed' ||
+    outcome.priorStatus !== 'candidate'
+  ) {
+    return
+  }
+  const entry = ledger.entries.find((item) => item.id === outcome.id)
+  const revision = revisionOfCandidate(record)
+  if (entry === undefined || revisionOf(entry) !== revision) return
+  result.stillOpen.push({ id: outcome.id, candidate, revision })
+}
+
 /** What the ledger says about a candidate that is not a duplicate or already recorded. */
 function classifyAgainstLedger(
   candidate: ValidCandidate,
@@ -1736,6 +1777,7 @@ function classifyAgainstLedger(
   if (standing === 'skip') {
     if (outcome.standing === 'unresolved') result.unresolved++
     else result.suppressed++
+    keepIfStillOpen(outcome, record, candidate, ledger, result)
     return
   }
   const possibleMatches =
@@ -1843,6 +1885,7 @@ function classifyBatches(
 ): Classified {
   const result: Classified = {
     accepted: [],
+    stillOpen: [],
     recorded: [],
     dropped: {},
     droppedCandidates: [],
@@ -2087,6 +2130,7 @@ function runValidation(
     heldBackRuleIds,
     sweep: sweepProgress(snapshot.offer, coveredRuleIds),
     accepted: classified.accepted,
+    stillOpen: classified.stillOpen,
     recorded: classified.recorded,
     batches: batches.map((batch) => ({
       family: batch.family,
@@ -2184,33 +2228,53 @@ function validateRun(request: unknown, deps: HelperDeps): HelperResult {
 
 // ── publish ─────────────────────────────────────────────────────────────────
 
-function buildCandidateBlock(accepted: readonly AcceptedCandidate[]): Json {
+function buildCandidateBlock(
+  accepted: readonly AcceptedCandidate[],
+  stillOpen: readonly StillOpenCandidate[] = [],
+): Json {
   return {
     schemaVersion: 1,
     candidates: accepted.map((item) => ({
-      id: item.id,
-      status: 'candidate',
+      ...blockFields(item.id, item.candidate, item.revision),
       standing: item.standing,
       ...(item.refreshPointer === undefined
         ? {}
         : { refreshPointer: item.refreshPointer }),
       possibleMatches: item.possibleMatches,
-      kind: item.candidate.kind,
-      ruleId: item.candidate.ruleId,
-      target: item.candidate.target,
-      targetName: item.candidate.targetName,
-      title: item.candidate.title,
-      summary: item.candidate.summary,
-      nextStep: item.candidate.nextStep,
-      ...(item.candidate.reason === undefined
-        ? {}
-        : { reason: item.candidate.reason }),
-      overlapCheck: item.candidate.overlapCheck,
-      sources: item.candidate.sources,
-      targetEvidence: item.candidate.targetEvidence,
-      counterevidence: item.candidate.counterevidence,
-      ...(item.revision === undefined ? {} : { revision: item.revision }),
     })),
+    // Not new candidates: entries still open, whose details a report may refresh.
+    ...(stillOpen.length === 0
+      ? {}
+      : {
+          stillOpen: stillOpen.map((item) =>
+            blockFields(item.id, item.candidate, item.revision),
+          ),
+        }),
+  }
+}
+
+/** The fields of a candidate every run record entry carries. */
+function blockFields(
+  id: string,
+  candidate: ValidCandidate,
+  revision: string | undefined,
+): Json {
+  return {
+    id,
+    status: 'candidate',
+    kind: candidate.kind,
+    ruleId: candidate.ruleId,
+    target: candidate.target,
+    targetName: candidate.targetName,
+    title: candidate.title,
+    summary: candidate.summary,
+    nextStep: candidate.nextStep,
+    ...(candidate.reason === undefined ? {} : { reason: candidate.reason }),
+    overlapCheck: candidate.overlapCheck,
+    sources: candidate.sources,
+    targetEvidence: candidate.targetEvidence,
+    counterevidence: candidate.counterevidence,
+    ...(revision === undefined ? {} : { revision }),
   }
 }
 
@@ -2316,7 +2380,7 @@ function runRecord(
     droppedCandidates: state.droppedCandidates,
     coverage: state.coverage,
     batches: state.batches,
-    candidateBlock: buildCandidateBlock(state.accepted),
+    candidateBlock: buildCandidateBlock(state.accepted, state.stillOpen),
     alreadyRecorded: state.recorded.map((item) => ({
       pointer: item.pointer,
       countsInPrecisionDenominator: true,

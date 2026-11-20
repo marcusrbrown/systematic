@@ -3091,6 +3091,86 @@ const trimmed = (text: string): string => text.replace(/\n+$/, '')
 
 const FOUND = { REPO: 'marcusrbrown/systematic' }
 
+describe('post: the tick carrier across renderer versions', () => {
+  const BEGIN = '<!-- connect-decisions:begin -->'
+  const END = '<!-- connect-decisions:end -->'
+
+  /** A report body with one candidate, boxes written with or without a revision (the pinned 3.35.3 renderer writes none). */
+  function bodyOf(
+    revision: string | undefined,
+    ticked: Record<string, boolean>,
+  ) {
+    const line = (status: 'promoted' | 'rejected') =>
+      decisionLine(idOf(1), status, ticked[status] === true, revision)
+    return [
+      manifestMarker('0123456789abcdef'),
+      '## ce:connect report',
+      BEGIN,
+      '### Candidate 1',
+      line('promoted'),
+      line('rejected'),
+      END,
+      '',
+    ].join('\n')
+  }
+
+  /** Run the installed carrier: tick in the base what is ticked in a live body. */
+  function carry(box: Box, base: string, live: string): string {
+    ensureCarrier(box)
+    const dir = fs.mkdtempSync(path.join(box.tmp, 'carry-'))
+    const files = {
+      base: path.join(dir, 'base.md'),
+      out: path.join(dir, 'out.md'),
+      live: path.join(dir, 'live.md'),
+    }
+    fs.writeFileSync(files.base, base)
+    fs.writeFileSync(files.live, live)
+    const result = Bun.spawnSync(
+      [
+        'node',
+        path.join(box.tmp, 'carry-ticks.mjs'),
+        files.base,
+        files.out,
+        files.live,
+      ],
+      { cwd: box.dir },
+    )
+    expect(result.exitCode).toBe(0)
+    return fs.readFileSync(files.out, 'utf8')
+  }
+
+  it('carries a late tick between two bodies in the format the pinned renderer writes', () => {
+    const box = makeBox()
+    const out = carry(
+      box,
+      bodyOf(undefined, {}),
+      bodyOf(undefined, { rejected: true }),
+    )
+    expect(out).toBe(bodyOf(undefined, { rejected: true }))
+  })
+
+  it('does not carry a tick on a box with no revision onto a box with one', () => {
+    const box = makeBox()
+    const base = bodyOf(REV_A, {})
+    expect(carry(box, base, bodyOf(undefined, { rejected: true }))).toBe(base)
+  })
+
+  it('does not carry a tick on a box with a revision onto a box with none', () => {
+    const box = makeBox()
+    const base = bodyOf(undefined, {})
+    expect(carry(box, base, bodyOf(REV_A, { rejected: true }))).toBe(base)
+  })
+
+  it('carries a tick between two bodies at the same revision, and not onto another', () => {
+    const box = makeBox()
+    expect(
+      carry(box, bodyOf(REV_A, {}), bodyOf(REV_A, { promoted: true })),
+    ).toBe(bodyOf(REV_A, { promoted: true }))
+    const other = bodyOf(REV_B, {})
+    expect(carry(box, other, bodyOf(REV_A, { promoted: true }))).toBe(other)
+  })
+})
+
 describe('post: ticks made while a run was executing', () => {
   it('keeps a tick made after prepare when the same-date report is edited', () => {
     const box = makeBox()

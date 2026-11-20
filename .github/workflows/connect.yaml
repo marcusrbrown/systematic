@@ -985,7 +985,7 @@ jobs:
           const BEGIN = '<!-- connect-decisions:begin -->'
           const END = '<!-- connect-decisions:end -->'
           const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/
-          const BOX = /^- \[([ xX])\] (Promoted|Rejected) <!-- connect-decision:(promoted|rejected):([0-9a-f]{64}):r([0-9a-f]{12}) -->[ \t]*$/
+          const BOX = /^- \[([ xX])\] (Promoted|Rejected) <!-- connect-decision:(promoted|rejected):([0-9a-f]{64})(?::r([0-9a-f]{12}))? -->[ \t]*$/
           const LABEL = { promoted: 'Promoted', rejected: 'Rejected' }
 
           // The generated checkbox lines inside the one delimited section and
@@ -1030,8 +1030,8 @@ jobs:
               if (!inside) return
               const box = BOX.exec(line)
               if (box !== null && LABEL[box[3]] === box[2]) {
-                // A tick belongs to one revision of a candidate. A line without a revision is from before revisions and is never carried.
-                found.push({ index, ticked: box[1] !== ' ', key: box[3] + ':' + box[4] + ':' + box[5] })
+                // A tick belongs to one revision of a candidate. A box with no revision (the format of the pinned renderer) carries only onto a box with none.
+                found.push({ index, ticked: box[1] !== ' ', key: box[3] + ':' + box[4] + ':' + (box[5] === undefined ? '' : box[5]) })
               }
             })
             return begins === 1 && ends === 1 && ordered ? found : []
