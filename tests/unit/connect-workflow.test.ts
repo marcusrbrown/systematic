@@ -275,12 +275,13 @@ describe('connect workflow structure', () => {
     const code = SOURCE.split('\n')
       .map((line) => line.replace(/(^|\s)#.*$/, ''))
       .join('\n')
-    // The one exception: the render job's check that a caller other than
-    // Systematic got named fetch words. The helper keeps bare words for
-    // Systematic alone, so the check has to name it, and it is the only place.
+    // The one exception: the two checks that a caller other than Systematic
+    // gets named fetch words (prepare's capability check and render's word
+    // check). The helper keeps bare words for Systematic alone, so the checks
+    // have to name it, and they are the only places.
     const exception = 'if [ "$caller" != marcusrbrown/systematic ]; then'
-    expect(code.split(exception).length - 1).toBe(1)
-    const rest = code.replace(exception, '')
+    expect(code.split(exception).length - 1).toBe(2)
+    const rest = code.replaceAll(exception, '')
     expect(rest).not.toMatch(/marcusrbrown\/systematic/)
     expect(code).not.toMatch(/github\.com\/(?!\$\{)[A-Za-z0-9_-]+\/[A-Za-z]/)
   })
@@ -2042,12 +2043,15 @@ describe('render: a helper too old to name the calling repository', () => {
    * - `old`: the request's `repo` is dropped first, as a release that predates the field would.
    * - `old-no-fetches`: as `old`, and the answer's `fetches` list is emptied, so only the body is bare.
    * - `bare-fetches`: the body is named, but the answer's `fetches` list holds bare words.
+   * - `bare-fetch-line`: only the generated `- Fetch:` lines of the body are bare.
+   * - `bare-index-line`: only the generated index lines of the body are bare.
    */
   const STUB_HELPER = `import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 const mode = process.env.STUB_MODE ?? 'old'
 const request = JSON.parse(fs.readFileSync(0, 'utf8'))
-if (mode !== 'bare-fetches') delete request.repo
+const keepsRepo = ['bare-fetches', 'bare-fetch-line', 'bare-index-line']
+if (!keepsRepo.includes(mode)) delete request.repo
 const run = spawnSync('node', [process.env.HELPER_SRC, ...process.argv.slice(2)], {
   input: JSON.stringify(request),
   encoding: 'utf8',
@@ -2055,16 +2059,29 @@ const run = spawnSync('node', [process.env.HELPER_SRC, ...process.argv.slice(2)]
 const answer = JSON.parse(run.stdout)
 if (mode === 'old-no-fetches') answer.fetches = []
 if (mode === 'bare-fetches') answer.fetches = ['555.1']
+const reportFile = process.env.XDG_STATE_HOME + '/systematic/connect/report.md'
+if (mode === 'bare-fetch-line' || mode === 'bare-index-line') {
+  const lead = mode === 'bare-fetch-line' ? '- Fetch: ' : '- '
+  const line = new RegExp('^(' + lead + '\\x60/ce:connect fetch:)[^\\x60:]*:', 'gm')
+  fs.writeFileSync(reportFile, fs.readFileSync(reportFile, 'utf8').replace(line, '$1'))
+}
 process.stdout.write(JSON.stringify(answer) + '\\n')
 process.exit(run.status ?? 1)
 `
 
   function renderWith(
     repo: string,
-    mode: 'real' | 'old' | 'old-no-fetches' | 'bare-fetches',
+    mode:
+      | 'real'
+      | 'old'
+      | 'old-no-fetches'
+      | 'bare-fetches'
+      | 'bare-fetch-line'
+      | 'bare-index-line',
+    seed: SeedOptions = {},
   ): { render: StepResult; body: string; box: Box } {
     const box = makeBox()
-    seedHandoff(box)
+    seedHandoff(box, seed)
     const env = { GITHUB_REPOSITORY: repo, STUB_MODE: mode }
     expect(runStep(box, 'render', 'Validate hand-off', env).exitCode).toBe(0)
     expect(runStep(box, 'render', 'Install helper', env).exitCode).toBe(0)
@@ -2122,6 +2139,48 @@ process.exit(run.status ?? 1)
     expect(body).toBe('')
   })
 
+  it('fails on a bare generated Fetch line even when the helper lists only named words', () => {
+    const { render, body, box } = renderWith('acme/caller', 'bare-fetch-line')
+    expect(render.exitCode).toBe(1)
+    expect(render.stderr + render.stdout).toContain(
+      'too old to name the calling repository',
+    )
+    expect(body).toBe('')
+    expect(fs.existsSync(path.join(box.tmp, 'report'))).toBe(false)
+  })
+
+  it('fails on a bare generated index line even when the helper lists only named words', () => {
+    const { render, body } = renderWith('acme/caller', 'bare-index-line')
+    expect(render.exitCode).toBe(1)
+    expect(render.stderr + render.stdout).toContain(
+      'too old to name the calling repository',
+    )
+    expect(body).toBe('')
+  })
+
+  it('does not read free text inside a fence: a candidate summary may quote a bare fetch bullet', () => {
+    const quoted = [
+      'A summary that quotes the report:',
+      '- Fetch: `/ce:connect fetch:123.1` (run 123, attempt 1)',
+      '- `/ce:connect fetch:123.1` for candidates 1',
+    ].join('\n')
+    const { render, body } = renderWith('acme/caller', 'real', {
+      candidates: [blockCandidate(1, { summary: quoted }), blockCandidate(2)],
+    })
+    expect(render.exitCode).toBe(0)
+    // The text is in the body, inside a fence, and only there.
+    expect(body).toContain('- `/ce:connect fetch:123.1` for candidates 1')
+    expect(
+      outsideFences(body).filter((line) => line.includes('fetch:123.1')),
+    ).toEqual([])
+    for (const line of outsideFences(body)) {
+      if (line.includes('/ce:connect fetch:')) {
+        expect(line).toContain('fetch:acme/caller:555.1')
+      }
+    }
+    expect(render.outputs.get('manifest')).toBeTruthy()
+  })
+
   it('passes for a calling repository other than Systematic when every word names it, whatever the case', () => {
     for (const repo of ['acme/caller', 'Acme/Caller']) {
       const { render, body } = renderWith(repo, 'real')
@@ -2154,6 +2213,127 @@ process.exit(run.status ?? 1)
     expect(refusal).toBeGreaterThan(-1)
     expect(refusal).toBeLessThan(render.indexOf('report/body.md'))
     expect(render).not.toContain('${{')
+  })
+})
+
+describe('prepare: a pinned helper without verify-provenance', () => {
+  /** A usage line whose op list carries `extraOps` (each with a leading `|`) and, after it, `prose`. */
+  const usageWith = (extraOps: string, prose = ''): string =>
+    `process.stderr.write('Usage: node connect.mjs <begin|validate|publish|decide|import|apply-ticks|render-report|allowed-origins${extraOps}|ledger show [--offset N]|ledger clear|ledger unlock>${prose}\\n')
+process.exit(2)
+`
+  const USAGE = (withOp: boolean): string =>
+    usageWith(withOp ? '|verify-provenance' : '')
+  /** Usage text that holds `verify` but never the exact `|verify-provenance|` op. */
+  const NEAR_MISSES: Record<string, string> = {
+    'an op named verify': usageWith('|verify'),
+    'an op named verify-provenance-v0': usageWith('|verify-provenance-v0'),
+    'an op named pre-verify-provenance': usageWith('|pre-verify-provenance'),
+    'the word verify in prose': usageWith(
+      '',
+      ' Run verify to check a fetched run.',
+    ),
+  }
+
+  /** Install a stub helper whose usage lists the operation or not, then run the capability check. */
+  function checkWith(
+    repo: string,
+    helper: 'with' | 'without' | 'real' | 'broken' | { nearMiss: string },
+  ): { check: StepResult; box: Box } {
+    const box = makeBox()
+    const stubs: Record<string, string> = {
+      with: USAGE(true),
+      without: USAGE(false),
+      broken: 'throw new Error("no usage")\n',
+    }
+    let source = HELPER_SOURCE
+    if (helper !== 'real') {
+      source = path.join(box.dir, 'stub-helper.mjs')
+      fs.writeFileSync(
+        source,
+        typeof helper === 'string'
+          ? (stubs[helper] ?? '')
+          : (NEAR_MISSES[helper.nearMiss] ?? ''),
+      )
+    }
+    const env = { GITHUB_REPOSITORY: repo, HELPER_SRC: source }
+    expect(runStep(box, 'prepare', 'Install helper', env).exitCode).toBe(0)
+    return {
+      check: runStep(box, 'prepare', 'Check helper capability', env),
+      box,
+    }
+  }
+
+  const MESSAGE = /Pin a newer callee commit/
+
+  it('fails red for a caller other than Systematic when the usage does not list verify-provenance', () => {
+    const { check } = checkWith('acme/caller', 'without')
+    expect(check.exitCode).toBe(1)
+    const said = check.stderr + check.stdout
+    expect(said).toContain('verify-provenance')
+    expect(said).toMatch(MESSAGE)
+    expect(said).toContain('SYSTEMATIC_VERSION')
+    expect(said).toContain('named fetch words')
+  })
+
+  it.each(Object.keys(NEAR_MISSES))(
+    'fails red for a caller other than Systematic when the usage holds verify only as %s',
+    (nearMiss) => {
+      const { check } = checkWith('acme/caller', { nearMiss })
+      expect(check.exitCode).toBe(1)
+      expect(check.stderr + check.stdout).toMatch(MESSAGE)
+    },
+  )
+
+  it('still skips the check for Systematic when the usage holds only a near miss', () => {
+    for (const nearMiss of Object.keys(NEAR_MISSES)) {
+      expect(
+        checkWith('marcusrbrown/systematic', { nearMiss }).check.exitCode,
+        nearMiss,
+      ).toBe(0)
+    }
+  })
+
+  it('fails closed for a caller other than Systematic when the helper cannot print its usage at all', () => {
+    const { check } = checkWith('acme/caller', 'broken')
+    expect(check.exitCode).toBe(1)
+    expect(check.stderr + check.stdout).toMatch(MESSAGE)
+  })
+
+  it('passes for a caller other than Systematic when the usage lists verify-provenance, and for the real helper', () => {
+    for (const helper of ['with', 'real'] as const) {
+      const { check } = checkWith('acme/caller', helper)
+      expect(check.exitCode, helper).toBe(0)
+      expect(check.stderr + check.stdout, helper).not.toMatch(MESSAGE)
+    }
+  })
+
+  it('skips the check for Systematic, whatever the case of its name, even with an older helper', () => {
+    for (const repo of ['marcusrbrown/systematic', 'MarcusRBrown/Systematic']) {
+      for (const helper of ['without', 'broken'] as const) {
+        const { check } = checkWith(repo, helper)
+        expect(check.exitCode, `${repo} ${helper}`).toBe(0)
+      }
+    }
+  })
+
+  it('runs in the prepare job right after the helper is installed, before any other work needs the helper', () => {
+    const names = stepsOf('prepare').map((step) => String(step.name))
+    const install = names.indexOf('Install helper')
+    expect(install).toBeGreaterThan(-1)
+    expect(names.indexOf('Check helper capability')).toBe(install + 1)
+    expect(names.indexOf('Check helper capability')).toBeLessThan(
+      names.indexOf('Create state root'),
+    )
+  })
+
+  it('reads the repository from the runner environment and the helper path from its own step', () => {
+    const script = asString(
+      stepNamed('prepare', 'Check helper capability').run,
+      'capability script',
+    )
+    expect(script).toContain('"$GITHUB_REPOSITORY"')
+    expect(script).not.toContain('${{')
   })
 })
 

@@ -18,7 +18,7 @@ tags: [ce-connect, github-actions, version-skew, pinned-dependency, report-ticks
 
 ## Problem
 
-The `ce:connect` workflow runs two kinds of code. The report renderer and `apply-ticks` come from `@fro.bot/systematic@${SYSTEMATIC_VERSION}`, an exact release installed from npm (`.github/workflows/connect.yaml:73`, `SYSTEMATIC_VERSION`; `.github/workflows/connect.yaml:203-211`). The tick carrier is inline JavaScript written to disk by the `post` job from the checked-out workflow file (`.github/workflows/connect.yaml:1064-1140`, `Install tick carrier`). A change that alters the box format and the carrier together therefore merges with a new carrier reading bodies that the old, pinned renderer still writes. That window lasts until the pin moves to a release with the new renderer. When this change was written the pin was `SYSTEMATIC_VERSION: "3.35.3"` (`.github/workflows/connect.yaml:73`), a release published before the change, so its renderer writes boxes with no revision.
+The `ce:connect` workflow runs two kinds of code. The report renderer and `apply-ticks` come from `@fro.bot/systematic@${SYSTEMATIC_VERSION}`, an exact release installed from npm (`.github/workflows/connect.yaml:73`, `SYSTEMATIC_VERSION`; `.github/workflows/connect.yaml:203-211`). The tick carrier is inline JavaScript written to disk by the `post` job from the checked-out workflow file (`.github/workflows/connect.yaml:1092-1168`, `Install tick carrier`). A change that alters the box format and the carrier together therefore merges with a new carrier reading bodies that the old, pinned renderer still writes. That window lasts until the pin moves to a release with the new renderer. When this change was written the pin was `SYSTEMATIC_VERSION: "3.35.3"` (`.github/workflows/connect.yaml:73`), a release published before the change, so its renderer writes boxes with no revision.
 
 This was found in review of the revision-binding change, before merge, by reading the pin. It was not seen on a scheduled run.
 
@@ -34,7 +34,7 @@ This was found in review of the revision-binding change, before merge, by readin
 
 ## Solution
 
-The carrier copies the checkbox format and keeps both formats apart. The box pattern gains an optional revision group, and the key a tick is matched on includes the revision, or an empty string when the box has none (`.github/workflows/connect.yaml:1072`, `BOX`; `.github/workflows/connect.yaml:1117-1118`, `key`):
+The carrier copies the checkbox format and keeps both formats apart. The box pattern gains an optional revision group, and the key a tick is matched on includes the revision, or an empty string when the box has none (`.github/workflows/connect.yaml:1100`, `BOX`; `.github/workflows/connect.yaml:1145-1146`, `key`):
 
 ```js
 // A box with no revision (the format of the pinned renderer) carries only onto a box with none.
@@ -44,7 +44,7 @@ found.push({ index, ticked: box[1] !== ' ', key: box[3] + ':' + box[4] + ':' + (
 A late tick under the old renderer is carried between two old-format bodies. A tick never crosses between formats. Until the pin moves, the pinned helper still records old-format ticks by id. Once the workflow runs a release with revisions, the tick step does the rest:
 
 - `judge` skips a tick whose box has no revision as `unversioned` and records nothing, whatever the ledger says (`src/lib/connect-ci.ts:1664-1668`).
-- The `prepare` job prints how many ticks were skipped that way and tells the operator to tick the current report (`.github/workflows/connect.yaml:391`).
+- The `prepare` job prints how many ticks were skipped that way and tells the operator to tick the current report (`.github/workflows/connect.yaml:410`).
 - The guide tells the operator to settle open rows on the current report before moving the pin ([Settle a candidate on a report](../../src/content/docs/guides/cross-project-connections.mdx)).
 
 ## Why This Works
@@ -53,8 +53,8 @@ The carrier's only job is to keep a tick on the same candidate at the same conte
 
 ## Prevention
 
-- **Test the consumer against the old producer's output.** When a consumer ships beside a producer that a pin holds back, build the fixture bodies in the old producer's format. `decisionLine` called without a revision writes it (`src/lib/connect-ci.ts:113-121`). Run the real carrier on them and assert the late tick survives (`tests/unit/connect-workflow.test.ts:3740-3748`).
-- **Test both crossings.** A tick on a box with no revision is not carried onto a box with one, and the reverse (`tests/unit/connect-workflow.test.ts:3750-3754`, `tests/unit/connect-workflow.test.ts:3756-3760`). The same revision carries, and another revision does not (`tests/unit/connect-workflow.test.ts:3762-3769`).
+- **Test the consumer against the old producer's output.** When a consumer ships beside a producer that a pin holds back, build the fixture bodies in the old producer's format. `decisionLine` called without a revision writes it (`src/lib/connect-ci.ts:113-121`). Run the real carrier on them and assert the late tick survives (`tests/unit/connect-workflow.test.ts:3920-3928`).
+- **Test both crossings.** A tick on a box with no revision is not carried onto a box with one, and the reverse (`tests/unit/connect-workflow.test.ts:3930-3934`, `tests/unit/connect-workflow.test.ts:3936-3940`). The same revision carries, and another revision does not (`tests/unit/connect-workflow.test.ts:3942-3949`).
 - **Test the rollout hazard, not just the format.** A legacy tick behind a cache rollback records nothing, whatever manifest ids it names. A legacy tick is skipped as `unversioned` whether or not the candidate ever reopened (`tests/unit/connect-ci.test.ts:2447-2465`, `tests/unit/connect-ci.test.ts:2467-2485`).
 - **Treat a pin as a second deployment.** Ask which parts of a change run from the pin and which from the checkout, and what each side sees while only one of them has moved. The carrier is a copy of the renderer's box format, so a format change touches both and must be safe in both orders.
 

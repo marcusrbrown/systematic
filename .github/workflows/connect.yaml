@@ -214,6 +214,25 @@ jobs:
             exit 1
           fi
 
+      # A caller other than Systematic fetches its runs by a named word, and the
+      # skill proves a named run through the helper's verify-provenance
+      # operation. A release without it cannot do that, so the run stops here,
+      # before any agent work, and names the fix. Systematic's own runs skip it.
+      - name: Check helper capability
+        run: |
+          caller=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          if [ "$caller" != marcusrbrown/systematic ]; then
+            helper="$RUNNER_TEMP/connect-helper/node_modules/@fro.bot/systematic/skills/ce-connect/scripts/connect.mjs"
+            usage=$(node "$helper" 2>&1 || true)
+            case "$usage" in
+              *"|verify-provenance|"*) ;;
+              *)
+                echo "::error::The pinned callee commit installs a Systematic release whose helper has no verify-provenance operation, so a run from this repository could not be fetched. Pin a newer callee commit whose SYSTEMATIC_VERSION carries named fetch words."
+                exit 1
+                ;;
+            esac
+          fi
+
       - name: Create state root
         run: |
           base="$RUNNER_TEMP/connect-state"
@@ -763,15 +782,24 @@ jobs:
           # helper that predates the `repo` field leaves bare words, which resolve
           # to Systematic and cannot reach the caller's own run, so the job fails
           # here, before the report is copied, cached or uploaded. The words are
-          # the helper's `fetches` and every fetch line of the rendered body.
+          # the helper's `fetches` and the fetch lines the renderer generates.
           caller=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           if [ "$caller" != marcusrbrown/systematic ]; then
             words=$(printf '%s' "$answer" | jq -r '.fetches | arrays | .[] | strings') ||
               fail "render-report answered with an unreadable fetches list."
-            # The backticks are literal: the pattern matches the markdown code span of a fetch line.
+            # Only the lines the renderer generates are read, and only outside
+            # fenced blocks, where candidate text sits and may quote anything:
+            #   - Fetch: `/ce:connect fetch:<word>` (run <n>, attempt <n>)
+            #   - `/ce:connect fetch:<word>` for candidates <ranges>
+            # The backticks are literal: they are the markdown code span.
             # shellcheck disable=SC2016
-            body_words=$(grep -E '^- (Fetch: )?`/ce:connect fetch:' "$XDG_STATE_HOME/systematic/connect/report.md" |
-              sed -n 's/^.*`\/ce:connect fetch:\([^`]*\)`.*$/\1/p' || true)
+            body_words=$(awk '
+              fence == 0 && /^```+/ { match($0, /^`+/); fence = RLENGTH; next }
+              fence > 0 { if ($0 ~ /^`+$/ && length($0) >= fence) fence = 0; next }
+              /^- Fetch: `\/ce:connect fetch:[^`]*` \(run [0-9]+, attempt [0-9]+\)$/ { sub(/^- Fetch: `\/ce:connect fetch:/, ""); sub(/`.*$/, ""); print; next }
+              /^- `\/ce:connect fetch:[^`]*` for candidates [0-9, -]+$/ { sub(/^- `\/ce:connect fetch:/, ""); sub(/`.*$/, ""); print }
+            ' "$XDG_STATE_HOME/systematic/connect/report.md") ||
+              fail "Could not read the rendered report."
             while IFS= read -r word; do
               [ -n "$word" ] || continue
               word=$(printf '%s' "$word" | tr '[:upper:]' '[:lower:]')

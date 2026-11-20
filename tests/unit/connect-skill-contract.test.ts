@@ -400,7 +400,7 @@ describe('ce:connect fetch reference', () => {
     expect(text).toContain('.github/workflows/connect.yaml')
     expect(text).toMatch(/`schedule` or `workflow_dispatch`/)
     expect(text).toContain(
-      'gh api "repos/marcusrbrown/systematic/actions/runs/',
+      'gh api --hostname github.com "repos/marcusrbrown/systematic/actions/runs/',
     )
     expect(text).toMatch(/`gh run view --json` has no workflow path/)
     expect(order('### 2. Check the run', '### 5. Download')).toBe(true)
@@ -445,6 +445,27 @@ describe('ce:connect fetch reference', () => {
       )
     })
 
+    test('looks an explicit attempt up by its exact name, for a named word and for a bare run with an attempt', () => {
+      expect(choose).toContain(
+        'gh api --hostname github.com "repos/<repo>/actions/runs/<run>/artifacts?name=connect-run-<run>-<attempt>"',
+      )
+      expect(choose).toMatch(
+        /named word or an explicit attempt[^\n]*exact name/i,
+      )
+      expect(choose).not.toMatch(/--paginate[^\n]*name=connect-run/)
+    })
+
+    test('paginates the artifact list for a bare run, which has to find the newest attempt', () => {
+      expect(choose).toContain(
+        'gh api --hostname github.com --paginate "repos/<repo>/actions/runs/<run>/artifacts?per_page=100"',
+      )
+      expect(choose).toMatch(/--paginate[\s\S]*bare `fetch:<run>`/)
+      expect(choose).toMatch(/one JSON object per line/)
+      expect(choose).toMatch(/empty output with a zero exit is an answer/i)
+      // The old one-page call must be gone.
+      expect(choose).not.toMatch(/artifacts\?per_page=100" --jq '\[/)
+    })
+
     test('hands import the run id only: the record carries no attempt to check', () => {
       expect(text).toMatch(/record carries no attempt/)
       expect(text).not.toMatch(/"provenance": \{[^}]*attempt/)
@@ -454,9 +475,9 @@ describe('ce:connect fetch reference', () => {
   test('downloads into a fresh directory it removes afterward, and never opens the record itself', () => {
     expect(text).toContain('mktemp -d')
     expect(text).toContain(
-      'gh run download <run> --repo marcusrbrown/systematic',
+      'gh run download <run> --repo github.com/marcusrbrown/systematic',
     )
-    expect(text).toContain('gh run download <run> --repo <repo>')
+    expect(text).toContain('gh run download <run> --repo github.com/<repo>')
     expect(text).toMatch(/Remove `<DEST>`/)
     expect(text).toMatch(/Do not open it and do not list the directory/)
     expect(text).toMatch(/holds one file, `run.json`, at its root/)
@@ -612,13 +633,13 @@ describe('ce:connect named fetch reference', () => {
   describe('the allowed origins, asked before any call or download', () => {
     test('asks the helper for the allowed origins before the first gh command', () => {
       expect(resolve).toContain('connect.mjs" allowed-origins')
-      expect(before('connect.mjs" allowed-origins', 'gh api "repos/')).toBe(
-        true,
-      )
+      expect(
+        before('connect.mjs" allowed-origins', 'gh api --hostname github.com'),
+      ).toBe(true)
       expect(
         before(
           'connect.mjs" allowed-origins',
-          'gh run download <run> --repo <repo>',
+          'gh run download <run> --repo github.com/<repo>',
         ),
       ).toBe(true)
       expect(resolve).not.toMatch(/gh (?:api|run) /)
@@ -663,9 +684,41 @@ describe('ce:connect named fetch reference', () => {
     })
   })
 
+  describe('every call is bound to github.com', () => {
+    test('every gh api call names --hostname github.com, for a bare and a named word', () => {
+      const calls = [...text.matchAll(/gh api\b[^\n]*/g)].map((m) => m[0])
+      // run (bare), run (named), attempt, compare, artifact lookup, artifact list
+      expect(calls.length).toBeGreaterThanOrEqual(6)
+      for (const call of calls) {
+        expect(call).toMatch(/^gh api --hostname github\.com /)
+      }
+    })
+
+    test('every download names the repository as github.com/<owner>/<repo>, the bare Systematic download too', () => {
+      const downloads = [...text.matchAll(/gh run download <run>[^\n]*/g)].map(
+        (m) => m[0],
+      )
+      expect(downloads.length).toBe(2)
+      for (const download of downloads) {
+        expect(download).toMatch(
+          / --repo github\.com\/(?:<repo>|marcusrbrown\/systematic) /,
+        )
+      }
+      expect(text).not.toMatch(/--repo (?!github\.com\/)/)
+    })
+
+    test('says in one line why: the allow-list origin is a github.com origin', () => {
+      expect(text).toMatch(
+        /allow-list origin is a github\.com origin[^\n]*`GH_HOST` or a GHE remote must not redirect the checks/,
+      )
+    })
+  })
+
   describe('a named word: the run', () => {
     test('reads the run of the named repository and accepts only schedule and workflow_dispatch', () => {
-      expect(namedCheck).toContain('gh api "repos/<repo>/actions/runs/<run>"')
+      expect(namedCheck).toContain(
+        'gh api --hostname github.com "repos/<repo>/actions/runs/<run>"',
+      )
       expect(namedCheck).toMatch(/`schedule` or `workflow_dispatch`/)
       expect(namedCheck).toContain('`unsupported-run-event`')
       expect(namedCheck).toContain('`run-not-found`')
@@ -714,7 +767,7 @@ describe('ce:connect named fetch reference', () => {
 
     test('compares the default branch with the sha the helper named, in that direction', () => {
       expect(prove).toContain(
-        'gh api "repos/marcusrbrown/systematic/compare/main...<sha>" --jq .status',
+        'gh api --hostname github.com "repos/marcusrbrown/systematic/compare/main...<sha>" --jq .status',
       )
       expect(text).not.toContain('<sha>...main')
       expect(prove).toMatch(/`sha` the helper answered/)
@@ -757,7 +810,7 @@ describe('ce:connect named fetch reference', () => {
     test('stays on the fixed repository and skips the origin check and the provenance proof', () => {
       expect(resolve).toMatch(/bare word[^\n]*skip to step 2/i)
       expect(bareCheck).toContain(
-        'gh api "repos/marcusrbrown/systematic/actions/runs/<run>"',
+        'gh api --hostname github.com "repos/marcusrbrown/systematic/actions/runs/<run>"',
       )
       expect(bareCheck).toMatch(/skip step 3/i)
     })
@@ -825,6 +878,30 @@ describe('ce:connect named fetch reference', () => {
       )
       expect(place).toMatch(/try again later/i)
     }
+  })
+
+  test('says under the reasons table which client version fetches a connect-scheduled.yaml run, with no version number', () => {
+    const after = section(
+      text,
+      '## Reasons the skill prints',
+      '## Reasons a candidate is refused',
+    )
+    const note =
+      after
+        .split('\n')
+        .find(
+          (line) =>
+            !line.startsWith('|') && line.includes('connect-scheduled.yaml'),
+        ) ?? ''
+    expect(note).toMatch(/release that includes this change/)
+    expect(note).toMatch(/`not-a-connect-run`/)
+    expect(note).toMatch(/runs of `connect.yaml` fetch on any version/i)
+    expect(note).not.toMatch(/\d+\.\d+/)
+    // The note sits below the table, not inside it.
+    expect(note).not.toBe('')
+    expect(after.indexOf(note)).toBeGreaterThan(
+      after.indexOf('| `download-failed` |'),
+    )
   })
 
   test('documents each new and reused stop reason in the reasons table', () => {

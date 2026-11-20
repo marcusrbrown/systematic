@@ -62,7 +62,7 @@ The binding is only as strong as its caller. `refusalOf` checks a revision only 
 ## Prevention
 
 - **Test the failure sequence, not the counter.** Fail one proposal's ledger write, then commit the same evidence and assert the first digest's decision applies. Commit different evidence and assert it is refused and the candidate stays open (`tests/unit/ce-connect-helper-ops.test.ts:4560-4569`, `tests/unit/ce-connect-helper-ops.test.ts:4571-4587`).
-- **Test the rollback.** Tick revision A, roll the cache back, publish revision B in A's place, and assert the tick is neither carried nor recorded (`tests/unit/connect-workflow.test.ts:3911-3935`).
+- **Test the rollback.** Tick revision A, roll the cache back, publish revision B in A's place, and assert the tick is neither carried nor recorded (`tests/unit/connect-workflow.test.ts:4091-4115`).
 - **Seed text from before revisions** and text whose artifact holds other evidence, and assert the row has no boxes and no Fetch line (`tests/unit/connect-ci.test.ts:2764-2790`, `tests/unit/connect-ci.test.ts:2839-2868`).
 - **Pin the paths the main tests skip.** Test identical-content paths separately (`tests/unit/connect-import.test.ts:1907-1937`), pin the skill's decide template and its instruction to send the displayed revision (`tests/unit/connect-skill-contract.test.ts:989-1025`; a text pin, not proof a live model sends it), and verify that ledger rewrites keep history fields (`tests/unit/connect-state.test.ts:1467-1509`). Each is pinned by a named test.
 
