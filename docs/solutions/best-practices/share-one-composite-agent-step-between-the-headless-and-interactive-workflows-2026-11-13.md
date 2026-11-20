@@ -97,3 +97,4 @@ Each of these mutations fails a named test (checked by making the change, runnin
 - [`release-workflow-test-pins-action-sha-2026-10-14.md`](../test-failures/release-workflow-test-pins-action-sha-2026-10-14.md): assert the shared form, never a literal that Renovate rotates.
 - [`fro-bot-agent-action-runtime-differs-from-a-plain-runner-2026-11-13.md`](../integration-issues/fro-bot-agent-action-runtime-differs-from-a-plain-runner-2026-11-13.md): the `.git` directory the action leaves in the workspace, and why the layout lives under it.
 - #1386 (workflow), #1390 (the step comparison this replaces).
+- [`called-workflow-github-context-is-the-callers-use-job-workflow-and-inputs-2026-11-20.md`](called-workflow-github-context-is-the-callers-use-job-workflow-and-inputs-2026-11-20.md): the connect workflow is now a `workflow_call` callee, so its checkout of this composite names its own repository through `job.workflow_*`.

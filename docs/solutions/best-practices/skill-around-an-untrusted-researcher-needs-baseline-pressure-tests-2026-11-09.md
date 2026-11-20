@@ -110,3 +110,4 @@ A refusal in the baseline is not a control. The model's defaults were mostly har
 - [SUBAGENT-STOP prose behavioral probe returned a null result](subagent-stop-prose-behavioral-null-result-2026-05-20.md)
 - [Evidence boundary for reading other repositories](evidence-boundary-for-reading-other-repositories-2026-11-09.md)
 - [Evaluate a model-driven tool with a pre-registered protocol](pre-registered-evaluation-of-a-model-driven-tool-2026-11-09.md)
+- [Prove that a run in another repository called your reusable workflow in a tested helper op](prove-a-cross-repo-run-called-your-workflow-in-a-tested-helper-op-2026-11-20.md): the same rule applied to a provenance gate, moved out of skill prose into the `verify-provenance` op.
