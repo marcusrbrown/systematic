@@ -215,10 +215,22 @@ The survey searched this repository at the recorded revision. The scheduled work
 - Stop-rule gap for Systematic's own fetch: none. The bare path checks the fixed repository, the event and the top-level `path` (`connect.yaml` or `connect-scheduled.yaml`), and needs no `referenced_workflows` (KTD10).
 - Does an older helper break on the new `repo` field in the render request? No: `parseRenderRequest` reads only the fields it knows. The callee sends the field from day one.
 
+### Resolved by the spike (U0)
+
+Both stop rules passed, so the full plan proceeds.
+
+- **Self-checkout:** `job.workflow_repository`, `job.workflow_sha` and `job.workflow_file_path` name the callee on a local `./` call and on a cross-owner call. A checkout at `job.workflow_sha` reaches `.github/actions/fro-bot-agent/action.yml` in both.
+- **`referenced_workflows` shape:** it is present on `/runs/{id}`, `/attempts/1` and `/attempts/2` for both call types, and identical across attempts. It is a list. Match the entry by `owner/repo/.github/workflows/connect.yaml` before the `@`, never by index. Use its `sha` field (40-hex), not the `@` suffix. The `ref` key appears only on the local call. A tag-pinned cross-owner call was not tested, so the parser must not depend on `ref` or the suffix.
+- **Compare direction:** use `compare/<default branch>...<sha>`. Accept `behind` or `identical`. Reject `ahead` or `diverged`. An unknown or malformed SHA returns 404, the same shape as no access, so it is unprovable. No token scope is needed on the public repo.
+- **Caller scope:** `vars` resolve from the caller, so a callee must not read them. The cache is scoped to the caller repo and ref, and a prefix restore works. Save and restore must use the same `path`, because the cache version hashes it.
+- **Concurrency:** `queue: max` is accepted in a callee. Runs queue, a cancel leaves older pending runs intact, and there is no collision across repos. The wrapper fallback is not needed.
+- **Reruns:** a failed-job rerun keeps the callee SHA and the attempt-1 artifact names. The existing producer-output naming already handles this.
+- **Org policy:** a fro-bot caller can call a public, SHA-pinned callee in `marcusrbrown/systematic`. Job token logs show the narrowed grant.
+- **Repo skills off:** a source read of fro-bot/agent v0.146.0 with OpenCode v2.3.2 shows that `repo-skills: "false"` keeps the caller's `.agents/skills`, `AGENTS.md`, `CLAUDE.md`, `opencode.json` and repo plugins from loading. The first wrapper run's log confirms it live.
+- **Not observed:** the report author in a caller, and Issues write under the narrowed ceiling. U7 observes both.
+
 ### Deferred to Implementation
 
-- Whether `job.workflow_*` is populated on a cross-owner call, a local `./` call and a rerun, and what `referenced_workflows` holds on attempts 1 and 2 and on the local call. U0 settles it; the stop rules apply (KTD13).
-- Fallback if `queue: max` does not work from a callee: move the group to the wrapper and require it in the docs checklist. Decide only on spike evidence.
 - Whether import keys duplicate detection on `provenance.repo`; U5 tests two repositories with equal run ids.
 - Exact refusal reason names for a repository off the allow list and for unprovable provenance. Prefer reusing existing names where the meaning matches.
 - Compare API limits and failure modes under a token with no extra scope.
@@ -276,7 +288,7 @@ flowchart TB
   U6 --> U7
 ```
 
-- [ ] U0. **Live spike**
+- [x] U0. **Live spike**
 
 **Goal:** Prove, on real runs, the GitHub behaviours the design leans on, then delete every trace. Gate: needs Marcus's explicit approval before it runs, because it creates temporary workflows, issues and caches in Systematic and fro-bot/agent.
 
