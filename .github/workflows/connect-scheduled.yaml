@@ -1,0 +1,38 @@
+name: Connect
+
+# Systematic's own scheduled ce:connect sweep: the daily cron and the manual
+# dispatch, calling the reusable workflow in this repository. This wrapper owns
+# the triggers, the permissions ceiling and the settings; connect.yaml owns the
+# jobs. Each setting is the repository variable passed through as it is: an
+# unset variable arrives as an empty string, which connect.yaml normalizes, so
+# nothing here adds a fallback. The secrets are named one by one because
+# `secrets: inherit` does not cross owners, and a call that works for a caller
+# elsewhere must work here the same way. No concurrency is set here; the
+# callee's own group queues the runs.
+
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  connect:
+    name: Connect
+    # A called workflow only narrows what its caller grants, so this is the
+    # ceiling for all four of its jobs: read for prepare and run, write for the
+    # report in post.
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/connect.yaml
+    with:
+      projects: ${{ vars.FRO_BOT_CONNECT_PROJECTS }}
+      parent-model: ${{ vars.FRO_BOT_MODEL }}
+      researcher-model: ${{ vars.FRO_BOT_CONNECT_MODEL }}
+      variant: ${{ vars.FRO_BOT_CONNECT_VARIANT }}
+      step-timeout-minutes: ${{ vars.FRO_BOT_CONNECT_STEP_TIMEOUT }}
+    secrets:
+      OPENCODE_AUTH_JSON: ${{ secrets.OPENCODE_AUTH_JSON }}
+      OPENCODE_CONFIG: ${{ secrets.OPENCODE_CONFIG }}
