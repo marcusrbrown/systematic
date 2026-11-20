@@ -62,7 +62,7 @@ In the same pass, list every word that starts with `fetch:`. `fetch:<run>.<attem
 - A `fetch:` word together with a `group:` or `projects:` word: stop. The reason is `conflicting-selection: fetch: cannot be combined with group: or projects:`.
 - Two different `fetch:` words: stop. The reason is `conflicting-selection: two different fetch: words`.
 - A bare `fetch:` value that does not match the bare pattern, such as an empty one, a zero attempt or a second dot: stop. The reason is `invalid-request: fetch: needs a numeric GitHub run id`. Check this before any value reaches a command.
-- A named `fetch:` value that does not match the named pattern, such as a missing attempt, a repository with a leading or trailing hyphen on the owner, a `..` repository or a third segment: stop. The reason is `invalid-request: fetch: a named word is <owner>/<repo>:<run>.<attempt>`. Check this before any value reaches a command, including the helper.
+- A named `fetch:` value that does not match the named pattern, such as a missing attempt, a repository with a leading or trailing hyphen on the owner, a `..` repository or a third segment: stop. The reason is `invalid-request: fetch: a named word is <owner>/<repo>:<run>.<attempt>`, with the remedy on the same line: `Supply `fetch:<owner>/<repo>:<run>.<attempt>` and try again.` Check this before any value reaches a command, including the helper.
 - A stop here happens before any command, in the two-line form of Step 1.
 - One valid `fetch:` word: skip Steps 2 to 7 and follow `references/fetch-and-import.md`. A fetch observes no host, dispatches no agent, asks nothing and takes no mode: `mode:` has no effect on it. It ends with the final line that reference names.
 

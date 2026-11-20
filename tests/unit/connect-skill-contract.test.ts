@@ -355,6 +355,13 @@ describe('ce:connect fetch', () => {
       )
       expect(fetchSection).toMatch(/before any value reaches a command/)
     })
+
+    test('names the remedy on the same line, so the stop stays two lines', () => {
+      expect(fetchSection).toContain(
+        'Supply `fetch:<owner>/<repo>:<run>.<attempt>` and try again.',
+      )
+      expect(fetchSection).toMatch(/on the same line/)
+    })
   })
 
   test('stands alone: it conflicts with a selection and with a different fetch word', () => {
@@ -648,6 +655,12 @@ describe('ce:connect named fetch reference', () => {
     test('does not print a local path', () => {
       expect(resolve).toMatch(/never prints a local path/i)
     })
+
+    test('stops on an answer that is not ok or has no origins, reports the reason and runs no gh command', () => {
+      expect(resolve).toMatch(/`ok: false`/)
+      expect(resolve).toMatch(/without `origins`/)
+      expect(resolve).toMatch(/helper's `reason`[^\n]*without running `gh`/)
+    })
   })
 
   describe('a named word: the run', () => {
@@ -666,6 +679,9 @@ describe('ce:connect named fetch reference', () => {
   })
 
   describe('a named word: the provenance of the exact attempt', () => {
+    const SELECT = 'connect.mjs" verify-provenance <<'
+    const CONFIRM = 'connect.mjs" verify-provenance --status'
+
     test('reads the named attempt first and stops when it does not exist', () => {
       expect(prove).toContain('actions/runs/<run>/attempts/<attempt>')
       expect(prove).toMatch(/attempt does not exist[^\n]*`run-not-found`/)
@@ -674,56 +690,57 @@ describe('ce:connect named fetch reference', () => {
       ).toBe(true)
     })
 
-    test('takes the Systematic connect.yaml entry by its path before the @, never by position, and uses its sha', () => {
+    test('sends the text gh printed to the helper and never judges the list itself', () => {
+      expect(prove).toContain(SELECT)
+      expect(prove).toMatch(/the text `gh` printed, unchanged/)
+      expect(prove).toMatch(/Never judge `referenced_workflows` yourself/)
+      expect(prove).toMatch(
+        /Never read the list, pick an entry or check a hash/i,
+      )
+      expect(before('actions/runs/<run>/attempts/<attempt>', SELECT)).toBe(true)
+      expect(before(SELECT, 'compare/main...<sha>')).toBe(true)
+    })
+
+    test('describes what the helper decides without handing the decision back to the agent', () => {
       expect(prove).toContain(
         'marcusrbrown/systematic/.github/workflows/connect.yaml',
       )
-      expect(prove).toMatch(/before the `@`/)
-      expect(prove).toMatch(/never by (?:its )?(?:position|index)/i)
-      expect(prove).toMatch(/`sha`/)
+      expect(prove).toMatch(/without regard to case/)
       expect(prove).toMatch(/40 lowercase hex/)
-      expect(prove).toMatch(/Do not use `ref` or the text after the `@`/)
+      expect(prove).toMatch(/never by position/i)
+      expect(prove).not.toMatch(/Take the entries whose/)
+      expect(prove).not.toMatch(/Match on that path/)
     })
 
-    test('compares owner/repo without regard to case, and the workflow file path exactly', () => {
-      expect(prove).toMatch(
-        /comparing `marcusrbrown\/systematic` without regard to case and the rest exactly/,
-      )
-      // A mixed-case owner and repo is a valid call, so it is accepted.
-      expect(prove).toMatch(
-        /`MarcusRBrown\/Systematic\/\.github\/workflows\/connect\.yaml@<sha>` matches/,
-      )
-      // A mixed-case file path is another file, so it is refused as another workflow.
-      expect(prove).toMatch(
-        /`marcusrbrown\/systematic\/\.github\/Workflows\/connect\.yaml`[^\n]*does not match[^\n]*`not-a-connect-run`/,
-      )
-      expect(prove).not.toMatch(/equals exactly `marcusrbrown/)
-    })
-
-    test('compares the default branch with the sha, in that direction, and accepts behind or identical only', () => {
+    test('compares the default branch with the sha the helper named, in that direction', () => {
       expect(prove).toContain(
         'gh api "repos/marcusrbrown/systematic/compare/main...<sha>" --jq .status',
       )
       expect(text).not.toContain('<sha>...main')
-      expect(prove).toMatch(/`behind` or `identical`/)
-      for (const word of ['`ahead`', '`diverged`', '404']) {
-        expect(prove).toContain(word)
-      }
+      expect(prove).toMatch(/`sha` the helper answered/)
+      expect(prove).toMatch(/Never swap the two sides/)
     })
 
-    test('fails closed with its own reason when the proof is missing, and uses not-a-connect-run only for a proven other workflow', () => {
+    test('sends the same text again with the compare status and goes on only on an accepted answer', () => {
+      expect(prove).toContain(CONFIRM)
+      expect(prove).toMatch(/the same text again/)
+      expect(prove).toMatch(/`stage: "accepted"`/)
+      expect(before('compare/main...<sha>', CONFIRM)).toBe(true)
+      expect(before(CONFIRM, '### 4. Choose')).toBe(true)
+      expect(prove).toMatch(/404[^\n]*`provenance-unprovable`/)
+    })
+
+    test('stops with the helper reason and a remedy when the helper refuses, and downloads nothing', () => {
+      expect(prove).toMatch(/`ok: false`/)
       expect(prove).toContain('`provenance-unprovable`')
-      for (const case_ of [
-        'absent',
-        'null',
-        'empty',
-        'more than one',
-        'API call fails',
-      ]) {
-        expect(prove, case_).toContain(case_)
-      }
-      expect(prove).toMatch(/`not-a-connect-run`[^\n]*(?:fork|other workflow)/)
+      expect(prove).toContain('`not-a-connect-run`')
       expect(prove).toMatch(/never download/i)
+      expect(prove).toMatch(/without running `gh`/)
+    })
+
+    test('stops on a helper answer that is not one of its two refusals, with the helper reason', () => {
+      expect(prove).toMatch(/any other `reason`/)
+      expect(prove).toContain('`helper-unavailable`')
     })
 
     test('finishes before any download', () => {
@@ -796,6 +813,18 @@ describe('ce:connect named fetch reference', () => {
       /`import` still checks every project[^\n]*its own check/,
     )
     expect(text).toContain('`repo-not-allowed`')
+  })
+
+  test('gives a remedy for provenance-unprovable, in the step and in the table', () => {
+    const row = reasons
+      .split('\n')
+      .find((line) => line.includes('| `provenance-unprovable` |'))
+    for (const place of [prove, row ?? '']) {
+      expect(place).toMatch(
+        /calls `marcusrbrown\/systematic\/\.github\/workflows\/connect\.yaml` at a commit on Systematic's `main`/,
+      )
+      expect(place).toMatch(/try again later/i)
+    }
   })
 
   test('documents each new and reused stop reason in the reasons table', () => {

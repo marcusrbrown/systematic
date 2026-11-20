@@ -30,6 +30,7 @@ Lowercase the word's `<owner>/<repo>` and look for it in `origins`, which is alr
 
 - It is not in `origins`: stop with `origin-not-allowed`. Run no `gh` command. Nothing was downloaded. To fix it, allow-list a checkout of that repository: add a local checkout whose `origin` remote is `<repo>` to `connect.allow_projects`, then try again. When `configUnreadable` is `true`, say that the allow list could not be read.
 - It is in `ambiguous`: stop with `repo-ambiguous`. `import` would refuse every candidate of that repository for the same reason. Nothing was downloaded. Remove all but one of the checkouts from the allow list, then try again.
+- The answer is JSON with `ok: false`, or JSON without `origins`: stop and print the helper's `reason`, then `Connect failed`, without running `gh`. Nothing was downloaded. Never guess an origin from a path or from the checkouts you can see.
 - If `node` is missing, the helper file is gone, or `allowed-origins` prints no JSON answer, the helper is unavailable: print `helper-unavailable` and its hint, then `Connect failed`. Nothing was downloaded.
 
 ### 2. Check the run, before any download
@@ -69,26 +70,44 @@ It prints two tab-separated values: the event and the head commit.
 
 ### 3. Prove the provenance (named words only)
 
+The helper decides this step. You fetch the text from `gh`, send it to the helper and act on the answer. Never judge `referenced_workflows` yourself: never read the list, pick an entry or check a hash. The helper's `verify-provenance` operation takes no lock, writes nothing, reads no network or configuration and never prints a path.
+
 Read the exact attempt the word names. Never read the run's newest attempt instead.
 
 ```bash
 gh api "repos/<repo>/actions/runs/<run>/attempts/<attempt>" --jq .referenced_workflows
 ```
 
-It prints the attempt's `referenced_workflows` as JSON.
+It prints the attempt's `referenced_workflows`.
 
 - The attempt does not exist (a 404): stop with `run-not-found`.
 - `gh` is not logged in: stop with `gh-not-authenticated`.
-- The API call fails for any other reason, or its output is not JSON: stop with `provenance-unprovable`.
+- The API call fails for any other reason: stop with `provenance-unprovable`, with its remedy from the table below.
 
-Read the answer. Never download on any stop below:
+Never download on any stop below. Send the text `gh` printed, unchanged, to the helper on stdin:
 
-- The field is absent or `null`, the list is empty, it is not a list, or an entry has no string `path`: stop with `provenance-unprovable`.
-- Take the entries whose `path`, the part before the `@`, is `marcusrbrown/systematic/.github/workflows/connect.yaml`, comparing `marcusrbrown/systematic` without regard to case and the rest exactly. GitHub treats owner and repository names as case-insensitive, so `MarcusRBrown/Systematic/.github/workflows/connect.yaml@<sha>` matches. The file path is exact. Match on that path, never by position in the list.
-- An entry whose file path differs in case, such as `marcusrbrown/systematic/.github/Workflows/connect.yaml`, does not match. If no other entry matches, the next bullet applies and the stop is `not-a-connect-run`.
-- No entry matches: stop with `not-a-connect-run`. The run is proven to be another workflow, such as another repository's workflow, a fork or another path.
-- If more than one entry matches, stop with `provenance-unprovable`.
-- The matching entry's `sha` must be 40 lowercase hex characters. A missing, short, uppercase or non-hex value: stop with `provenance-unprovable`. Use `sha`. Do not use `ref` or the text after the `@`: the suffix is whatever the caller wrote, and `ref` is not always present.
+```bash
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+node "$SKILL_DIR/scripts/connect.mjs" verify-provenance <<'JSON'
+<the text gh printed, unchanged>
+JSON
+```
+
+It answers one line of JSON. It takes the text as it is, so text that is not JSON is judged by the helper, not refused as a bad request. It decides, in this order:
+
+- The value is absent or `null`, is not a list, is empty, or an entry has no string `path`: `provenance-unprovable`.
+- It takes the entries whose `path`, the part before the `@`, is `marcusrbrown/systematic/.github/workflows/connect.yaml`, comparing `marcusrbrown/systematic` without regard to case and the rest exactly (`MarcusRBrown/Systematic/.github/workflows/connect.yaml@<sha>` matches; `marcusrbrown/systematic/.github/Workflows/connect.yaml` does not). It matches by path, never by position in the list.
+- No entry matches: `not-a-connect-run`. The run is proven to be another workflow, such as another repository's workflow, a fork or another path.
+- More than one entry matches: `provenance-unprovable`.
+- The matching entry's `sha` is not 40 lowercase hex characters: `provenance-unprovable`. It never uses `ref` or the text after the `@`.
+
+Read the answer:
+
+- `ok: true` with `stage: "selected"`: the answer carries `sha`. Go on to the compare below.
+- `ok: false`: stop with the `reason` it names, `provenance-unprovable` or `not-a-connect-run`, and print the remedy from the table below. Download nothing and run no further `gh` command.
+- JSON with any other `reason` (such as `invalid-request`), or JSON with neither `ok: true` nor a `reason`: stop and print that `reason`, then `Connect failed`, without running `gh`. Nothing was downloaded.
+- If `node` is missing, the helper file is gone, or the operation prints no JSON answer, the helper is unavailable: print `helper-unavailable` and its hint, then `Connect failed`. Nothing was downloaded.
 
 Then check that the commit is on Systematic's default branch:
 
@@ -96,12 +115,24 @@ Then check that the commit is on Systematic's default branch:
 gh api "repos/marcusrbrown/systematic/compare/main...<sha>" --jq .status
 ```
 
-`<sha>` is the matching entry's `sha`. The base is `main` and the head is the `sha`. Never swap the two sides of the range.
+`<sha>` is the `sha` the helper answered. The base is `main` and the head is the `sha`. Never swap the two sides of the range.
 
-- `behind` or `identical`: the commit is in the history of `main`. Go on.
-- `ahead` (the commit is not in `main`), `diverged`, a 404 (an unknown commit and no access look the same), or any other failure: stop with `provenance-unprovable`.
+- The command fails (a 404, which an unknown commit and no access both give, or any other failure): stop with `provenance-unprovable`, with its remedy from the table below. Do not call the helper again.
+- It prints a status. Send the same text again, with the status as `gh` printed it, with no trailing newline:
 
-`provenance-unprovable` means the proof is missing. It is not a finding that the run is hostile.
+```bash
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+node "$SKILL_DIR/scripts/connect.mjs" verify-provenance --status "<status>" <<'JSON'
+<the same text again>
+JSON
+```
+
+- `ok: true` with `stage: "accepted"`: the commit is behind or identical to `main`, so it is in the history of `main`. Go on.
+- `ok: false`: stop with the `reason` it names. The helper refuses `ahead` (the commit is not in `main`), `diverged`, an empty status and any other status as `provenance-unprovable`.
+- Any other answer: stop as above.
+
+`provenance-unprovable` means the proof is missing. It is not a finding that the run is hostile. To fix it, check that the caller's wrapper calls `marcusrbrown/systematic/.github/workflows/connect.yaml` at a commit on Systematic's `main`, then try again. If an API call failed, try again later.
 
 ### 4. Choose the artifact
 
@@ -187,10 +218,10 @@ Print the reason as it is, then the hint.
 |---|---|
 | `origin-not-allowed` | The named repository is not the origin of any allowed checkout. Nothing was downloaded. Allow-list a checkout of that repository in `connect.allow_projects`, then try again. |
 | `repo-ambiguous` | Two or more allowed checkouts have the named repository as their origin. Nothing was downloaded. Remove all but one from the allow list. |
-| `provenance-unprovable` | The named run cannot be shown to have called Systematic's `connect.yaml` at a commit on Systematic's default branch: the attempt's `referenced_workflows` is absent, empty or malformed, more than one entry matches, the `sha` is not 40 lowercase hex characters, the commit is not behind or identical to `main`, or an API call failed. Nothing was downloaded. This fails closed: it is a missing proof, not a finding that the run is hostile. |
-| `not-a-connect-run` | The run is not a run of Systematic's `connect.yaml`. For a bare word its top-level path is neither `.github/workflows/connect.yaml` nor `.github/workflows/connect-scheduled.yaml`. For a named word the attempt's `referenced_workflows` names other workflows only. Nothing was downloaded. |
-| `unsupported-run-event` | Only `schedule` and `workflow_dispatch` runs are read. Nothing was downloaded. |
-| `run-not-found` | No run with that id in the repository, or, for a named word, no such attempt of it. |
+| `provenance-unprovable` | The named run cannot be shown to have called Systematic's `connect.yaml` at a commit on Systematic's default branch: the attempt's `referenced_workflows` is absent, empty or malformed, more than one entry matches, the `sha` is not 40 lowercase hex characters, the commit is not behind or identical to `main`, or an API call failed. Nothing was downloaded. This fails closed: it is a missing proof, not a finding that the run is hostile. To fix it, check that the caller's wrapper calls `marcusrbrown/systematic/.github/workflows/connect.yaml` at a commit on Systematic's `main`, then try again. If an API call failed, try again later. |
+| `not-a-connect-run` | The run is not a run of Systematic's `connect.yaml`. For a bare word its top-level path is neither `.github/workflows/connect.yaml` nor `.github/workflows/connect-scheduled.yaml`. For a named word the attempt's `referenced_workflows` names other workflows only. Nothing was downloaded. Name a scheduled run of Systematic's `connect.yaml`, or of a caller that calls it, then try again. |
+| `unsupported-run-event` | Only `schedule` and `workflow_dispatch` runs are read. Nothing was downloaded. Name a scheduled or manually dispatched run, then try again. |
+| `run-not-found` | No run with that id in the repository, or, for a named word, no such attempt of it. Check the run and attempt in the report's fetch word, then try again. |
 | `gh-not-authenticated` | `gh` is not logged in, or its token cannot read this repository's runs. Run `gh auth login` and try again. |
 | `artifact-list-failed` | `gh` could not list the run's artifacts, or its answer was not a JSON array. Nothing was downloaded. Try again. |
 | `artifact-not-found` | The run has no `connect-run-<run>-<attempt>` artifact for the attempt asked for. It stopped before it made a record. |

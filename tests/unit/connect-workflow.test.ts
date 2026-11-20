@@ -275,7 +275,13 @@ describe('connect workflow structure', () => {
     const code = SOURCE.split('\n')
       .map((line) => line.replace(/(^|\s)#.*$/, ''))
       .join('\n')
-    expect(code).not.toMatch(/marcusrbrown\/systematic/)
+    // The one exception: the render job's check that a caller other than
+    // Systematic got named fetch words. The helper keeps bare words for
+    // Systematic alone, so the check has to name it, and it is the only place.
+    const exception = 'if [ "$caller" != marcusrbrown/systematic ]; then'
+    expect(code.split(exception).length - 1).toBe(1)
+    const rest = code.replace(exception, '')
+    expect(rest).not.toMatch(/marcusrbrown\/systematic/)
     expect(code).not.toMatch(/github\.com\/(?!\$\{)[A-Za-z0-9_-]+\/[A-Za-z]/)
   })
 
@@ -2026,6 +2032,128 @@ describe('render: the calling repository in the request', () => {
     seedHandoff(box)
     const { render } = renderDay(box, DATE_ONE, { repo: 'not a repo' })
     expect(render.exitCode).toBe(1)
+  })
+})
+
+describe('render: a helper too old to name the calling repository', () => {
+  /**
+   * A stand-in for the pinned helper. It runs the real one, so the body and the
+   * stores are real, and then changes only what the mode names.
+   * - `old`: the request's `repo` is dropped first, as a release that predates the field would.
+   * - `old-no-fetches`: as `old`, and the answer's `fetches` list is emptied, so only the body is bare.
+   * - `bare-fetches`: the body is named, but the answer's `fetches` list holds bare words.
+   */
+  const STUB_HELPER = `import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+const mode = process.env.STUB_MODE ?? 'old'
+const request = JSON.parse(fs.readFileSync(0, 'utf8'))
+if (mode !== 'bare-fetches') delete request.repo
+const run = spawnSync('node', [process.env.HELPER_SRC, ...process.argv.slice(2)], {
+  input: JSON.stringify(request),
+  encoding: 'utf8',
+})
+const answer = JSON.parse(run.stdout)
+if (mode === 'old-no-fetches') answer.fetches = []
+if (mode === 'bare-fetches') answer.fetches = ['555.1']
+process.stdout.write(JSON.stringify(answer) + '\\n')
+process.exit(run.status ?? 1)
+`
+
+  function renderWith(
+    repo: string,
+    mode: 'real' | 'old' | 'old-no-fetches' | 'bare-fetches',
+  ): { render: StepResult; body: string; box: Box } {
+    const box = makeBox()
+    seedHandoff(box)
+    const env = { GITHUB_REPOSITORY: repo, STUB_MODE: mode }
+    expect(runStep(box, 'render', 'Validate hand-off', env).exitCode).toBe(0)
+    expect(runStep(box, 'render', 'Install helper', env).exitCode).toBe(0)
+    if (mode !== 'real') {
+      fs.writeFileSync(
+        path.join(
+          box.tmp,
+          'connect-helper/node_modules/@fro.bot/systematic/skills/ce-connect/scripts/connect.mjs',
+        ),
+        STUB_HELPER,
+      )
+    }
+    const render = runStep(box, 'render', 'Render report', {
+      ...env,
+      DATE: DATE_ONE,
+      CACHE_RESTORED: 'true',
+    })
+    const bodyFile = path.join(box.tmp, 'report', 'body.md')
+    return {
+      render,
+      box,
+      body: fs.existsSync(bodyFile) ? fs.readFileSync(bodyFile, 'utf8') : '',
+    }
+  }
+
+  it('fails red for a calling repository other than Systematic when the helper returns bare fetch words', () => {
+    const { render, body } = renderWith('acme/caller', 'old')
+    expect(render.exitCode).toBe(1)
+    const said = render.stderr + render.stdout
+    expect(said).toContain('too old to name the calling repository')
+    expect(said).toContain('SYSTEMATIC_VERSION')
+    expect(said).toContain('named fetch words')
+    expect(body).toBe('')
+  })
+
+  it('writes no output and no report file when it fails, so nothing later has anything to save or upload', () => {
+    const { render, box } = renderWith('acme/caller', 'old')
+    expect(render.exitCode).toBe(1)
+    expect(render.outputs.size).toBe(0)
+    expect(fs.existsSync(path.join(box.tmp, 'report'))).toBe(false)
+  })
+
+  it('fails on a bare word in the rendered body even when the helper lists no fetch words', () => {
+    const { render, body } = renderWith('acme/caller', 'old-no-fetches')
+    expect(render.exitCode).toBe(1)
+    expect(render.stderr + render.stdout).toContain(
+      'too old to name the calling repository',
+    )
+    expect(body).toBe('')
+  })
+
+  it('fails on a bare word the helper lists even when the body names the caller', () => {
+    const { render, body } = renderWith('acme/caller', 'bare-fetches')
+    expect(render.exitCode).toBe(1)
+    expect(body).toBe('')
+  })
+
+  it('passes for a calling repository other than Systematic when every word names it, whatever the case', () => {
+    for (const repo of ['acme/caller', 'Acme/Caller']) {
+      const { render, body } = renderWith(repo, 'real')
+      expect(render.exitCode, repo).toBe(0)
+      expect(body, repo).toContain(`fetch:${repo}:555.1`)
+      expect(render.outputs.get('manifest'), repo).toBeTruthy()
+    }
+  })
+
+  it('passes for Systematic with bare words, whatever the case of its name', () => {
+    for (const repo of ['marcusrbrown/systematic', 'MarcusRBrown/Systematic']) {
+      const { render, body } = renderWith(repo, 'old')
+      expect(render.exitCode, repo).toBe(0)
+      expect(body, repo).toContain('ce:connect fetch:555.1`')
+    }
+  })
+
+  it('checks before anything is saved or uploaded, and no later step runs after a failure', () => {
+    const steps = stepsOf('render')
+    const names = steps.map((step) => step.name)
+    const after = steps.slice(names.indexOf('Render report') + 1)
+    expect(after.length).toBeGreaterThan(0)
+    for (const step of after) {
+      expect(String(step.if ?? ''), String(step.name)).not.toMatch(
+        /always\(\)|failure\(\)|cancelled\(\)/,
+      )
+    }
+    const render = asString(stepNamed('render', 'Render report').run, 'script')
+    const refusal = render.indexOf('too old to name the calling repository')
+    expect(refusal).toBeGreaterThan(-1)
+    expect(refusal).toBeLessThan(render.indexOf('report/body.md'))
+    expect(render).not.toContain('${{')
   })
 })
 

@@ -94,6 +94,7 @@ import {
   type Verification,
   verifyRecord,
 } from './lib/connect-import.js'
+import { verifyProvenance } from './lib/connect-provenance.js'
 import {
   isGithubOwnerRepo,
   readRepoIdentity,
@@ -156,7 +157,7 @@ import { isMainModule } from './lib/main-module.js'
  */
 
 export const CE_CONNECT_USAGE =
-  'Usage: node connect.mjs <begin|validate|publish|decide|import|apply-ticks|render-report|allowed-origins|ledger show [--offset N]|ledger clear|ledger unlock>'
+  'Usage: node connect.mjs <begin|validate|publish|decide|import|apply-ticks|render-report|allowed-origins|verify-provenance|ledger show [--offset N]|ledger clear|ledger unlock>'
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -198,6 +199,7 @@ const OPS = [
   'apply-ticks',
   'render-report',
   'allowed-origins',
+  'verify-provenance',
   'ledger-show',
   'ledger-clear',
   'ledger-unlock',
@@ -3428,6 +3430,34 @@ function allowedOrigins(deps: HelperDeps): HelperResult {
   })
 }
 
+// ── verify-provenance ───────────────────────────────────────────────────────
+
+/**
+ * The provenance decision of a named fetch, from the text `gh` printed. The
+ * skill sends the attempt's `referenced_workflows` and gets the commit to
+ * compare; it sends the same text with the compare `status` and gets the
+ * commit accepted or refused (`connect-provenance.ts` holds every rule).
+ *
+ * Reads nothing and writes nothing: no network, no lock, no state root and no
+ * configuration. The answer is a reason or a commit hash and never a path or
+ * any of the input.
+ */
+function verifyProvenanceOp(request: unknown): HelperResult {
+  if (!isRecord(request)) return failure('verify-provenance', 'invalid-request')
+  const verdict = verifyProvenance({
+    referencedWorkflows: request.referencedWorkflows,
+    ...(request.status === undefined ? {} : { status: request.status }),
+  })
+  if (verdict.status === 'refused') {
+    return failure('verify-provenance', verdict.reason)
+  }
+  return success('verify-provenance', {
+    outcome: 'complete',
+    stage: verdict.status,
+    sha: verdict.sha,
+  })
+}
+
 // ── apply-ticks and render-report ───────────────────────────────────────────
 
 const ISSUE_DIGITS = /^[0-9]{1,10}$/
@@ -3603,6 +3633,8 @@ export function runHelperOp(
         return renderReportOp(request, deps)
       case 'allowed-origins':
         return allowedOrigins(deps)
+      case 'verify-provenance':
+        return verifyProvenanceOp(request)
       case 'ledger-show':
         return ledgerShow(request, deps)
       case 'ledger-clear':
@@ -3673,6 +3705,7 @@ const REQUEST_OPS = new Set<Op>([
   'import',
   'apply-ticks',
   'render-report',
+  'verify-provenance',
 ])
 
 function resolveCliOp(argv: readonly string[]): Op | undefined {
@@ -3695,6 +3728,18 @@ function showRequestFromArgv(argv: readonly string[]): unknown {
   return /^\d+$/.test(value ?? '')
     ? { offset: Number(value) }
     : { offset: value }
+}
+
+/** `verify-provenance [--status <value>]`: the compare status, or nothing; any other line is refused. */
+function provenanceArgsFromArgv(
+  argv: readonly string[],
+): { status?: string } | undefined {
+  const rest = argv.slice(1)
+  if (rest.length === 0) return {}
+  const [flag, value] = rest
+  return rest.length === 2 && flag === '--status' && value !== undefined
+    ? { status: value }
+    : undefined
 }
 
 type CliRequest =
@@ -3749,6 +3794,9 @@ function readCliRequest(
   if (text === 'too-large' || text === 'unreadable') {
     return refuse(`request-${text}`)
   }
+  // The text is the request itself: `gh` output is judged by the operation, and
+  // text that is not JSON is a finding there, not a malformed request.
+  if (op === 'verify-provenance') return { ok: true, request: text }
   if (text.trim() === '') return { ok: true, request: {} }
   try {
     return { ok: true, request: JSON.parse(text) as unknown }
@@ -3767,10 +3815,20 @@ export function runConnectHelper(options: CliOptions): number {
     err(CE_CONNECT_USAGE)
     return 2
   }
+  const provenanceArgs =
+    op === 'verify-provenance' ? provenanceArgsFromArgv(options.argv) : {}
+  if (provenanceArgs === undefined) {
+    out(JSON.stringify(failure(op, 'invalid-request').body))
+    return 2
+  }
   const read = readCliRequest(op, options, out, err)
   if (!read.ok) return read.exitCode
   const request =
-    op === 'ledger-show' ? showRequestFromArgv(options.argv) : read.request
+    op === 'ledger-show'
+      ? showRequestFromArgv(options.argv)
+      : op === 'verify-provenance'
+        ? { referencedWorkflows: read.request, ...provenanceArgs }
+        : read.request
   const result = runHelperOp(op, request, options.deps ?? {})
   out(JSON.stringify(result.body))
   return result.ok ? 0 : 1

@@ -3092,6 +3092,212 @@ describe('the allowed-origins operation', () => {
   })
 })
 
+// ── The verify-provenance operation ────────────────────────────────────────
+
+describe('the verify-provenance operation', () => {
+  const SHA = '0123456789abcdef0123456789abcdef01234567'
+  const CONNECT = 'marcusrbrown/systematic/.github/workflows/connect.yaml'
+  const GOOD = JSON.stringify([
+    { path: `${CONNECT}@refs/heads/main`, sha: SHA, ref: 'refs/heads/main' },
+  ])
+
+  /** Run the command line the way the skill does: raw text on stdin, `--status` on the line. */
+  function cli(
+    stdin: string,
+    ...rest: string[]
+  ): { code: number; answer: Json; errors: string[] } {
+    const lines: string[] = []
+    const errors: string[] = []
+    const code = runConnectHelper({
+      argv: ['verify-provenance', ...rest],
+      isTTY: false,
+      readRequest: () => stdin,
+      outputSink: (line) => lines.push(line),
+      errorSink: (line) => errors.push(line),
+    })
+    return { code, answer: JSON.parse(lines[0] ?? '{}') as Json, errors }
+  }
+
+  it('is named in the usage line', () => {
+    const errors: string[] = []
+    runConnectHelper({ argv: [], errorSink: (line) => errors.push(line) })
+    expect(errors.join('\n')).toContain('|allowed-origins|verify-provenance|')
+  })
+
+  it('selects the sha from raw gh output on stdin', () => {
+    const { code, answer } = cli(GOOD)
+    expect(code).toBe(0)
+    expect(answer).toEqual({
+      ok: true,
+      op: 'verify-provenance',
+      outcome: 'complete',
+      stage: 'selected',
+      sha: SHA,
+    })
+  })
+
+  it('accepts the commit when the same text is sent again with a behind or identical status', () => {
+    for (const status of ['behind', 'identical']) {
+      const { code, answer } = cli(GOOD, '--status', status)
+      expect(code, status).toBe(0)
+      expect(answer, status).toEqual({
+        ok: true,
+        op: 'verify-provenance',
+        outcome: 'complete',
+        stage: 'accepted',
+        sha: SHA,
+      })
+    }
+  })
+
+  it('refuses with a reason and a non-zero exit, and carries no sha', () => {
+    const fork = JSON.stringify([
+      { path: 'fork/systematic/.github/workflows/connect.yaml@main', sha: SHA },
+    ])
+    const cases: Array<[string, string[], string]> = [
+      [GOOD, ['--status', 'ahead'], 'provenance-unprovable'],
+      [GOOD, ['--status', 'diverged'], 'provenance-unprovable'],
+      [GOOD, ['--status', ''], 'provenance-unprovable'],
+      ['', [], 'provenance-unprovable'],
+      ['null', [], 'provenance-unprovable'],
+      ['gh: Not Found (HTTP 404)', [], 'provenance-unprovable'],
+      ['[]', [], 'provenance-unprovable'],
+      [fork, [], 'not-a-connect-run'],
+    ]
+    for (const [stdin, args, reason] of cases) {
+      const { code, answer } = cli(stdin, ...args)
+      expect(code, `${stdin} ${args.join(' ')}`).toBe(1)
+      expect(answer).toEqual({
+        ok: false,
+        op: 'verify-provenance',
+        outcome: 'failed',
+        reason,
+      })
+    }
+  })
+
+  it('refuses an argument line it does not know, with a usage exit and nothing judged', () => {
+    for (const rest of [
+      ['--status'],
+      ['behind'],
+      ['--status', 'behind', 'extra'],
+      ['--sha', SHA],
+    ]) {
+      const { code, answer } = cli(GOOD, ...rest)
+      expect(code, rest.join(' ')).toBe(2)
+      expect(answer).toMatchObject({
+        ok: false,
+        op: 'verify-provenance',
+        reason: 'invalid-request',
+      })
+      expect(answer).not.toHaveProperty('sha')
+    }
+  })
+
+  it('does not read stdin as one JSON request: text that is not JSON is judged, not refused as a bad request', () => {
+    const { answer } = cli('not json at all')
+    expect(answer).toMatchObject({ reason: 'provenance-unprovable' })
+  })
+
+  it('takes the request as an object when called directly', () => {
+    expect(
+      runHelperOp('verify-provenance', { referencedWorkflows: GOOD }),
+    ).toEqual({
+      ok: true,
+      body: {
+        ok: true,
+        op: 'verify-provenance',
+        outcome: 'complete',
+        stage: 'selected',
+        sha: SHA,
+      },
+    })
+    for (const bad of [null, 'text', 7, []]) {
+      expect(runHelperOp('verify-provenance', bad).body).toMatchObject({
+        ok: false,
+        reason: 'invalid-request',
+      })
+    }
+    expect(runHelperOp('verify-provenance', {}).body).toMatchObject({
+      ok: false,
+      reason: 'provenance-unprovable',
+    })
+    expect(
+      runHelperOp('verify-provenance', {
+        referencedWorkflows: GOOD,
+        status: 5,
+      }).body,
+    ).toMatchObject({ ok: false, reason: 'provenance-unprovable' })
+  })
+
+  it('reads nothing and writes nothing: no state root, no lock, no path in the answer', () => {
+    const world = buildWorld()
+    const before = snapshotTree(world.home)
+    expect(fs.existsSync(world.stateRoot)).toBe(false)
+    const result = runHelperOp(
+      'verify-provenance',
+      { referencedWorkflows: GOOD, status: 'behind' },
+      world.deps,
+    )
+    expect(result.ok).toBe(true)
+    expect(fs.existsSync(world.stateRoot)).toBe(false)
+    expect(snapshotTree(world.home)).toEqual(before)
+    const text = JSON.stringify(result.body)
+    for (const local of [world.home, world.source, world.target]) {
+      expect(text).not.toContain(local)
+    }
+  })
+
+  it('judges while a run holds the lock, and changes nothing in the state root', () => {
+    const world = buildWorld()
+    fs.mkdirSync(world.stateRoot, { recursive: true, mode: 0o700 })
+    const held = acquireLock(world.stateRoot)
+    expect(held.status).toBe('acquired')
+    const during = snapshotTree(world.stateRoot)
+    expect(
+      runHelperOp(
+        'verify-provenance',
+        { referencedWorkflows: GOOD },
+        world.deps,
+      ).ok,
+    ).toBe(true)
+    expect(snapshotTree(world.stateRoot)).toEqual(during)
+    if (held.status === 'acquired') releaseLock(held.lock)
+  })
+
+  it('never reads the config: an unreadable one changes nothing', () => {
+    const world = buildWorld()
+    fs.writeFileSync(
+      path.join(world.home, '.config', 'opencode', 'systematic.json'),
+      '{ not json',
+    )
+    const lines: string[] = []
+    const code = runConnectHelper({
+      argv: ['verify-provenance'],
+      isTTY: false,
+      deps: world.deps,
+      readRequest: () => GOOD,
+      outputSink: (line) => lines.push(line),
+    })
+    expect(code).toBe(0)
+    expect(JSON.parse(lines[0] ?? '{}')).toMatchObject({ sha: SHA })
+  })
+
+  it('refuses a terminal as stdin, as every other request operation does', () => {
+    const errors: string[] = []
+    const code = runConnectHelper({
+      argv: ['verify-provenance'],
+      isTTY: true,
+      readRequest: () => {
+        throw new Error('stdin must not be read')
+      },
+      errorSink: (line) => errors.push(line),
+    })
+    expect(code).toBe(2)
+    expect(errors.join('\n')).toContain('interactive input is not supported')
+  })
+})
+
 // ── The invocation record of a CI run ──────────────────────────────────────
 
 describe('the invocation record of a CI run', () => {

@@ -759,6 +759,29 @@ jobs:
             fail "render-report failed: ${reason}"
           fi
 
+          # A caller other than Systematic needs every fetch word to name it. A
+          # helper that predates the `repo` field leaves bare words, which resolve
+          # to Systematic and cannot reach the caller's own run, so the job fails
+          # here, before the report is copied, cached or uploaded. The words are
+          # the helper's `fetches` and every fetch line of the rendered body.
+          caller=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          if [ "$caller" != marcusrbrown/systematic ]; then
+            words=$(printf '%s' "$answer" | jq -r '.fetches | arrays | .[] | strings') ||
+              fail "render-report answered with an unreadable fetches list."
+            # The backticks are literal: the pattern matches the markdown code span of a fetch line.
+            # shellcheck disable=SC2016
+            body_words=$(grep -E '^- (Fetch: )?`/ce:connect fetch:' "$XDG_STATE_HOME/systematic/connect/report.md" |
+              sed -n 's/^.*`\/ce:connect fetch:\([^`]*\)`.*$/\1/p' || true)
+            while IFS= read -r word; do
+              [ -n "$word" ] || continue
+              word=$(printf '%s' "$word" | tr '[:upper:]' '[:lower:]')
+              case "$word" in
+                "${caller}:"*) ;;
+                *) fail "The pinned callee commit installs a helper too old to name the calling repository, so its fetch words would resolve to Systematic. Pin a commit of the callee whose SYSTEMATIC_VERSION carries named fetch words." ;;
+              esac
+            done <<< "${words}"$'\n'"${body_words}"
+          fi
+
           mkdir -p "$RUNNER_TEMP/report"
           cp "$XDG_STATE_HOME/systematic/connect/report.md" "$RUNNER_TEMP/report/body.md"
           red=$(printf '%s' "$answer" | jq -r '.red // false')
