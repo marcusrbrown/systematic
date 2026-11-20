@@ -614,6 +614,45 @@ function section(text: string, from: string, to: string): string {
   return text.slice(start, end)
 }
 
+describe('ce:connect decide binds a decision to the digest revision', () => {
+  const step7 = section(skillText, '## Step 7', '## Final line')
+  const decideBlock =
+    /connect\.mjs" decide <<'(JSON_[0-9a-f]+)'\n([\s\S]*?)\n\1\n/.exec(
+      step7,
+    )?.[2] ?? ''
+  const paragraph = step7
+    .split('\n\n')
+    .find((text) => text.startsWith('Always send `revision`'))
+
+  test('sends revision in the decide request, beside the id, status and reason', () => {
+    expect(decideBlock).toContain('"id"')
+    expect(decideBlock).toContain('"status"')
+    expect(decideBlock).toContain('"reason"')
+    expect(decideBlock).toContain('"revision": "<revision>"')
+    expect(decideBlock).not.toMatch(/generation/i)
+  })
+
+  test('takes the value from the Revision line of the candidate, exactly as shown', () => {
+    if (paragraph === undefined) throw new Error('no revision paragraph')
+    expect(paragraph).toMatch(/12-character value on the `Revision:` line/)
+    expect(paragraph).toMatch(/digest/)
+    expect(paragraph).toMatch(/exactly as shown/)
+    expect(paragraph).toMatch(/never one of your own/)
+  })
+
+  test('on stale-revision prints the hint and does not retry', () => {
+    if (paragraph === undefined) throw new Error('no revision paragraph')
+    expect(paragraph).toMatch(/`reason` `stale-revision`/)
+    expect(paragraph).toMatch(/nothing was recorded/i)
+    expect(paragraph).toMatch(/Print its `hint`/)
+    expect(paragraph).toMatch(/do not retry/i)
+  })
+
+  test('does not mention generations any more', () => {
+    expect(skillText).not.toMatch(/generation/i)
+  })
+})
+
 describe('ce:connect rotation across runs', () => {
   const step4 = section(skillText, '## Step 4', '## Step 5')
 

@@ -206,9 +206,11 @@ In interactive mode, offer to record decisions before the final line. For each c
 # Resolve helper scripts relative to this skill's directory.
 SKILL_DIR="<skill directory stated when this skill loads>";
 node "$SKILL_DIR/scripts/connect.mjs" decide <<'JSON_7f3a91'
-{"id": "<candidate id>", "status": "<promoted or rejected>", "reason": "<reason>", "destination": "<path, promoted only>"}
+{"id": "<candidate id>", "status": "<promoted or rejected>", "reason": "<reason>", "destination": "<path, promoted only>", "revision": "<revision>"}
 JSON_7f3a91
 ```
+
+Always send `revision`. It is the 12-character value on the `Revision:` line of that candidate in the digest (and under its title in the `summary`), the one the user decided from. Send it exactly as shown, never one of your own. The helper refuses the decision when the candidate's evidence is no longer the evidence that digest showed, because the user has not seen what changed. In that case the answer is `failed` with `reason` `stale-revision`: nothing was recorded. Print its `hint`, do not retry with another value, and tell the user to read the current digest (a new run writes one) before deciding again.
 
 Print the `finalLine` last, after any decisions.
 
