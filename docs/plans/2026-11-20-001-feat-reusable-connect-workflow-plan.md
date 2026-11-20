@@ -322,7 +322,7 @@ flowchart TB
 - Every item in Approach has a recorded observed value or an explicit "not observable", including which caller content still loads with repo skills off.
 - Nothing from the probe remains in either repository, and no secret value was printed.
 
-- [ ] U1. **`repo-skills` input on the composite**
+- [x] U1. **`repo-skills` input on the composite**
 
 **Goal:** The shared agent composite takes a `repo-skills` input so the connect run can turn repository skills off while every other consumer keeps today's behaviour.
 
@@ -351,7 +351,7 @@ flowchart TB
 - The composite's input tests pass with the new input in the pinned list.
 - `bun run surfaces:affected --run` reports nothing to regenerate for this file, or regenerates and checks what it names.
 
-- [ ] U2. **Callee: `connect.yaml` as a reusable workflow**
+- [x] U2. **Callee: `connect.yaml` as a reusable workflow**
 
 **Goal:** `connect.yaml` runs only when called, takes every setting as an input or named secret, and keeps its four jobs, trust split and state scoped to the calling repository.
 
@@ -402,7 +402,7 @@ flowchart TB
 - `bun run typecheck:all` and `bun run lint` are clean.
 - The workflow's first live proof is U3's first wrapper run, then U7.
 
-- [ ] U3. **Systematic's own wrapper and cutover**
+- [x] U3. **Systematic's own wrapper and cutover**
 
 **Goal:** Systematic's daily sweep runs through a thin wrapper that calls the local callee, with its ledger, cache and open report continuing across the move.
 
@@ -438,7 +438,7 @@ flowchart TB
 - The wrapper suite passes alongside U2's.
 - The first live wrapper run meets every first-run check above, recorded in the change description.
 
-- [ ] U4. **Report renders the named fetch word for non-Systematic callers**
+- [x] U4. **Report renders the named fetch word for non-Systematic callers**
 
 **Goal:** A foreign caller's report shows `fetch:<owner>/<repo>:<run>.<attempt>`; Systematic's report keeps the bare word, byte for byte.
 
@@ -477,7 +477,7 @@ flowchart TB
 - `bun run ce-connect-helper:build` regenerates the bundle, then `bun run surfaces:affected --run` and `bun run surfaces:drift` pass.
 - The golden Systematic report test passes unchanged.
 
-- [ ] U5. **Local `fetch:` with a named repository**
+- [x] U5. **Local `fetch:` with a named repository**
 
 **Goal:** `/ce:connect fetch:<owner>/<repo>:<run>.<attempt>` imports a candidate from an allow-listed caller's run after proving the run called Systematic's reusable workflow; a bare run number keeps meaning Systematic.
 
@@ -524,7 +524,7 @@ flowchart TB
 - The bundle and every touched surface pass `bun run surfaces:drift`.
 - `bun scripts/content-integrity.ts` passes.
 
-- [ ] U6. **Docs: example wrapper, checklist, architecture, privacy, CN-7**
+- [x] U6. **Docs: example wrapper, checklist, architecture, privacy, CN-7**
 
 **Goal:** A reader can wire the next repository by copying a commented wrapper and working a checklist, and the trust limits are stated where an operator will read them.
 
