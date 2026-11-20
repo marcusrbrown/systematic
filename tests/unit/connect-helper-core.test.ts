@@ -2524,6 +2524,64 @@ describe('renderDigest: project lines', () => {
   })
 })
 
+describe('the revision of a candidate', () => {
+  const DIGEST = '/state/runs/20261107T000000Z-abcd1234/digest.md'
+  const RUN_RECORD = '/state/runs/20261107T000000Z-abcd1234/run.json'
+  const ID = 'a'.repeat(64)
+  const REVISION = '0123456789ab'
+
+  function candidates(revision?: string): DigestModel['candidates'] {
+    const world = buildWorld()
+    const base = valid(checkCandidate(lesson(world), world.ctx))
+    return [
+      {
+        id: ID,
+        standing: 'new',
+        possibleMatches: [],
+        candidate: base,
+        ...(revision === undefined ? {} : { revision }),
+      },
+    ]
+  }
+
+  it('shows the revision of a candidate in its digest block, under the id', () => {
+    const text = renderDigest(digestModel({ candidates: candidates(REVISION) }))
+    const lines = text.split('\n')
+    expect(lines).toContain(`- Revision: ${REVISION}`)
+    expect(lines.indexOf(`- Revision: ${REVISION}`)).toBeGreaterThan(
+      lines.findIndex((line) => line.startsWith('- Id: ')),
+    )
+  })
+
+  it('leaves the digest as it was for a candidate that carries no revision', () => {
+    expect(
+      renderDigest(digestModel({ candidates: candidates() })),
+    ).not.toContain('Revision')
+  })
+
+  it('shows the revision of a candidate under its title in the summary, after its handoff line', () => {
+    const text = renderSummary(
+      digestModel({ candidates: candidates(REVISION) }),
+      DIGEST,
+      RUN_RECORD,
+    )
+    const lines = text.split('\n')
+    const token = lines.indexOf(`candidate:${RUN_RECORD} candidate-id:${ID}`)
+    expect(token).toBeGreaterThan(0)
+    expect(lines[token + 1]).toBe(`Revision: ${REVISION}`)
+  })
+
+  it('leaves the summary as it was for a candidate that carries no revision', () => {
+    expect(
+      renderSummary(
+        digestModel({ candidates: candidates() }),
+        DIGEST,
+        RUN_RECORD,
+      ),
+    ).not.toContain('Revision')
+  })
+})
+
 describe('renderSummary: a code-mismatch candidate', () => {
   function summaryOf(
     world: World,

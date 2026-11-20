@@ -129,6 +129,7 @@ import {
   readRunRecord,
   recordsEvidenceOf,
   releaseLock,
+  revisionOfCandidate,
   rewriteRunFiles,
   writeInvocationRecord,
 } from './lib/connect-state.js'
@@ -599,6 +600,8 @@ interface AcceptedCandidate {
   readonly refreshPointer?: string
   readonly possibleMatches: readonly string[]
   readonly candidate: ValidCandidate
+  /** The revision the ledger gives the candidate once the run is written. Absent for an import, which has no decision step. */
+  readonly revision?: string
   /** The checkout HEAD each `counterevidence` item was recorded at, for an import. */
   readonly evidenceHeads?: ReadonlyArray<string | undefined>
 }
@@ -1670,10 +1673,12 @@ function noteDropped(
   result.droppedCandidates.push(nameDropped(family, raw, reason))
 }
 
-function standingOf(
-  outcome: CandidateStanding,
-):
-  | { standing: Standing; refreshPointer?: string; possible: string[] }
+function standingOf(outcome: CandidateStanding):
+  | {
+      standing: Standing
+      refreshPointer?: string
+      possible: string[]
+    }
   | 'skip' {
   if (outcome.standing === 'new') {
     return { standing: 'new', possible: [...outcome.possibleMatches] }
@@ -1750,6 +1755,7 @@ function classifyAgainstLedger(
       : { refreshPointer: standing.refreshPointer }),
     possibleMatches,
     candidate,
+    revision: revisionOfCandidate(record),
   })
 }
 
@@ -1948,6 +1954,7 @@ function validateResponse(
       ...(item.refreshPointer === undefined
         ? {}
         : { refreshPointer: item.refreshPointer }),
+      ...(item.revision === undefined ? {} : { revision: item.revision }),
     })),
     recorded: classified.recorded.map((item) => ({
       pointer: item.pointer,
@@ -2202,6 +2209,7 @@ function buildCandidateBlock(accepted: readonly AcceptedCandidate[]): Json {
       sources: item.candidate.sources,
       targetEvidence: item.candidate.targetEvidence,
       counterevidence: item.candidate.counterevidence,
+      ...(item.revision === undefined ? {} : { revision: item.revision }),
     })),
   }
 }
@@ -2220,6 +2228,7 @@ function digestModel(
       : { refreshPointer: item.refreshPointer }),
     possibleMatches: item.possibleMatches,
     candidate: item.candidate,
+    ...(item.revision === undefined ? {} : { revision: item.revision }),
   }))
   const projects: DigestProject[] = snapshot.projects.map((project) => ({
     name: project.name,
@@ -2555,19 +2564,26 @@ function publishRunOp(
 
 // ── decide and ledger ───────────────────────────────────────────────────────
 
+/** The revision a digest showed: 12 lowercase hex characters. */
+function isRevision(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{12}$/.test(value)
+}
+
 function parseDecision(request: unknown): DecideInput | undefined {
   if (!isRecord(request)) return undefined
-  const { id, status, reason, destination } = request
+  const { id, status, reason, destination, revision } = request
   if (typeof id !== 'string' || typeof reason !== 'string') return undefined
   if (status !== 'promoted' && status !== 'rejected') return undefined
   if (destination !== undefined && typeof destination !== 'string') {
     return undefined
   }
+  if (revision !== undefined && !isRevision(revision)) return undefined
   return {
     id,
     status,
     reason,
     ...(destination === undefined ? {} : { destination }),
+    ...(revision === undefined ? {} : { revision }),
   }
 }
 
@@ -2593,6 +2609,11 @@ function decisionResult(
       ok: false,
       body: { ok: false, op: 'decide', outcome: 'busy', reason: result.reason },
     }
+  }
+  if (result.reason === 'stale-revision') {
+    return failure('decide', result.reason, {
+      hint: 'The candidate has other evidence than the digest you decided from. Nothing was recorded. Read the current digest or run again, then decide against the revision it shows.',
+    })
   }
   return failure('decide', result.reason)
 }
@@ -3496,6 +3517,7 @@ function renderReportOp(request: unknown, deps: HelperDeps): HelperResult {
     open: result.open,
     shown: result.shown,
     hidden: result.hidden,
+    unverified: result.unverified,
     fresh: result.fresh,
     fetches: result.fetches,
     outcome: result.outcome,

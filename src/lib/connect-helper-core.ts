@@ -1546,6 +1546,13 @@ export interface DigestCandidate {
   readonly possibleMatches: readonly string[]
   readonly candidate: ValidCandidate
   /**
+   * The revision the ledger gives the candidate once the run is written: 12 hex
+   * characters of a hash of the fingerprints a decision reviews. A decision
+   * sends it back, so one made from a digest of other evidence is refused. Left
+   * out when the digest has none to show.
+   */
+  readonly revision?: string
+  /**
    * The checkout HEAD each `counterevidence` item was recorded at, in the same
    * order. An import sets it, because it cannot find an item's HEAD by the item's
    * local root: two recorded checkouts can map to one local root. An entry is
@@ -1766,6 +1773,13 @@ function headsOf(projects: readonly DigestProject[]): Map<string, string> {
   return heads
 }
 
+/** The revision of a candidate as one line, when it has one. */
+function revisionLines(item: DigestCandidate, prefix: string): string[] {
+  return item.revision === undefined
+    ? []
+    : [`${prefix}Revision: ${item.revision}`]
+}
+
 export function renderCandidate(
   item: DigestCandidate,
   index: number,
@@ -1783,6 +1797,7 @@ export function renderCandidate(
       : [`- Reason: ${candidate.reason}`]),
     `- Next step: ${candidate.nextStep}`,
     `- Status: candidate`,
+    ...revisionLines(item, '- '),
   ]
   if (item.refreshPointer !== undefined) {
     out.push(`- Refresh pointer: ${inline(item.refreshPointer)}`)
@@ -2029,6 +2044,7 @@ function candidateLines(model: DigestModel, runRecordPath: string): string[] {
     const label = reason === undefined ? kind : `${kind} (${reason})`
     out.push(quote(`${label}: ${title}`))
     out.push(handoffLine(item, runRecordPath, pasteable))
+    out.push(...revisionLines(item, ''))
   }
   const promotesLesson = titles.some(
     (item) =>

@@ -33,6 +33,8 @@ import {
   readLedger,
   recordsEvidenceOf,
   releaseLock,
+  revisionOf,
+  revisionOfCandidate,
   rewriteRunFiles,
   writeInvocationRecord,
 } from '../../src/lib/connect-state.js'
@@ -1668,9 +1670,15 @@ describe('a decided code-mismatch candidate', () => {
       s.publish('run-2', [mismatch({ evidence: [B] })])
       const [after] = ledgerEntries(s.root)
       expect(after?.evidence).toEqual([B])
-      expect({ ...after, evidence: undefined }).toEqual({
+      // The revision follows the evidence it covers; nothing else changes.
+      expect(after?.revision).toBe(
+        revisionOfCandidate(mismatch({ evidence: [B] })),
+      )
+      expect(after?.revision).not.toBe(before?.revision)
+      expect({ ...after, evidence: undefined, revision: undefined }).toEqual({
         ...before,
         evidence: undefined,
+        revision: undefined,
       })
     })
 
@@ -2283,6 +2291,383 @@ describe('decideLedgerEntry', () => {
         options,
       ),
     ).toMatchObject({ status: 'decided', entry: { status: 'rejected' } })
+  })
+})
+
+describe('the revision of a ledger entry', () => {
+  const changed = candidate({
+    sources: [
+      { role: 'solution', path: 'docs/solutions/a.md', fingerprint: 'bbb' },
+    ],
+  })
+  const changedAgain = candidate({
+    sources: [
+      { role: 'solution', path: 'docs/solutions/a.md', fingerprint: 'ccc' },
+    ],
+  })
+  const HEX12 = /^[0-9a-f]{12}$/
+
+  let runNumber = 0
+
+  function options(s: Session): LockOptions {
+    return {
+      pid: 7002,
+      processes: fakeProcesses({ 7002: 'd', 7001: 'self' }).table,
+      now: () => s.clock.now,
+    }
+  }
+
+  function opened(): { s: Session; id: string } {
+    const s = session()
+    s.publish('run-1', [candidate()])
+    return { s, id: ledgerEntries(s.root)[0]?.id ?? '' }
+  }
+
+  /** Settle the entry, then reopen it by changing the learning. */
+  function reopen(s: Session, id: string, again: CandidateRecord): void {
+    decideLedgerEntry(
+      s.root,
+      { id, status: 'rejected', reason: 'not useful' },
+      options(s),
+    )
+    runNumber += 1
+    s.publish(`run-r${runNumber}`, [again])
+    s.clock.now += MINUTE
+  }
+
+  const revisionIn = (s: Session) => ledgerEntries(s.root)[0]?.revision
+
+  it('stores the revision of what a new entry was proposed with, 12 lowercase hex characters', () => {
+    const { s } = opened()
+    expect(revisionIn(s)).toMatch(HEX12)
+    expect(revisionIn(s)).toBe(revisionOfCandidate(candidate()))
+  })
+
+  it('hashes the source, target-evidence and recorded-evidence fingerprints, and nothing else', () => {
+    const base = revisionOfCandidate(candidate())
+    // Each of the three reviewed inputs changes it.
+    expect(
+      revisionOfCandidate(
+        candidate({
+          sources: [
+            {
+              role: 'solution',
+              path: 'docs/solutions/a.md',
+              fingerprint: 'zzz',
+            },
+          ],
+        }),
+      ),
+    ).not.toBe(base)
+    expect(
+      revisionOfCandidate(
+        candidate({
+          targetEvidence: [{ path: 'src/x.ts', fingerprint: 't9' }],
+        }),
+      ),
+    ).not.toBe(base)
+    expect(
+      revisionOfCandidate(
+        candidate({
+          evidence: [{ project: 'bbbbbbbbbbbb', path: 'f', fingerprint: 'E1' }],
+        }),
+      ),
+    ).not.toBe(base)
+    // What is not reviewed does not: the title-side fields, the rule, the order.
+    expect(revisionOfCandidate(candidate({ ruleId: 'rule-other' }))).toBe(base)
+    expect(
+      revisionOfCandidate(
+        candidate({
+          sources: [
+            { role: 'solution', path: 'docs/solutions/b.md', fingerprint: 'q' },
+            {
+              role: 'solution',
+              path: 'docs/solutions/a.md',
+              fingerprint: 'aaa',
+            },
+          ],
+        }),
+      ),
+    ).toBe(
+      revisionOfCandidate(
+        candidate({
+          sources: [
+            {
+              role: 'solution',
+              path: 'docs/solutions/a.md',
+              fingerprint: 'aaa',
+            },
+            { role: 'solution', path: 'docs/solutions/b.md', fingerprint: 'q' },
+          ],
+        }),
+      ),
+    )
+  })
+
+  it('gives a reopened entry the revision of its new content, and the same content the same revision', () => {
+    const { s, id } = opened()
+    const first = revisionIn(s)
+    reopen(s, id, changed)
+    const second = revisionIn(s)
+    expect(second).toBe(revisionOfCandidate(changed))
+    expect(second).not.toBe(first)
+    // Back to the first content: the first revision, not a new number.
+    reopen(s, id, candidate())
+    expect(revisionIn(s)).toBe(first)
+  })
+
+  it('keeps the revision through a decision and when a run publishes the entry unchanged', () => {
+    const { s, id } = opened()
+    reopen(s, id, changed)
+    const revision = revisionIn(s)
+    expect(
+      publishedOutcomes(s.publish('run-same', [changed])).map(
+        (o) => o.standing,
+      ),
+    ).toEqual(['suppressed'])
+    expect(revisionIn(s)).toBe(revision)
+    decide(s, id, 'promoted', { destination: 'docs/solutions/x.md' })
+    expect(ledgerEntries(s.root)[0]).toMatchObject({
+      status: 'promoted',
+      revision,
+    })
+  })
+
+  it('recomputes the revision when an open entry takes the evidence a later run cites, so a decision from the earlier digest is refused', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const [before] = ledgerEntries(s.root)
+    if (before === undefined) throw new Error('no entry')
+    const earlier = revisionOf(before)
+    // The same files, cited differently: the entry takes the new set and stays suppressed.
+    const other = mismatch({
+      evidence: [
+        { project: EVIDENCE_PROJECT, path: 'Caddyfile', fingerprint: 'E1' },
+        { project: EVIDENCE_PROJECT, path: 'Extra', fingerprint: 'X1' },
+      ],
+    })
+    expect(
+      publishedOutcomes(
+        s.publish(
+          'run-2',
+          [other],
+          undefined,
+          inventory({ [EVIDENCE_KEY]: present('E1') }),
+        ),
+      ).map((o) => o.standing),
+    ).toEqual(['suppressed'])
+    const [after] = ledgerEntries(s.root)
+    expect(after?.evidence).toHaveLength(2)
+    // What a digest of this evidence would show.
+    expect(after?.revision).toBe(revisionOfCandidate(other))
+    expect(after?.revision).not.toBe(earlier)
+    // A decision from the digest of the earlier evidence is refused, and the entry stays open.
+    const id = before.id
+    expect(
+      decideLedgerEntry(
+        s.root,
+        { id, status: 'rejected', reason: 'old digest', revision: earlier },
+        options(s),
+      ),
+    ).toEqual({ status: 'failed', reason: 'stale-revision' })
+    expect(ledgerEntries(s.root)[0]).toMatchObject({ status: 'candidate' })
+  })
+
+  it('records no evidence, and a new revision, when an open entry is published again as an evidence-free investigation', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const [before] = ledgerEntries(s.root)
+    if (before === undefined) throw new Error('no entry')
+    expect(before.evidence).toHaveLength(1)
+    const id = before.id
+    const earlier = revisionOf(before)
+
+    const bare = mismatch({ evidence: [] })
+    expect(
+      publishedOutcomes(
+        s.publish(
+          'run-2',
+          [bare],
+          undefined,
+          inventory({ [EVIDENCE_KEY]: present('E1') }),
+        ),
+      ).map((o) => o.standing),
+    ).toEqual(['suppressed'])
+    const [after] = ledgerEntries(s.root)
+    // The entry no longer watches the files it recorded.
+    expect(after).not.toHaveProperty('evidence')
+    expect(after?.revision).toBe(revisionOfCandidate(bare))
+    expect(after?.revision).not.toBe(earlier)
+    // So a decision from the digest of the evidence it had is refused, and the entry stays open.
+    expect(
+      decideLedgerEntry(
+        s.root,
+        { id, status: 'rejected', reason: 'old digest', revision: earlier },
+        options(s),
+      ),
+    ).toEqual({ status: 'failed', reason: 'stale-revision' })
+    expect(ledgerEntries(s.root)[0]).toMatchObject({ status: 'candidate' })
+  })
+
+  it('recomputes the revision of an entry written before revisions when a run re-cites its evidence', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const file = path.join(s.root, 'ledger.json')
+    const ledger = JSON.parse(readFileText(file)) as {
+      entries: Array<Record<string, unknown>>
+    }
+    for (const entry of ledger.entries) delete entry.revision
+    fs.writeFileSync(file, JSON.stringify(ledger))
+    const [before] = ledgerEntries(s.root)
+    if (before === undefined) throw new Error('no entry')
+    const other = mismatch({
+      evidence: [
+        { project: EVIDENCE_PROJECT, path: 'Caddyfile', fingerprint: 'E1' },
+        { project: EVIDENCE_PROJECT, path: 'Extra', fingerprint: 'X1' },
+      ],
+    })
+    s.publish(
+      'run-2',
+      [other],
+      undefined,
+      inventory({ [EVIDENCE_KEY]: present('E1') }),
+    )
+    const [after] = ledgerEntries(s.root)
+    expect(after?.revision).toBe(revisionOfCandidate(other))
+    expect(after?.revision).not.toBe(revisionOf(before))
+  })
+
+  it('leaves the revision alone when a run cites the same evidence again', () => {
+    const s = session()
+    s.publish('run-1', [mismatch()])
+    const [before] = ledgerEntries(s.root)
+    s.publish(
+      'run-2',
+      [mismatch()],
+      undefined,
+      inventory({ [EVIDENCE_KEY]: present('E1') }),
+    )
+    expect(ledgerEntries(s.root)[0]?.revision).toBe(before?.revision)
+  })
+
+  it('reads an entry with no stored revision as the revision of its fields', () => {
+    const { s, id } = opened()
+    const file = path.join(s.root, 'ledger.json')
+    const ledger = JSON.parse(readFileText(file)) as {
+      entries: Array<Record<string, unknown>>
+    }
+    for (const entry of ledger.entries) delete entry.revision
+    fs.writeFileSync(file, JSON.stringify(ledger))
+    const [entry] = ledgerEntries(s.root)
+    if (entry === undefined) throw new Error('no entry')
+    expect(revisionOf(entry)).toBe(revisionOfCandidate(candidate()))
+    expect(
+      decideLedgerEntry(
+        s.root,
+        {
+          id,
+          status: 'rejected',
+          reason: 'now',
+          revision: revisionOfCandidate(candidate()),
+        },
+        options(s),
+      ),
+    ).toMatchObject({ status: 'decided' })
+  })
+
+  it('applies a decision made against the current revision', () => {
+    const { s, id } = opened()
+    reopen(s, id, changed)
+    expect(
+      decideLedgerEntry(
+        s.root,
+        {
+          id,
+          status: 'rejected',
+          reason: 'now',
+          revision: revisionOfCandidate(changed),
+        },
+        options(s),
+      ),
+    ).toMatchObject({ status: 'decided', entry: { id, status: 'rejected' } })
+  })
+
+  it('refuses a decision made against another revision and writes nothing', () => {
+    const { s, id } = opened()
+    const first = revisionOfCandidate(candidate())
+    reopen(s, id, changed)
+    const before = readFileText(path.join(s.root, 'ledger.json'))
+    for (const revision of [first, revisionOfCandidate(changedAgain)]) {
+      expect(
+        decideLedgerEntry(
+          s.root,
+          { id, status: 'rejected', reason: 'old', revision },
+          options(s),
+        ),
+      ).toEqual({ status: 'failed', reason: 'stale-revision' })
+    }
+    expect(readFileText(path.join(s.root, 'ledger.json'))).toBe(before)
+    expect(ledgerEntries(s.root)[0]).toMatchObject({ status: 'candidate' })
+    expect(fs.existsSync(path.join(s.root, 'lock'))).toBe(false)
+  })
+
+  it('decides regardless of revision when the caller names none', () => {
+    const { s, id } = opened()
+    reopen(s, id, changed)
+    expect(
+      decideLedgerEntry(
+        s.root,
+        { id, status: 'rejected', reason: 'by hand' },
+        options(s),
+      ),
+    ).toMatchObject({ status: 'decided' })
+  })
+
+  it('refuses a revision that is not 12 lowercase hex characters', () => {
+    const { s, id } = opened()
+    for (const revision of [
+      '',
+      'abc',
+      'ABCDEF123456',
+      'abcdef12345g',
+      'abcdef1234567',
+    ]) {
+      expect(
+        decideLedgerEntry(
+          s.root,
+          { id, status: 'rejected', reason: 'x', revision },
+          options(s),
+        ),
+      ).toEqual({ status: 'failed', reason: 'invalid-input' })
+    }
+  })
+
+  it('refuses a ledger whose revision is not 12 lowercase hex characters', () => {
+    const { s } = opened()
+    const file = path.join(s.root, 'ledger.json')
+    const ledger = JSON.parse(readFileText(file)) as {
+      entries: Array<Record<string, unknown>>
+    }
+    for (const bad of ['', 'ABCDEF123456', 'abc', 7, null]) {
+      const [entry] = ledger.entries
+      if (entry === undefined) throw new Error('no entry')
+      fs.writeFileSync(
+        file,
+        JSON.stringify({ ...ledger, entries: [{ ...entry, revision: bad }] }),
+      )
+      expect(readLedger(s.root).status).toBe('unreadable')
+    }
+  })
+
+  it('writes a ledger the shipped reader still loads, new and after a reopen', () => {
+    const { s, id } = opened()
+    const file = path.join(s.root, 'ledger.json')
+    expect(shippedReaderAccepts(readFileText(file))).toBe(true)
+    reopen(s, id, changed)
+    reopen(s, id, changedAgain)
+    const written = readFileText(file)
+    expect(JSON.parse(written).entries[0].revision).toMatch(HEX12)
+    expect(shippedReaderAccepts(written)).toBe(true)
   })
 })
 

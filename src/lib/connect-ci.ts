@@ -12,10 +12,19 @@
  *
  * A decision comes from one place: a checkbox line the renderer generated,
  * inside the single delimited section, outside any code fence, whose id is in
- * the manifest of the report that was read and whose candidate is still open.
+ * the manifest of the report that was read, whose candidate is still open and
+ * whose revision is the one the line was generated for.
  * The manifest of a report is stored under the hash its body carries, so a
  * report that was posted keeps its own manifest even when a later render
  * failed to post or posted something else.
+ *
+ * Every line names the revision of its candidate as `:r<12 hex>`: a hash of
+ * the fingerprints a decision reviews, so it changes when the candidate's
+ * learning, target or evidence does, and the same content always has the same
+ * revision. A tick made against another revision is skipped as stale and never
+ * recorded, so it cannot settle a candidate nobody has decided. A line without
+ * one is from a report before revisions and is skipped as `unversioned`: the
+ * operator ticks the revision-tagged box of the current report instead.
  *
  * Import rule: node builtins and the `connect-*` modules. The `ce:connect`
  * helper bundles this module, so it must never import zod, `config.ts` or
@@ -53,12 +62,16 @@ import {
   readLedger,
   readRunRecord,
   releaseLock,
+  revisionOf,
 } from './connect-state.js'
 
 // ── Format ──────────────────────────────────────────────────────────────────
 
 /** A report body is never longer than this many characters. */
 export const REPORT_MAX_CHARS = 60_000
+
+/** The most candidate ids the section for rows with no verified details names; the rest are counted. */
+export const MAX_UNVERIFIED_IDS = 20
 
 /** The manifests kept: the newest reports a person can still be looking at. */
 export const MANIFESTS_KEPT = 14
@@ -91,18 +104,24 @@ export function manifestMarker(hash: string): string {
   return `<!-- connect-manifest:${hash} -->`
 }
 
-/** One generated checkbox line. The marker carries the id; nothing else on the line is read. */
+/**
+ * One generated checkbox line. The marker carries the id and the revision as
+ * `:r<12 hex>`; nothing else on the line is read. A line made without a
+ * revision is the one reports used before revisions.
+ */
 export function decisionLine(
   id: string,
   status: DecisionStatus,
   ticked: boolean,
+  revision?: string,
 ): string {
-  return `- [${ticked ? 'x' : ' '}] ${STATUS_LABEL[status]} <!-- connect-decision:${status}:${id} -->`
+  const suffix = revision === undefined ? '' : `:r${revision}`
+  return `- [${ticked ? 'x' : ' '}] ${STATUS_LABEL[status]} <!-- connect-decision:${status}:${id}${suffix} -->`
 }
 
 const MANIFEST_LINE = /^<!-- connect-manifest:([0-9a-f]{16}) -->[ \t]*$/
 const DECISION_LINE =
-  /^- \[([ xX])\] (Promoted|Rejected) <!-- connect-decision:(promoted|rejected):([0-9a-f]{64}) -->[ \t]*$/
+  /^- \[([ xX])\] (Promoted|Rejected) <!-- connect-decision:(promoted|rejected):([0-9a-f]{64})(?::r([0-9a-f]{12}))? -->[ \t]*$/
 const FENCE_LINE = /^ {0,3}(`{3,}|~{3,})(.*)$/
 
 // ── Small helpers ───────────────────────────────────────────────────────────
@@ -262,6 +281,8 @@ export interface ParsedBox {
   readonly id: string
   readonly status: DecisionStatus
   readonly ticked: boolean
+  /** The revision the line names; absent for a line from before revisions. */
+  readonly revision: string | undefined
 }
 
 export interface ParsedBody {
@@ -320,13 +341,13 @@ function inFence(scan: Scan, line: string): boolean {
 function boxOf(line: string): ParsedBox | undefined {
   const match = DECISION_LINE.exec(line)
   if (match === null) return undefined
-  const [, mark, label, status, id] = match
+  const [, mark, label, status, id, named] = match
   if (id === undefined || label === undefined || mark === undefined) {
     return undefined
   }
   if (status !== 'promoted' && status !== 'rejected') return undefined
   if (STATUS_LABEL[status] !== label) return undefined
-  return { id, status, ticked: mark !== ' ' }
+  return { id, status, ticked: mark !== ' ', revision: named }
 }
 
 function scanLine(scan: Scan, line: string): void {
@@ -486,6 +507,14 @@ interface Payload {
   /** The GitHub run and attempt whose artifact holds the candidate's evidence. */
   readonly runId: string
   readonly attempt: string
+  /**
+   * The revision this text describes: what the run that proposed it recorded.
+   * Absent in a store from before revisions, and then no box is rendered for
+   * it until a run stores text with a revision. A box is rendered only when it
+   * equals the entry's revision, so a proposal that was never committed can
+   * never sit above another revision's box.
+   */
+  readonly revision?: string
 }
 
 type PayloadText = Pick<
@@ -608,6 +637,18 @@ function payloadText(
   }
 }
 
+const REVISION = /^[0-9a-f]{12}$/
+
+function revisionField(value: unknown): { revision?: string } {
+  const revision = revisionFrom(value)
+  return revision === undefined ? {} : { revision }
+}
+
+/** A revision read from a store or a run record: 12 lowercase hex characters, else none. */
+function revisionFrom(value: unknown): string | undefined {
+  return typeof value === 'string' && REVISION.test(value) ? value : undefined
+}
+
 function payloadFromStore(raw: unknown): Payload | undefined {
   if (!isRecord(raw) || !isCandidateId(raw.id)) return undefined
   const text = payloadText(raw, new Map(), new Map())
@@ -623,6 +664,7 @@ function payloadFromStore(raw: unknown): Payload | undefined {
       : {}),
     runId: raw.runId,
     attempt: raw.attempt,
+    ...revisionField(raw.revision),
   }
 }
 
@@ -660,6 +702,7 @@ function payloadStoreText(payloads: readonly Payload[]): string {
       : { firstShown: payload.firstShown }),
     runId: payload.runId,
     attempt: payload.attempt,
+    ...(payload.revision === undefined ? {} : { revision: payload.revision }),
   }))
   return `${JSON.stringify({ version: 1, payloads: stored }, null, 2)}\n`
 }
@@ -888,9 +931,13 @@ export type RenderResult =
       readonly bodyFile: string
       /** The hash in the body's manifest marker. */
       readonly manifest: string
+      /** Every open candidate, listed or not. */
       readonly open: number
       readonly shown: number
+      /** The listable candidates the size cap left out. */
       readonly hidden: number
+      /** The open candidates with no bundle for their live revision, counted in one section. */
+      readonly unverified: number
       /** Candidates listed for the first time on this date. */
       readonly fresh: number
       /** The `<run>.<attempt>` fetch words of the listed candidates, in the order they appear. */
@@ -915,23 +962,26 @@ export type RenderResult =
         | 'write-failed'
     }
 
-interface Row {
+export interface Row {
   readonly id: string
-  readonly payload: Payload | undefined
+  readonly payload: Payload
   readonly isNew: boolean
   readonly block: string
 }
 
-interface BodyInput {
+export interface BodyInput {
   readonly outcome: ReportOutcome
   readonly facts: readonly string[]
   readonly cacheRestored: boolean
   /** The report was rendered without the lock, so no payload or manifest was recorded. */
   readonly stateUpdated: boolean
+  /** The open entries that have a bundle for their live revision: the only rows with boxes. */
   readonly rows: readonly Row[]
+  /** The ids of the other open entries, oldest first. */
+  readonly unverified: readonly string[]
 }
 
-interface Assembled {
+export interface Assembled {
   readonly body: string
   readonly ids: readonly string[]
   readonly hash: string
@@ -986,24 +1036,29 @@ function fetchWord(payload: Payload): string {
 
 function blockOf(
   position: number,
-  id: string,
-  payload: Payload | undefined,
+  entry: LedgerEntry,
+  revision: string,
+  payload: Payload,
   isNew: boolean,
 ): string {
-  const lines = [`### Candidate ${position}${isNew ? ' (new)' : ''}`, '']
-  if (payload === undefined) {
-    lines.push(`Details unavailable for \`${id}\`.`)
-  } else {
-    lines.push(
-      `- Fetch: \`/ce:connect fetch:${fetchWord(payload)}\` (run ${payload.runId}, attempt ${payload.attempt})`,
-      '',
-      fenceText(factsOf(id, payload)),
-    )
-  }
+  const { id } = entry
+  const marks = [
+    ...(isNew ? ['new'] : []),
+    ...(entry.reopened === undefined ? [] : ['reopened']),
+  ]
+  const lines = [
+    `### Candidate ${position}${marks.length === 0 ? '' : ` (${marks.join(', ')})`}`,
+    '',
+  ]
+  lines.push(
+    `- Fetch: \`/ce:connect fetch:${fetchWord(payload)}\` (run ${payload.runId}, attempt ${payload.attempt})`,
+    '',
+    fenceText(factsOf(id, payload)),
+  )
   lines.push(
     '',
-    decisionLine(id, 'promoted', false),
-    decisionLine(id, 'rejected', false),
+    decisionLine(id, 'promoted', false, revision),
+    decisionLine(id, 'rejected', false, revision),
     '',
   )
   return lines.join('\n')
@@ -1028,7 +1083,6 @@ function fetchLines(rows: readonly Row[]): {
 } {
   const byFetch = new Map<string, number[]>()
   rows.forEach((row, index) => {
-    if (row.payload === undefined) return
     const word = fetchWord(row.payload)
     const list = byFetch.get(word) ?? []
     list.push(index + 1)
@@ -1064,7 +1118,44 @@ function hiddenLine(hidden: number): string {
   return `**${hidden} open ${noun} not shown.** They stay open and appear here, oldest first, as the ones above are settled.`
 }
 
-function assemble(input: BodyInput, shown: number): Assembled {
+/**
+ * The one section for open entries with no bundle for their live revision.
+ * They have no boxes, so they are only counted, and up to `named` ids are
+ * listed, oldest first, with the rest as `and N more`. With `named` at 0 it is
+ * the count alone. It is bounded, so it can be measured whole and the rows
+ * fitted into what it leaves.
+ */
+function unverifiedSection(ids: readonly string[], named: number): string[] {
+  if (ids.length === 0) return []
+  const listed = ids.slice(0, named).map((id) => `\`${id}\``)
+  const more = ids.length - listed.length
+  const count =
+    ids.length === 1
+      ? '1 open candidate has'
+      : `${ids.length} open candidates have`
+  const list =
+    listed.length === 0
+      ? ''
+      : ` Oldest first: ${listed.join(', ')}${more > 0 ? `, and ${more} more` : ''}.`
+  return [
+    UNVERIFIED_HEADING,
+    '',
+    `${count} no verified details for the current revision, so there is nothing to tick.${list}`,
+    '',
+  ]
+}
+
+const UNVERIFIED_HEADING = '## No verified details'
+
+/**
+ * The report with its first `shown` rows and the section naming `named`
+ * unverified ids. Exported for the tests of the size budget.
+ */
+export function assembleReport(
+  input: BodyInput,
+  shown: number,
+  named: number,
+): Assembled {
   const rows = input.rows.slice(0, shown)
   const ids = rows.map((row) => row.id)
   const hash = manifestHash(ids)
@@ -1093,22 +1184,50 @@ function assemble(input: BodyInput, shown: number): Assembled {
   for (const row of rows) out.push(row.block)
   out.push(DECISIONS_END, '')
   if (shown < open) out.push(hiddenLine(open - shown), '')
+  out.push(...unverifiedSection(input.unverified, named))
   return { body: out.join('\n'), ids, hash, fetches: fetch.fetches, fresh }
 }
 
-/** The most candidates whose report fits the cap: the oldest, whole, and never a block cut. */
-function fit(input: BodyInput): number {
+/** How many rows fit, oldest first and whole, when the section names `named` ids. */
+function rowsThatFit(input: BodyInput, named: number): number {
   const total = input.rows.length
-  if (assemble(input, total).body.length <= REPORT_MAX_CHARS) return total
+  const fits = (count: number): boolean =>
+    assembleReport(input, count, named).body.length <= REPORT_MAX_CHARS
+  if (fits(total)) return total
   // With a hidden line the length only grows with the count, so a search works.
   let low = 0
   let high = total - 1
   while (low < high) {
     const middle = Math.ceil((low + high) / 2)
-    if (assemble(input, middle).body.length <= REPORT_MAX_CHARS) low = middle
+    if (fits(middle)) low = middle
     else high = middle - 1
   }
   return low
+}
+
+/**
+ * The most rows the cap leaves room for beside the section for the rows that
+ * cannot be settled, and how many of those ids the section names. The section
+ * is bounded and counts against the cap like everything else, so the whole
+ * body stays under `REPORT_MAX_CHARS`, which is what leaves the workflow room
+ * for the one line it may add. The full id list is tried first; when it would
+ * leave no room for the oldest row, the list is halved down to the count alone.
+ * Exported for the tests of the size budget.
+ */
+export function fitReport(input: BodyInput): {
+  readonly shown: number
+  readonly named: number
+} {
+  const wanted = Math.min(1, input.rows.length)
+  for (
+    let named = Math.min(MAX_UNVERIFIED_IDS, input.unverified.length);
+    named > 0;
+    named = Math.floor(named / 2)
+  ) {
+    const shown = rowsThatFit(input, named)
+    if (shown >= wanted) return { shown, named }
+  }
+  return { shown: rowsThatFit(input, 0), named: 0 }
 }
 
 function openOldestFirst(entries: readonly LedgerEntry[]): LedgerEntry[] {
@@ -1121,7 +1240,12 @@ function openOldestFirst(entries: readonly LedgerEntry[]): LedgerEntry[] {
     })
 }
 
-/** Payloads this run proposes for candidates the ledger shows open. */
+/**
+ * The bundles this run proposes for candidates the ledger shows open. A bundle
+ * is the text, the revision and the run and attempt that hold the evidence,
+ * all of the one proposal: this run's record is the only place its parts come
+ * from together.
+ */
 function proposed(
   run: RunSummary | undefined,
   open: ReadonlySet<string>,
@@ -1144,14 +1268,20 @@ function proposed(
       ...(repo === undefined ? {} : { repo }),
       runId: request.runId,
       attempt: request.attempt,
+      ...revisionField(raw.revision),
     })
   }
   return out
 }
 
 /**
- * The payload of each open candidate: this run's text when it proposes the
- * candidate, otherwise the stored text. A settled candidate has none.
+ * The bundle kept for each open candidate: whichever of this run's proposal
+ * and the stored one has the revision the ledger holds (this run's first), so
+ * its text, revision and fetch origin always come from one proposal. When
+ * neither does, one is kept under its own revision, where it can match only
+ * the content it describes, and the report shows no details for the entry. A
+ * bundle with no revision (from before revisions) matches none. A settled
+ * candidate has none.
  */
 function mergedPayloads(
   open: readonly LedgerEntry[],
@@ -1160,18 +1290,20 @@ function mergedPayloads(
 ): Map<string, Payload> {
   const out = new Map<string, Payload>()
   for (const entry of open) {
+    const live = revisionOf(entry)
     const earlier = stored.get(entry.id)
-    const current = fresh.get(entry.id)
-    const merged =
-      current === undefined
-        ? earlier
-        : {
-            ...current,
-            ...(earlier?.firstShown === undefined
-              ? {}
-              : { firstShown: earlier.firstShown }),
-          }
-    if (merged !== undefined) out.set(entry.id, merged)
+    const proposedNow = fresh.get(entry.id)
+    const chosen =
+      [proposedNow, earlier].find((bundle) => bundle?.revision === live) ??
+      proposedNow ??
+      earlier
+    if (chosen === undefined) continue
+    // The date a candidate was first listed belongs to the candidate, not to a bundle.
+    const firstShown = chosen.firstShown ?? earlier?.firstShown
+    out.set(entry.id, {
+      ...chosen,
+      ...(firstShown === undefined ? {} : { firstShown }),
+    })
   }
   return out
 }
@@ -1195,17 +1327,27 @@ function rowsOf(
   open: readonly LedgerEntry[],
   payloads: ReadonlyMap<string, Payload>,
   date: string,
-): Row[] {
-  return open.map((entry, index) => {
-    const payload = payloads.get(entry.id)
-    const isNew = payload !== undefined && (payload.firstShown ?? date) === date
-    return {
-      id: entry.id,
-      payload,
-      isNew,
-      block: blockOf(index + 1, entry.id, payload, isNew),
+): { rows: Row[]; unverified: string[] } {
+  const rows: Row[] = []
+  const unverified: string[] = []
+  for (const entry of open) {
+    const held = payloads.get(entry.id)
+    const revision = revisionOf(entry)
+    // A row, with its fetch link and boxes, comes only from a bundle for the
+    // revision the ledger holds. Any other entry is counted in one section.
+    if (held === undefined || held.revision !== revision) {
+      unverified.push(entry.id)
+      continue
     }
-  })
+    const isNew = (held.firstShown ?? date) === date
+    rows.push({
+      id: entry.id,
+      payload: held,
+      isNew,
+      block: blockOf(rows.length + 1, entry, revision, held, isNew),
+    })
+  }
+  return { rows, unverified }
 }
 
 interface Stores {
@@ -1276,15 +1418,17 @@ function renderState(
     proposed(run, new Set(open.map((entry) => entry.id)), request),
   )
   const outcome = outcomeOf(invocation)
+  const { rows, unverified } = rowsOf(open, payloads, request.date)
   const input: BodyInput = {
     outcome,
     facts: factLines(invocation, run),
     cacheRestored: request.cacheRestored,
     stateUpdated: recordState,
-    rows: rowsOf(open, payloads, request.date),
+    rows,
+    unverified,
   }
-  const shown = fit(input)
-  const result = assemble(input, shown)
+  const { shown, named } = fitReport(input)
+  const result = assembleReport(input, shown, named)
   for (const id of result.ids) {
     const payload = payloads.get(id)
     if (payload !== undefined && payload.firstShown === undefined) {
@@ -1318,7 +1462,8 @@ function renderState(
     manifest: result.hash,
     open: open.length,
     shown,
-    hidden: open.length - shown,
+    hidden: rows.length - shown,
+    unverified: unverified.length,
     fresh: result.fresh,
     fetches: result.fetches,
     outcome,
@@ -1415,6 +1560,10 @@ export type SkipReason =
   | 'not-in-manifest'
   | 'not-open'
   | 'already-recorded'
+  /** The tick was made against another revision of the candidate than the ledger holds. */
+  | 'stale'
+  /** The tick is on a box with no revision, from a report before revisions: tick the revision-tagged box on the current report. */
+  | 'unversioned'
 
 export interface SkippedTick {
   readonly id: string
@@ -1456,17 +1605,23 @@ export type TickResult =
 interface Tick {
   readonly id: string
   readonly status: DecisionStatus
+  /** The revision the line names; none for a line from before revisions. */
+  readonly revision: string | undefined
 }
 
-/** Each ticked (id, status) once, in document order. */
+/**
+ * Each ticked (id, status, revision) once, in document order. The same
+ * candidate ticked at two revisions is two ticks, which the candidate's
+ * triage reads as a conflict.
+ */
 function tickedBoxes(boxes: readonly ParsedBox[]): Tick[] {
   const seen = new Set<string>()
   const out: Tick[] = []
   for (const box of boxes) {
-    const key = `${box.id}:${box.status}`
+    const key = `${box.id}:${box.status}:${box.revision ?? ''}`
     if (!box.ticked || seen.has(key)) continue
     seen.add(key)
-    out.push({ id: box.id, status: box.status })
+    out.push({ id: box.id, status: box.status, revision: box.revision })
   }
   return out
 }
@@ -1481,10 +1636,10 @@ function emptyApplied(section: BodySection): TickResult {
   }
 }
 
-function groupById(ticks: readonly Tick[]): Map<string, DecisionStatus[]> {
-  const byId = new Map<string, DecisionStatus[]>()
+function groupById(ticks: readonly Tick[]): Map<string, Tick[]> {
+  const byId = new Map<string, Tick[]>()
   for (const tick of ticks) {
-    byId.set(tick.id, [...(byId.get(tick.id) ?? []), tick.status])
+    byId.set(tick.id, [...(byId.get(tick.id) ?? []), tick])
   }
   return byId
 }
@@ -1503,18 +1658,19 @@ type Verdict =
 /** What to do with the ticks one candidate has, given the manifest and the ledger. */
 function judge(
   id: string,
-  statuses: readonly DecisionStatus[],
+  ticks: readonly Tick[],
   manifest: Manifest,
   entry: LedgerEntry | undefined,
   reason: string,
 ): Verdict | undefined {
-  const [status] = statuses
-  if (status === undefined) return undefined
+  const [first] = ticks
+  if (first === undefined) return undefined
+  const { status } = first
   const skip = (why: SkipReason): Verdict => ({
     kind: 'skip',
     skipped: { id, status, reason: why },
   })
-  if (statuses.length > 1) {
+  if (ticks.length > 1) {
     return { kind: 'skip', skipped: { id, reason: 'conflict' } }
   }
   if (!manifest.ids.includes(id)) return skip('not-in-manifest')
@@ -1524,11 +1680,16 @@ function judge(
       unresolved: { id, status, reason: 'unknown-candidate' },
     }
   }
+  // A tick settles the revision it was made against. A line that names none is
+  // from before revisions, and nothing can show which content it was made for.
+  if (first.revision === undefined) return skip('unversioned')
+  const current = revisionOf(entry)
+  if (first.revision !== current) return skip('stale')
   if (entry.status === status && entry.reason === reason) {
     return skip('already-recorded')
   }
   if (entry.status !== 'candidate') return skip('not-open')
-  return { kind: 'record', tick: { id, status } }
+  return { kind: 'record', tick: { ...first, revision: current } }
 }
 
 function triage(
@@ -1540,13 +1701,17 @@ function triage(
   const out: Triage = { record: [], skipped: [], unresolved: [] }
   if (manifest === undefined) {
     for (const tick of ticks) {
-      out.unresolved.push({ ...tick, reason: 'manifest-missing' })
+      out.unresolved.push({
+        id: tick.id,
+        status: tick.status,
+        reason: 'manifest-missing',
+      })
     }
     return out
   }
-  for (const [id, statuses] of groupById(ticks)) {
+  for (const [id, group] of groupById(ticks)) {
     const entry = entries.find((item) => item.id === id)
-    const verdict = judge(id, statuses, manifest, entry, reason)
+    const verdict = judge(id, group, manifest, entry, reason)
     if (verdict?.kind === 'record') out.record.push(verdict.tick)
     else if (verdict?.kind === 'skip') out.skipped.push(verdict.skipped)
     else if (verdict?.kind === 'unresolved') {
@@ -1565,13 +1730,23 @@ function failureOf(
     : 'write-failed'
 }
 
+/** Why a decision the lock refused leaves the tick skipped: the candidate moved on since the ledger was read. */
+function skipReasonOf(reason: string): SkipReason | undefined {
+  if (reason === 'not-open') return 'not-open'
+  return reason === 'stale-revision' ? 'stale' : undefined
+}
+
 /**
  * Record the ticks of a report body. A tick counts when its box is a generated
  * line in the section of the body, its id is in the manifest the body names,
- * and the candidate is open; a decision already recorded with the same reason
- * is left as it is, so a second pass changes nothing. Each decision is made
- * only if the candidate is still open under the lock, so one recorded since
- * the ledger was read is skipped as `not-open`, never overwritten.
+ * and the candidate is open at the revision the line names; a tick for any
+ * other revision is skipped as `stale`, and a line from before revisions as
+ * `unversioned`. A decision already recorded with
+ * the same reason is left as it is, so a second pass changes nothing. Each
+ * decision is made only if the candidate is still open at that revision under
+ * the lock, so one recorded since the ledger was read is skipped as
+ * `not-open`, and a candidate whose content changed since is skipped as
+ * `stale`, never overwritten.
  */
 export function applyTicks(
   root: string,
@@ -1603,20 +1778,27 @@ export function applyTicks(
   for (const tick of sorted.record) {
     const decided = decideLedgerEntry(
       root,
-      { id: tick.id, status: tick.status, reason, onlyIfOpen: true },
+      {
+        id: tick.id,
+        status: tick.status,
+        reason,
+        onlyIfOpen: true,
+        revision: tick.revision,
+      },
       lockOptions(options),
     )
     if (decided.status === 'busy') {
       return { status: 'busy', reason: decided.reason, accepted }
     }
-    if (decided.status === 'failed' && decided.reason === 'not-open') {
-      skipped.push({ id: tick.id, status: tick.status, reason: 'not-open' })
+    if (decided.status === 'failed') {
+      const why = skipReasonOf(decided.reason)
+      if (why === undefined) {
+        return { status: 'failed', reason: failureOf(decided.reason), accepted }
+      }
+      skipped.push({ id: tick.id, status: tick.status, reason: why })
       continue
     }
-    if (decided.status === 'failed') {
-      return { status: 'failed', reason: failureOf(decided.reason), accepted }
-    }
-    accepted.push(tick)
+    accepted.push({ id: tick.id, status: tick.status })
   }
   return {
     status: 'applied',
