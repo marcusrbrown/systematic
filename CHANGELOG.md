@@ -4,6 +4,30 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.36.0](https://github.com/marcusrbrown/systematic/compare/v3.35.3...v3.36.0) (2026-11-20)
+
+### Features
+
+* **connect:** flag learnings whose claims no longer match the code ([#1464](https://github.com/marcusrbrown/systematic/issues/1464)) ([caf0707](https://github.com/marcusrbrown/systematic/commit/caf070769edf90e7d58193410bdf60832eb8b245))
+
+### Bug Fixes
+
+* **connect:** settle report ticks and decisions only for the candidate revision they were made against ([#1468](https://github.com/marcusrbrown/systematic/issues/1468)) ([d672cf5](https://github.com/marcusrbrown/systematic/commit/d672cf5cd2b87b52e0954f10211438f0ef7d38a4))
+
+### Documentation
+
+* repair OpenCode v2 delegated-search citations ([#1469](https://github.com/marcusrbrown/systematic/issues/1469)) ([fc980af](https://github.com/marcusrbrown/systematic/commit/fc980af2cd3dbff62560cd010363e0fa948e874e))
+* **solutions:** record binding connect decisions to a content revision, the pinned-renderer rollout and report budgeting ([#1471](https://github.com/marcusrbrown/systematic/issues/1471)) ([42ff97e](https://github.com/marcusrbrown/systematic/commit/42ff97ed691a14f06837369fe4464cb100d54f81))
+* **solutions:** record the v2 skill restore that broke the prompt-cache prefix ([#1466](https://github.com/marcusrbrown/systematic/issues/1466)) ([9b5dce8](https://github.com/marcusrbrown/systematic/commit/9b5dce8bd43f28149748545f3d5d24d7fab9590e)), closes [#1459](https://github.com/marcusrbrown/systematic/issues/1459)
+
+### Continuous Integration
+
+* **deps:** update Systematic to v3.35.3 ([#1462](https://github.com/marcusrbrown/systematic/issues/1462)) ([5e1ed08](https://github.com/marcusrbrown/systematic/commit/5e1ed087b8404f926a443f1cf83b57b679826a52))
+
+### Miscellaneous Chores
+
+* **deps:** update ossf/scorecard-action action to v2.6.0 ([#1458](https://github.com/marcusrbrown/systematic/issues/1458)) ([13c71ef](https://github.com/marcusrbrown/systematic/commit/13c71ef35ac1f58ccd63422b615348b6ce7489fa))
+
 ## [3.35.3](https://github.com/marcusrbrown/systematic/compare/v3.35.2...v3.35.3) (2026-11-19)
 
 ### Bug Fixes
