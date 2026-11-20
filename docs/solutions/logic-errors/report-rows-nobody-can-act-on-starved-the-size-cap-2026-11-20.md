@@ -53,7 +53,7 @@ The whole body stays at or under 60,000, so the workflow's one extra line fits i
 
 ## Why This Works
 
-Budget the collapsed backlog and the actionable rows together, shrinking the id list before hiding a row, and leave room under the downstream cap for anything appended later.
+Budget the collapsed backlog and the actionable rows together, shrinking the id list until at least the oldest actionable row fits, and leave room under the downstream cap for anything appended later.
 
 ## Prevention
 

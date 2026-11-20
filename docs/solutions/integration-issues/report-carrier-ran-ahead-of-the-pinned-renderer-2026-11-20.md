@@ -41,10 +41,10 @@ The carrier copies the checkbox format and keeps both formats apart. The box pat
 found.push({ index, ticked: box[1] !== ' ', key: box[3] + ':' + box[4] + ':' + (box[5] === undefined ? '' : box[5]) })
 ```
 
-A late tick under the old renderer is carried between two old-format bodies. A tick never crosses between formats. The tick step does the rest:
+A late tick under the old renderer is carried between two old-format bodies. A tick never crosses between formats. Until the pin moves, the pinned helper still records old-format ticks by id. Once the workflow runs a release with revisions, the tick step does the rest:
 
 - `judge` skips a tick whose box has no revision as `unversioned` and records nothing, whatever the ledger says (`src/lib/connect-ci.ts:1683-1687`).
-- The `post` job prints how many ticks were skipped that way and tells the operator to tick the current report (`.github/workflows/connect.yaml:341`).
+- The `prepare` job prints how many ticks were skipped that way and tells the operator to tick the current report (`.github/workflows/connect.yaml:341`).
 - The guide tells the operator to settle open rows on the current report before moving the pin ([Settle a candidate on a report](../../src/content/docs/guides/cross-project-connections.mdx)).
 
 ## Why This Works
