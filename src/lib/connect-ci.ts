@@ -781,8 +781,6 @@ interface RunSummary {
   /** The checkout HEAD of each project, by the same root. */
   readonly commitByRoot: Heads
   readonly candidates: readonly unknown[]
-  /** Open entries the run proposed again unchanged: details at the revision the ledger holds. */
-  readonly stillOpen: readonly unknown[]
 }
 
 function selectionLabel(value: unknown): string | undefined {
@@ -859,9 +857,9 @@ function commitMap(value: unknown): Map<string, string> {
   return out
 }
 
-function candidatesOf(value: unknown, key = 'candidates'): unknown[] {
-  if (!isRecord(value) || !Array.isArray(value[key])) return []
-  return (value[key] as unknown[]).slice(0, MAX_CANDIDATES)
+function candidatesOf(value: unknown): unknown[] {
+  if (!isRecord(value) || !Array.isArray(value.candidates)) return []
+  return (value.candidates as unknown[]).slice(0, MAX_CANDIDATES)
 }
 
 function readRunSummary(root: string, runId: string): RunSummary | undefined {
@@ -881,7 +879,6 @@ function readRunSummary(root: string, runId: string): RunSummary | undefined {
     repoByRoot: repoMap(record.projects),
     commitByRoot: commitMap(record.projects),
     candidates: candidatesOf(record.candidateBlock),
-    stillOpen: candidatesOf(record.candidateBlock, 'stillOpen'),
   }
 }
 
@@ -1027,13 +1024,15 @@ function fetchWord(payload: Payload): string {
   return `${payload.runId}.${payload.attempt}`
 }
 
+/** The row of a candidate with no bundle for the revision the ledger holds: no fetch link and no boxes. */
+const NO_DETAILS = 'No verified details for this revision.'
+
 function blockOf(
   position: number,
   entry: LedgerEntry,
   revision: string,
   payload: Payload | undefined,
   isNew: boolean,
-  refreshing = false,
 ): string {
   const { id } = entry
   const marks = [
@@ -1044,22 +1043,15 @@ function blockOf(
     `### Candidate ${position}${marks.length === 0 ? '' : ` (${marks.join(', ')})`}`,
     '',
   ]
-  if (refreshing) {
-    lines.push(
-      `Details for \`${id}\` are being refreshed, so there is nothing to tick yet.`,
-      '',
-    )
+  if (payload === undefined) {
+    lines.push(NO_DETAILS, `Candidate id: \`${id}\``, '')
     return lines.join('\n')
   }
-  if (payload === undefined) {
-    lines.push(`Details unavailable for \`${id}\`.`)
-  } else {
-    lines.push(
-      `- Fetch: \`/ce:connect fetch:${fetchWord(payload)}\` (run ${payload.runId}, attempt ${payload.attempt})`,
-      '',
-      fenceText(factsOf(id, payload)),
-    )
-  }
+  lines.push(
+    `- Fetch: \`/ce:connect fetch:${fetchWord(payload)}\` (run ${payload.runId}, attempt ${payload.attempt})`,
+    '',
+    fenceText(factsOf(id, payload)),
+  )
   lines.push(
     '',
     decisionLine(id, 'promoted', false, revision),
@@ -1181,67 +1173,48 @@ function openOldestFirst(entries: readonly LedgerEntry[]): LedgerEntry[] {
     })
 }
 
-/** The payload a run record entry gives, filed under the run and attempt that hold its evidence. */
-function payloadOf(
-  raw: Record<string, unknown>,
-  id: string,
-  run: RunSummary | undefined,
-  origin: { readonly runId: string; readonly attempt: string },
-): Payload | undefined {
-  const text = payloadText(
-    raw,
-    run?.commitByRoot ?? new Map(),
-    run?.repoByRoot ?? new Map(),
-  )
-  if (text === undefined) return undefined
-  const target = typeof raw.target === 'string' ? raw.target : undefined
-  const repo = target === undefined ? undefined : run?.repoByRoot.get(target)
-  return {
-    id,
-    ...text,
-    ...(repo === undefined ? {} : { repo }),
-    runId: origin.runId,
-    attempt: origin.attempt,
-    ...revisionField(raw.revision),
-  }
-}
-
 /**
- * Payloads this run proposes for candidates the ledger shows open. A candidate
- * the run only saw again, unchanged, refreshes the text of the payload already
- * stored for it, and keeps the run and attempt that hold its evidence: the
- * artifact of this run does not list it as a candidate to fetch.
+ * The bundles this run proposes for candidates the ledger shows open. A bundle
+ * is the text, the revision and the run and attempt that hold the evidence,
+ * all of the one proposal: this run's record is the only place its parts come
+ * from together.
  */
 function proposed(
   run: RunSummary | undefined,
   open: ReadonlySet<string>,
   request: RenderRequest,
-  stored: ReadonlyMap<string, Payload>,
 ): Map<string, Payload> {
   const out = new Map<string, Payload>()
-  const add = (
-    raw: unknown,
-    origin: (id: string) => typeof request | Payload | undefined,
-  ) => {
-    if (!isRecord(raw) || !isCandidateId(raw.id) || !open.has(raw.id)) return
-    const from = origin(raw.id)
-    if (from === undefined) return
-    const payload = payloadOf(raw, raw.id, run, from)
-    if (payload !== undefined) out.set(raw.id, payload)
+  for (const raw of run?.candidates ?? []) {
+    if (!isRecord(raw) || !isCandidateId(raw.id) || !open.has(raw.id)) continue
+    const text = payloadText(
+      raw,
+      run?.commitByRoot ?? new Map(),
+      run?.repoByRoot ?? new Map(),
+    )
+    if (text === undefined) continue
+    const target = typeof raw.target === 'string' ? raw.target : undefined
+    const repo = target === undefined ? undefined : run?.repoByRoot.get(target)
+    out.set(raw.id, {
+      id: raw.id,
+      ...text,
+      ...(repo === undefined ? {} : { repo }),
+      runId: request.runId,
+      attempt: request.attempt,
+      ...revisionField(raw.revision),
+    })
   }
-  for (const raw of run?.stillOpen ?? []) add(raw, (id) => stored.get(id))
-  for (const raw of run?.candidates ?? []) add(raw, () => request)
   return out
 }
 
 /**
- * The payload of each open candidate: this run's text when it proposes the
- * candidate, otherwise the stored text. A text for the revision the ledger
- * holds wins over one for another, so a run whose ledger write failed cannot
- * replace the committed revision with its own. A text for another revision is
- * kept under its own, where it can match only content it describes, and a text
- * with no revision (from before revisions) matches none. A settled candidate
- * has none.
+ * The bundle kept for each open candidate: whichever of this run's proposal
+ * and the stored one has the revision the ledger holds (this run's first), so
+ * its text, revision and fetch origin always come from one proposal. When
+ * neither does, one is kept under its own revision, where it can match only
+ * the content it describes, and the report shows no details for the entry. A
+ * bundle with no revision (from before revisions) matches none. A settled
+ * candidate has none.
  */
 function mergedPayloads(
   open: readonly LedgerEntry[],
@@ -1253,20 +1226,17 @@ function mergedPayloads(
     const live = revisionOf(entry)
     const earlier = stored.get(entry.id)
     const proposedNow = fresh.get(entry.id)
-    const current =
-      earlier?.revision === live && proposedNow?.revision !== live
-        ? undefined
-        : proposedNow
-    const merged =
-      current === undefined
-        ? earlier
-        : {
-            ...current,
-            ...(earlier?.firstShown === undefined
-              ? {}
-              : { firstShown: earlier.firstShown }),
-          }
-    if (merged !== undefined) out.set(entry.id, merged)
+    const chosen =
+      [proposedNow, earlier].find((bundle) => bundle?.revision === live) ??
+      proposedNow ??
+      earlier
+    if (chosen === undefined) continue
+    // The date a candidate was first listed belongs to the candidate, not to a bundle.
+    const firstShown = chosen.firstShown ?? earlier?.firstShown
+    out.set(entry.id, {
+      ...chosen,
+      ...(firstShown === undefined ? {} : { firstShown }),
+    })
   }
   return out
 }
@@ -1294,16 +1264,15 @@ function rowsOf(
   return open.map((entry, index) => {
     const held = payloads.get(entry.id)
     const revision = revisionOf(entry)
-    // Text for another revision than the ledger holds is not shown above a box
-    // for this one, and no box is shown until matching text is.
-    const refreshing = held !== undefined && held.revision !== revision
-    const payload = refreshing ? undefined : held
+    // Details are shown, with a fetch link and boxes, only from a bundle that
+    // is for the revision the ledger holds. Anything else is not shown at all.
+    const payload = held?.revision === revision ? held : undefined
     const isNew = payload !== undefined && (payload.firstShown ?? date) === date
     return {
       id: entry.id,
       payload,
       isNew,
-      block: blockOf(index + 1, entry, revision, payload, isNew, refreshing),
+      block: blockOf(index + 1, entry, revision, payload, isNew),
     }
   })
 }
@@ -1373,12 +1342,7 @@ function renderState(
   const payloads = mergedPayloads(
     open,
     loaded.stores.payloads,
-    proposed(
-      run,
-      new Set(open.map((entry) => entry.id)),
-      request,
-      loaded.stores.payloads,
-    ),
+    proposed(run, new Set(open.map((entry) => entry.id)), request),
   )
   const outcome = outcomeOf(invocation)
   const input: BodyInput = {

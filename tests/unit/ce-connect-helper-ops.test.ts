@@ -4458,7 +4458,7 @@ describe('a reopen whose ledger write failed', () => {
   })
 })
 
-describe('an open candidate a later run proposes again unchanged', () => {
+describe('an open candidate whose report details were stored before revisions', () => {
   const RENDER = {
     date: '2026-11-12',
     runId: '900',
@@ -4522,7 +4522,9 @@ describe('an open candidate a later run proposes again unchanged', () => {
   const boxes = (body: string): string[] =>
     body.split('\n').filter((line) => line.startsWith('- ['))
 
-  it('gets matching details and revision-tagged boxes back after an upgrade, without touching the ledger', () => {
+  const NO_DETAILS = 'No verified details for this revision.'
+
+  it('shows no verified details, no boxes and no fetch link after an upgrade, even when a later run proposes the candidate again unchanged', () => {
     const { world, evidence } = mismatchWorld()
     const proposal = () => [mismatchCandidate(world, [proxyEvidence(evidence)])]
     const first = fullRun(world, proposal())
@@ -4534,7 +4536,7 @@ describe('an open candidate a later run proposes again unchanged', () => {
     downgradeState(world, first.run.runId)
     markRun(world, first.run.runId, '900-1')
     const hidden = renderBody(world, '900', '1')
-    expect(hidden).toContain('are being refreshed')
+    expect(hidden).toContain(NO_DETAILS)
     expect(boxes(hidden)).toEqual([])
 
     // Research proposes the same candidate again, and the helper suppresses it as unchanged.
@@ -4544,58 +4546,31 @@ describe('an open candidate a later run proposes again unchanged', () => {
     expect(again.validated.suppressed).toBe(1)
     expect(readDigest(again.published)).not.toContain(id)
     expect(entriesOf(world)).toBe(entries)
+    // The run record has no second place for it: the only candidates are the accepted ones.
+    expect(
+      Object.keys(readRunRecord(again.published).candidateBlock as Json).sort(),
+    ).toEqual(['candidates', 'schemaVersion'])
 
     markRun(world, again.run.runId, '901-1')
     const body = renderBody(world, '901', '1')
-    const [revision] = [...body.matchAll(/:r([0-9a-f]{12}) -->/g)].map((m) =>
-      String(m[1]),
-    )
-    expect(revision).toMatch(/^[0-9a-f]{12}$/)
-    expect(body).toContain('Title: ')
-    expect(body).not.toContain('are being refreshed')
-    expect(boxes(body)).toEqual([
-      `- [ ] Promoted <!-- connect-decision:promoted:${id}:r${revision} -->`,
-      `- [ ] Rejected <!-- connect-decision:rejected:${id}:r${revision} -->`,
-    ])
-    // The box carries the revision a decision from that digest would be checked against.
-    expect(
-      ok(
-        runHelperOp(
-          'decide',
-          {
-            id,
-            status: 'rejected',
-            reason: 'Checked by hand; not needed.',
-            revision,
-          },
-          world.deps,
-        ),
-      ).status,
-    ).toBe('decided')
+    expect(body).toContain(NO_DETAILS)
+    expect(body).toContain(`Candidate id: \`${id}\``)
+    expect(boxes(body)).toEqual([])
+    expect(body).not.toContain('fetch:')
+    expect(body).not.toContain('Title: ')
   })
 
-  it('keeps the fetch word of the run that holds the candidate, not the run that only saw it again', () => {
-    const { world, evidence } = mismatchWorld()
-    const proposal = () => [mismatchCandidate(world, [proxyEvidence(evidence)])]
-    const first = fullRun(world, proposal())
-    markRun(world, first.run.runId, '900-1')
-    renderBody(world, '900', '1')
-    downgradeState(world, first.run.runId)
-    const again = fullRun(world, proposal())
-    markRun(world, again.run.runId, '901-1')
-    expect(renderBody(world, '901', '1')).toContain('fetch:900.1')
-  })
-
-  it('creates no text for an open entry that no stored payload describes, so no fetch word can point at the wrong run', () => {
+  it('renders no boxes for an open entry that no stored payload describes', () => {
     const { world, evidence } = mismatchWorld()
     const proposal = () => [mismatchCandidate(world, [proxyEvidence(evidence)])]
     fullRun(world, proposal())
     const again = fullRun(world, proposal())
     markRun(world, again.run.runId, '901-1')
     const body = renderBody(world, '901', '1')
-    expect(body).toContain('Details unavailable')
-    expect(body).not.toContain('Title: ')
-    expect(body).not.toContain('fetch:901')
+    expect(body).toContain(NO_DETAILS)
+    expect(boxes(body)).toEqual([])
+    expect(body).not.toContain('Details unavailable')
+    expect(body).not.toContain('fetch:')
   })
 
   it('lists nothing and touches nothing for an entry that was decided', () => {
@@ -4608,34 +4583,8 @@ describe('an open candidate a later run proposes again unchanged', () => {
     const again = fullRun(world, proposal())
     expect(again.validated.suppressed).toBe(1)
     expect(entriesOf(world)).toBe(entries)
-    const block = readRunRecord(again.published).candidateBlock as Json
-    expect(block).not.toHaveProperty('stillOpen')
     markRun(world, again.run.runId, '901-1')
     expect(renderBody(world, '901', '1')).not.toContain(id)
-  })
-
-  it('does not offer a candidate whose citations differ from what the ledger watches', () => {
-    const { world, evidence } = mismatchWorld()
-    const first = fullRun(world, [
-      mismatchCandidate(world, [proxyEvidence(evidence)]),
-    ])
-    const again = fullRun(world, [
-      mismatchCandidate(world, [
-        proxyEvidence(evidence),
-        evidenceItem(
-          evidence,
-          'src/loader.ts',
-          LOADER_FILE,
-          'export function loadConfig(raw: Config): string[] {',
-        ),
-      ]),
-    ])
-    expect(again.validated.suppressed).toBe(1)
-    // Its revision would differ from the ledger's, so no details could match a box.
-    expect(
-      readRunRecord(again.published).candidateBlock as Json,
-    ).not.toHaveProperty('stillOpen')
-    expect(first.run.runId).not.toBe(again.run.runId)
   })
 })
 

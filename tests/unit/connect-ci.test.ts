@@ -243,6 +243,8 @@ function manifestsOf(root: string): Array<{ hash: string; ids: string[] }> {
 }
 
 /** The generated line of candidate `index`, at its fixture entry's revision unless one is named. */
+const NO_DETAILS = 'No verified details for this revision.'
+
 function boxLine(
   index: number,
   status: 'promoted' | 'rejected',
@@ -650,12 +652,19 @@ describe('renderReport', () => {
     expect(next.body).toContain('fetch:900.1')
   })
 
-  it('lists a candidate with no payload by id, with a details-unavailable line', () => {
+  it('lists a candidate with no payload by id, with no verified details and no boxes', () => {
     const root = seeded(1)
     writeLedger(root, [entryOf(1), entryOf(2)])
-    const { body } = rendered(root)
-    expect(body).toContain(`Details unavailable for \`${idOf(2)}\``)
-    expect(body).toContain(boxLine(2, 'rejected', false))
+    const { body, fetches } = rendered(root)
+    expect(body).toContain(NO_DETAILS)
+    expect(body).toContain(`Candidate id: \`${idOf(2)}\``)
+    expect(body).not.toContain(`connect-decision:promoted:${idOf(2)}`)
+    expect(body).not.toContain(`connect-decision:rejected:${idOf(2)}`)
+    expect(body).not.toContain('Details unavailable')
+    // Candidate 1 has verified details; the other is in no Fetch line.
+    expect(body).toContain(boxLine(1, 'rejected', false))
+    expect(fetches).toEqual(['900.1'])
+    expect(body).toContain('for candidates 1\n')
   })
 
   it('notes a ledger that was not restored, with the sweep line and the fetch line', () => {
@@ -780,7 +789,7 @@ describe('renderReport', () => {
       const last = rendered(root, { date: DAY_TWO, runId: '903' })
 
       expect(last.shown).toBe(40)
-      expect(last.body).not.toContain('Details unavailable')
+      expect(last.body).not.toContain(NO_DETAILS)
       expect(last.body).toContain('Lesson 561')
       expect(last.body).toContain('Lesson 600')
       expect(last.fetches).toEqual(['902.1'])
@@ -1182,7 +1191,9 @@ describe('renderReport', () => {
           expect(result.shown).toBe(2)
           expect(result.body).toContain('Connect busy')
           expect(result.body).toMatch(/State not updated/)
-          expect(parseReportBody(result.body).boxes).toHaveLength(4)
+          // Nothing stored describes the two candidates, so neither has boxes.
+          expect(result.body.split(NO_DETAILS)).toHaveLength(3)
+          expect(parseReportBody(result.body).boxes).toHaveLength(0)
           expect(fs.readFileSync(path.join(root, REPORT_FILE), 'utf8')).toBe(
             result.body,
           )
@@ -1561,7 +1572,8 @@ describe('renderReport', () => {
       )
       const result = rendered(root)
       expect(result.shown).toBe(1)
-      expect(result.body).toContain(`Details unavailable for \`${idOf(1)}\``)
+      expect(result.body).toContain(NO_DETAILS)
+      expect(result.body).not.toContain('connect-decision:')
     })
 
     it('does not throw on a candidate block that is not a list', () => {
@@ -1676,7 +1688,7 @@ describe('renderReport', () => {
       writeRunRecord(root, [])
       writeInvocation(root, '901-1', {}, null)
       const next = rendered(root, { date: DAY_TWO, runId: '901' })
-      expect(next.body).toContain(`Details unavailable for \`${idOf(1)}\``)
+      expect(next.body).toContain(NO_DETAILS)
       expect(next.body).toContain('Lesson 2')
       expect(next.body).not.toContain('injected')
     })
@@ -2520,9 +2532,6 @@ describe('the revision of a report', () => {
 })
 
 describe("a report binds a candidate's text to the revision of its boxes", () => {
-  const refreshing = (index: number) =>
-    `Details for \`${idOf(index)}\` are being refreshed, so there is nothing to tick yet.`
-
   const boxesOf = (body: string, index: number): string[] =>
     body
       .split('\n')
@@ -2590,7 +2599,7 @@ describe("a report binds a candidate's text to the revision of its boxes", () =>
     propose(root, 1, revisionOfContent(1, 'proposed-only'))
     expect(fs.existsSync(path.join(root, PAYLOAD_FILE))).toBe(false)
     const body = rendered(root, { runId: '901' }).body
-    expect(body).toContain(refreshing(1))
+    expect(body).toContain(NO_DETAILS)
     expect(boxesOf(body, 1)).toEqual([])
     expect(body).not.toContain('Revision B')
     expect(boxesOf(body, 2)).toEqual([
@@ -2612,7 +2621,7 @@ describe("a report binds a candidate's text to the revision of its boxes", () =>
     commit(root, 1, 'committed-other')
     writeInvocation(root, '902-1', {}, null)
     const body = rendered(root, { runId: '902', date: DAY_TWO }).body
-    expect(body).toContain(refreshing(1))
+    expect(body).toContain(NO_DETAILS)
     expect(boxesOf(body, 1)).toEqual([])
     expect(body).not.toContain('Revision B')
     expect(applyTicks(root, { body, issue: 9 })).toMatchObject({
@@ -2642,13 +2651,116 @@ describe("a report binds a candidate's text to the revision of its boxes", () =>
     commit(root, 1, 'edited')
     writeInvocation(root, '901-1', {}, null)
     const body = rendered(root, { runId: '901', date: DAY_TWO }).body
-    expect(body).toContain(refreshing(1))
+    expect(body).toContain(NO_DETAILS)
     expect(boxesOf(body, 1)).toEqual([])
     expect(body).not.toContain('Title: Lesson 1')
     expect(boxesOf(body, 2)).toEqual([
       boxLine(2, 'promoted', false),
       boxLine(2, 'rejected', false),
     ])
+  })
+
+  /** Rewrite one stored payload: another artifact (run and attempt), title or revision. */
+  function restore(
+    root: string,
+    index: number,
+    over: Record<string, unknown>,
+  ): void {
+    const file = path.join(root, PAYLOAD_FILE)
+    const store = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      payloads: Array<Record<string, unknown>>
+    }
+    store.payloads = store.payloads.map((item) => {
+      if (item.id !== idOf(index)) return item
+      const next = { ...item, ...over }
+      for (const [key, value] of Object.entries(over)) {
+        if (value === undefined) delete next[key]
+      }
+      return next
+    })
+    fs.writeFileSync(file, JSON.stringify(store))
+  }
+
+  const fetchLinesOf = (body: string): string[] =>
+    body.split('\n').filter((line) => line.includes('fetch:'))
+
+  describe('one bundle per proposal', () => {
+    it('renders a stored bundle that matches the entry with its own text, its own fetch link and boxes', () => {
+      const root = seeded(2)
+      rendered(root)
+      restore(root, 1, { runId: '800', attempt: '2', title: 'Stored title' })
+      writeRunRecord(root, [])
+      writeInvocation(root, '901-1', {}, null)
+      const result = rendered(root, { runId: '901', date: DAY_TWO })
+      expect(result.body).toContain('Title: Stored title')
+      expect(result.body).toContain('(run 800, attempt 2)')
+      expect(result.fetches).toContain('800.2')
+      expect(boxesOf(result.body, 1)).toEqual([
+        boxLine(1, 'promoted', false),
+        boxLine(1, 'rejected', false),
+      ])
+    })
+
+    it('keeps the stored bundle whole when this run proposes other content for the candidate', () => {
+      const root = seeded(1)
+      rendered(root)
+      restore(root, 1, { runId: '800', attempt: '2', title: 'Stored title' })
+      // This run's proposal is for a revision the ledger does not hold (its write failed).
+      propose(root, 1, revisionOfContent(1, 'proposed-only'))
+      writeInvocation(root, '901-1')
+      const result = rendered(root, { runId: '901', date: DAY_TWO })
+      expect(result.body).toContain('Title: Stored title')
+      expect(result.body).not.toContain('Revision B')
+      expect(fetchLinesOf(result.body).join('\n')).toContain('fetch:800.2')
+      expect(fetchLinesOf(result.body).join('\n')).not.toContain('fetch:901.1')
+    })
+
+    it("replaces a stored bundle for other content with this run's matching bundle, fetch link included", () => {
+      const root = seeded(1)
+      rendered(root)
+      restore(root, 1, {
+        runId: '800',
+        attempt: '2',
+        title: 'Old content',
+        revision: revisionOfContent(1, 'old-content'),
+      })
+      propose(root, 1, revisionOf(entryOf(1)))
+      writeInvocation(root, '901-1')
+      const result = rendered(root, { runId: '901', date: DAY_TWO })
+      expect(result.body).toContain('Title: Revision B')
+      expect(result.body).not.toContain('Old content')
+      expect(result.fetches).toEqual(['901.1'])
+      expect(result.body).not.toContain('fetch:800.2')
+    })
+
+    it('shows no fetch link, no boxes and no Fetch entry for text from before revisions whose artifact holds other evidence', () => {
+      const root = seeded(2)
+      rendered(root)
+      // Stored by an older release: no revision, and an artifact (800.1) of other evidence.
+      restore(root, 1, {
+        runId: '800',
+        attempt: '1',
+        title: 'Evidence of run 800',
+        revision: undefined,
+      })
+      // This run proposes nothing: the candidate is unchanged and suppressed.
+      writeRunRecord(root, [])
+      writeInvocation(root, '901-1', {}, null)
+      const result = rendered(root, { runId: '901', date: DAY_TWO })
+      const [row] = result.body
+        .split('### Candidate 1')[1]
+        ?.split('### Candidate 2') ?? ['']
+      expect(row).toContain(NO_DETAILS)
+      expect(row).toContain(`Candidate id: \`${idOf(1)}\``)
+      expect(row).not.toContain('fetch:')
+      expect(row).not.toContain('connect-decision:')
+      expect(result.body).not.toContain('Evidence of run 800')
+      expect(result.fetches).not.toContain('800.1')
+      expect(fetchLinesOf(result.body).join('\n')).not.toContain('800.1')
+      expect(applyTicks(root, { body: result.body, issue: 4 })).toMatchObject({
+        accepted: [],
+      })
+    })
   })
 
   it('records no tick from a report whose candidate has no boxes', () => {
@@ -2684,16 +2796,14 @@ describe("a report binds a candidate's text to the revision of its boxes", () =>
       fs.writeFileSync(file, JSON.stringify(store))
     }
 
-    it('renders no boxes and says details are being refreshed, even for an entry whose content it may describe', () => {
+    it('renders no verified details and no boxes, even for an entry whose content it may describe', () => {
       const root = seeded(2)
       rendered(root)
       unversion(root)
       writeInvocation(root, '901-1', {}, null)
       const body = rendered(root, { runId: '901', date: DAY_TWO }).body
       for (const index of [1, 2]) {
-        expect(body).toContain(
-          `Details for \`${idOf(index)}\` are being refreshed, so there is nothing to tick yet.`,
-        )
+        expect(body).toContain(NO_DETAILS)
         expect(boxesOf(body, index)).toEqual([])
       }
       expect(body).not.toContain('Title: Lesson')
@@ -2722,7 +2832,7 @@ describe("a report binds a candidate's text to the revision of its boxes", () =>
         writeInvocation(root, '901-1', {}, null)
         const body = rendered(root, { runId: '901', date: DAY_TWO }).body
         expect(boxesOf(body, 1)).toEqual([])
-        expect(body).toContain('are being refreshed')
+        expect(body).toContain(NO_DETAILS)
         expect(applyTicks(root, { body, issue: 9 })).toMatchObject({
           accepted: [],
           skipped: [],
@@ -2753,7 +2863,7 @@ describe("a report binds a candidate's text to the revision of its boxes", () =>
       stampProposal(root, 1, undefined)
       const body = rendered(root).body
       expect(boxesOf(body, 1)).toEqual([])
-      expect(body).toContain('are being refreshed')
+      expect(body).toContain(NO_DETAILS)
     })
   })
 })
