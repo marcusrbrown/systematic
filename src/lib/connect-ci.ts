@@ -962,14 +962,14 @@ export type RenderResult =
         | 'write-failed'
     }
 
-interface Row {
+export interface Row {
   readonly id: string
   readonly payload: Payload
   readonly isNew: boolean
   readonly block: string
 }
 
-interface BodyInput {
+export interface BodyInput {
   readonly outcome: ReportOutcome
   readonly facts: readonly string[]
   readonly cacheRestored: boolean
@@ -981,7 +981,7 @@ interface BodyInput {
   readonly unverified: readonly string[]
 }
 
-interface Assembled {
+export interface Assembled {
   readonly body: string
   readonly ids: readonly string[]
   readonly hash: string
@@ -1120,32 +1120,41 @@ function hiddenLine(hidden: number): string {
 
 /**
  * The one section for open entries with no bundle for their live revision.
- * They have no boxes, so they are only counted, and a bounded number of ids is
- * named, oldest first. They are never full rows, so they cannot crowd out the
- * rows that can be settled.
+ * They have no boxes, so they are only counted, and up to `named` ids are
+ * listed, oldest first, with the rest as `and N more`. With `named` at 0 it is
+ * the count alone. It is bounded, so it can be measured whole and the rows
+ * fitted into what it leaves.
  */
-function unverifiedSection(ids: readonly string[]): string[] {
+function unverifiedSection(ids: readonly string[], named: number): string[] {
   if (ids.length === 0) return []
-  const named = ids.slice(0, MAX_UNVERIFIED_IDS).map((id) => `\`${id}\``)
-  const more = ids.length - named.length
+  const listed = ids.slice(0, named).map((id) => `\`${id}\``)
+  const more = ids.length - listed.length
   const count =
     ids.length === 1
       ? '1 open candidate has'
       : `${ids.length} open candidates have`
+  const list =
+    listed.length === 0
+      ? ''
+      : ` Oldest first: ${listed.join(', ')}${more > 0 ? `, and ${more} more` : ''}.`
   return [
     UNVERIFIED_HEADING,
     '',
-    `${count} no verified details for the current revision, so there is nothing to tick. Oldest first: ${named.join(', ')}${more > 0 ? `, and ${more} more` : ''}.`,
+    `${count} no verified details for the current revision, so there is nothing to tick.${list}`,
     '',
   ]
 }
 
 const UNVERIFIED_HEADING = '## No verified details'
 
-function assemble(
+/**
+ * The report with its first `shown` rows and the section naming `named`
+ * unverified ids. Exported for the tests of the size budget.
+ */
+export function assembleReport(
   input: BodyInput,
   shown: number,
-  withUnverified = true,
+  named: number,
 ): Assembled {
   const rows = input.rows.slice(0, shown)
   const ids = rows.map((row) => row.id)
@@ -1175,20 +1184,15 @@ function assemble(
   for (const row of rows) out.push(row.block)
   out.push(DECISIONS_END, '')
   if (shown < open) out.push(hiddenLine(open - shown), '')
-  if (withUnverified) out.push(...unverifiedSection(input.unverified))
+  out.push(...unverifiedSection(input.unverified, named))
   return { body: out.join('\n'), ids, hash, fetches: fetch.fetches, fresh }
 }
 
-/**
- * The most candidates whose report fits the cap: the oldest, whole, and never a
- * block cut. The section for rows with no verified details is not measured: it
- * is a heading and at most `MAX_UNVERIFIED_IDS` ids, well inside the room the
- * cap leaves under GitHub's limit, and the rows it describes cannot be settled.
- */
-function fit(input: BodyInput): number {
+/** How many rows fit, oldest first and whole, when the section names `named` ids. */
+function rowsThatFit(input: BodyInput, named: number): number {
   const total = input.rows.length
   const fits = (count: number): boolean =>
-    assemble(input, count, false).body.length <= REPORT_MAX_CHARS
+    assembleReport(input, count, named).body.length <= REPORT_MAX_CHARS
   if (fits(total)) return total
   // With a hidden line the length only grows with the count, so a search works.
   let low = 0
@@ -1199,6 +1203,31 @@ function fit(input: BodyInput): number {
     else high = middle - 1
   }
   return low
+}
+
+/**
+ * The most rows the cap leaves room for beside the section for the rows that
+ * cannot be settled, and how many of those ids the section names. The section
+ * is bounded and counts against the cap like everything else, so the whole
+ * body stays under `REPORT_MAX_CHARS`, which is what leaves the workflow room
+ * for the one line it may add. The full id list is tried first; when it would
+ * leave no room for the oldest row, the list is halved down to the count alone.
+ * Exported for the tests of the size budget.
+ */
+export function fitReport(input: BodyInput): {
+  readonly shown: number
+  readonly named: number
+} {
+  const wanted = Math.min(1, input.rows.length)
+  for (
+    let named = Math.min(MAX_UNVERIFIED_IDS, input.unverified.length);
+    named > 0;
+    named = Math.floor(named / 2)
+  ) {
+    const shown = rowsThatFit(input, named)
+    if (shown >= wanted) return { shown, named }
+  }
+  return { shown: rowsThatFit(input, 0), named: 0 }
 }
 
 function openOldestFirst(entries: readonly LedgerEntry[]): LedgerEntry[] {
@@ -1398,8 +1427,8 @@ function renderState(
     rows,
     unverified,
   }
-  const shown = fit(input)
-  const result = assemble(input, shown)
+  const { shown, named } = fitReport(input)
+  const result = assembleReport(input, shown, named)
   for (const id of result.ids) {
     const payload = payloads.get(id)
     if (payload !== undefined && payload.firstShown === undefined) {

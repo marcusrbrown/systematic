@@ -1762,6 +1762,72 @@ describe('render: finalizing and the run record', () => {
     expect(envelope).toMatchObject({ red: true, cacheSaved: false })
   })
 
+  describe('a report near the size cap with a backlog of rows that have no verified details', () => {
+    /** Twenty-five older entries with no bundle, then rows large enough that the cap binds. */
+    function nearCapBox(): Box {
+      const box = makeBox()
+      seedHandoff(box, {
+        count: 25 + 150,
+        candidates: Array.from({ length: 150 }, (_, i) =>
+          blockCandidate(26 + i, {
+            title: 'Lesson',
+            summary: `S ${'x'.repeat(500)}`,
+            sources: [],
+          }),
+        ),
+      })
+      return box
+    }
+
+    it('still passes the verifier when the cache save failed and its line was appended', () => {
+      const box = nearCapBox()
+      const { render, body: rendered } = renderDay(box, DATE_ONE)
+      expect(render.exitCode).toBe(0)
+      // Near the renderer cap, with the section for the 25 older entries in it.
+      expect(rendered).toContain('25 open candidates have no verified details')
+      expect(rendered.length).toBeLessThanOrEqual(60_000)
+      expect(rendered.length).toBeGreaterThan(55_000)
+
+      const done = finalize(box, render, 'failure')
+      const body = fs.readFileSync(
+        path.join(box.tmp, 'report', 'body.md'),
+        'utf8',
+      )
+      expect(body).toContain('The ledger cache could not be saved for this run')
+      expect(body.length).toBeGreaterThan(rendered.length)
+      expect(body.length).toBeLessThanOrEqual(
+        Number(WORKFLOW_ENV.REPORT_BODY_CAP),
+      )
+
+      writeIssues(box, [])
+      const verified = post(box, 'Verify report', {
+        DATE: DATE_ONE,
+        RENDER_DIGEST: done.outputs.get('digest') ?? '',
+        RENDER_CHARS: done.outputs.get('chars') ?? '',
+      })
+      expect(verified.stdout).not.toContain('size cap')
+      expect(verified.exitCode).toBe(0)
+    })
+
+    it('refuses the same body once it is over the verifier cap', () => {
+      const box = nearCapBox()
+      const { render } = renderDay(box, DATE_ONE)
+      const done = finalize(box, render, 'failure')
+      const file = path.join(box.tmp, 'report', 'body.md')
+      const body = `${fs.readFileSync(file, 'utf8')}${'x'.repeat(Number(WORKFLOW_ENV.REPORT_BODY_CAP))}`
+      fs.writeFileSync(file, body)
+      writeIssues(box, [])
+      const verified = post(box, 'Verify report', {
+        DATE: DATE_ONE,
+        RENDER_DIGEST: sha(body),
+        RENDER_CHARS: String(body.length),
+      })
+      expect(done.exitCode).toBe(0)
+      expect(verified.exitCode).toBe(1)
+      expect(verified.stdout).toContain('size cap')
+    })
+  })
+
   it('leaves the body alone when the cache saved', () => {
     const box = makeBox()
     seedHandoff(box)

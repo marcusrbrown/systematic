@@ -4,10 +4,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   applyTicks,
+  assembleReport,
   DECISIONS_BEGIN,
   DECISIONS_END,
   decisionLine,
   fenceText,
+  fitReport,
   MANIFEST_FILE,
   MANIFESTS_KEPT,
   MAX_UNVERIFIED_IDS,
@@ -244,6 +246,24 @@ function manifestsOf(root: string): Array<{ hash: string; ids: string[] }> {
 }
 
 /** The generated line of candidate `index`, at its fixture entry's revision unless one is named. */
+/** The workflow itself: its verifier's cap and the line its finalize step appends are read from it, not restated. */
+const WORKFLOW_TEXT = fs.readFileSync(
+  path.join(import.meta.dir, '../../.github/workflows/connect.yaml'),
+  'utf8',
+)
+
+/** `REPORT_BODY_CAP` in the workflow: the size its verifier accepts, with the line below added. */
+const WORKFLOW_BODY_CAP = Number(
+  /REPORT_BODY_CAP: "(\d+)"/.exec(WORKFLOW_TEXT)?.[1],
+)
+
+/** The fixed line the workflow appends to the body when the ledger cache could not be saved. */
+const CACHE_SAVE_LINE = String(
+  /printf '(\\n\\n> The ledger cache[^']*)' >> "\$body"/.exec(
+    WORKFLOW_TEXT,
+  )?.[1],
+).replaceAll('\\n', '\n')
+
 /** The heading of the one section that collapses the rows with no bundle for their live revision. */
 const NO_DETAILS = '## No verified details'
 
@@ -3014,31 +3034,135 @@ describe('the report lists the rows that can be settled before the rows that can
     )
   })
 
-  it('shows the same actionable rows whatever the size of the backlog, since the section is not measured against the cap', () => {
-    const shownWith = (legacy: number): number => {
-      const root = seeded(1)
-      writeLedger(
-        root,
-        Array.from({ length: legacy + 150 }, (_, i) => entryOf(i + 1)),
-      )
-      writeRunRecord(
-        root,
-        Array.from({ length: 150 }, (_, i) =>
-          blockCandidate(legacy + i + 1, {
-            // Rows of the same size whatever their number.
-            title: 'Lesson',
-            summary: `S ${'x'.repeat(500)}`,
-            sources: [],
-          }),
-        ),
-      )
-      const result = rendered(root)
-      expect(result.body.length).toBeLessThanOrEqual(REPORT_MAX_CHARS + 3000)
-      return result.shown
+  /** Rows large enough that the size cap binds, after `legacy` older entries with no bundle. */
+  function nearCap(legacy: number): string {
+    const root = seeded(1)
+    writeLedger(
+      root,
+      Array.from({ length: legacy + 150 }, (_, i) => entryOf(i + 1)),
+    )
+    writeRunRecord(
+      root,
+      Array.from({ length: 150 }, (_, i) =>
+        blockCandidate(legacy + i + 1, {
+          // Rows of the same size whatever their number.
+          title: 'Lesson',
+          summary: `S ${'x'.repeat(500)}`,
+          sources: [],
+        }),
+      ),
+    )
+    return root
+  }
+
+  it('keeps the whole body, collapsed section included, at or under the renderer cap, whatever the backlog', () => {
+    for (const legacy of [
+      0,
+      1,
+      MAX_UNVERIFIED_IDS,
+      MAX_UNVERIFIED_IDS + 1,
+      5000,
+    ]) {
+      const result = rendered(nearCap(legacy))
+      expect(result.body.length).toBeLessThanOrEqual(REPORT_MAX_CHARS)
+      expect(result.shown).toBeLessThan(150)
     }
-    const none = shownWith(0)
-    expect(none).toBeLessThan(150)
-    expect(shownWith(5000)).toBe(none)
+  })
+
+  it('fits the actionable rows into the cap minus the section, oldest first', () => {
+    const without = rendered(nearCap(0))
+    const withBacklog = rendered(nearCap(5000))
+    // The section takes room from the rows, never the other way round.
+    expect(withBacklog.shown).toBeLessThanOrEqual(without.shown)
+    expect(without.shown - withBacklog.shown).toBeLessThanOrEqual(3)
+    // The rows shown are the oldest ones, from the first, with no gap.
+    const numbers = [...withBacklog.body.matchAll(/### Candidate (\d+)/g)].map(
+      (m) => Number(m[1]),
+    )
+    expect(numbers).toEqual(
+      Array.from({ length: withBacklog.shown }, (_, i) => i + 1),
+    )
+    expect(withBacklog.body).toContain('Title: Lesson\n')
+  })
+
+  it('leaves room for the cache-save line the workflow appends, under the cap the workflow verifies', () => {
+    // The cap is what leaves the workflow room for its one line, whatever the body holds.
+    expect(REPORT_MAX_CHARS + CACHE_SAVE_LINE.length).toBeLessThanOrEqual(
+      WORKFLOW_BODY_CAP,
+    )
+    const result = rendered(nearCap(5000))
+    const withLine = `${result.body}${CACHE_SAVE_LINE}`
+    expect(withLine.length).toBeLessThanOrEqual(WORKFLOW_BODY_CAP)
+  })
+
+  describe('when the section would leave too little room', () => {
+    const named = (body: string): number =>
+      [...body.matchAll(/`[0-9a-f]{64}`/g)].length
+    const ids = Array.from({ length: 30 }, (_, i) => idOf(i + 1))
+    /** One row of \`size\` characters, then the backlog: the section competes with it for the cap. */
+    const input = (size: number, unverified: readonly string[] = ids) => ({
+      outcome: 'complete' as const,
+      facts: [],
+      cacheRestored: true,
+      stateUpdated: true,
+      unverified,
+      rows: [
+        {
+          id: idOf(99),
+          payload: {
+            id: idOf(99),
+            title: 't',
+            summary: 's',
+            kind: 'transferable-lesson' as const,
+            nextStep: 'compound-learning' as const,
+            targetName: 'target',
+            sources: [],
+            runId: '900',
+            attempt: '1',
+            revision: 'a'.repeat(12),
+          },
+          isNew: false,
+          block: `### Candidate 1\n\n${'r'.repeat(size)}\n`,
+        },
+      ],
+    })
+    const sectionRoom = (body: string): number => REPORT_MAX_CHARS - body.length
+
+    it('names fewer ids when the full list would push the first row out', () => {
+      // Sized so the row fits beside a short list but not beside twenty ids.
+      const roomy = fitReport(input(10))
+      expect(roomy.shown).toBe(1)
+      expect(roomy.named).toBe(MAX_UNVERIFIED_IDS)
+      const size =
+        REPORT_MAX_CHARS - assembleReport(input(0), 1, 0).body.length - 400
+      const tight = fitReport(input(size))
+      expect(tight.shown).toBe(1)
+      expect(tight.named).toBeLessThan(MAX_UNVERIFIED_IDS)
+      const body = assembleReport(input(size), tight.shown, tight.named).body
+      expect(body.length).toBeLessThanOrEqual(REPORT_MAX_CHARS)
+      expect(named(body)).toBe(tight.named)
+      expect(sectionRoom(body)).toBeGreaterThanOrEqual(0)
+      expect(body).toContain(`, and ${ids.length - tight.named} more`)
+    })
+
+    it('falls back to a count-only line, and the body still fits', () => {
+      const base = assembleReport(input(0), 1, 0).body.length
+      // A row that fits only with the count-only line.
+      const size = REPORT_MAX_CHARS - base
+      const result = fitReport(input(size))
+      expect(result).toEqual({ shown: 1, named: 0 })
+      const body = assembleReport(input(size), 1, 0).body
+      expect(body.length).toBeLessThanOrEqual(REPORT_MAX_CHARS)
+      expect(body).toContain('30 open candidates have no verified details')
+      expect(named(body)).toBe(0)
+      expect(body).not.toContain('Oldest first')
+    })
+
+    it('never names an id past the cap, and says nothing when there is no backlog', () => {
+      expect(fitReport(input(10, ids)).named).toBe(MAX_UNVERIFIED_IDS)
+      expect(fitReport(input(10, [])).named).toBe(0)
+      expect(assembleReport(input(10, []), 1, 0).body).not.toContain(NO_DETAILS)
+    })
   })
 
   describe('the collapsed section', () => {
