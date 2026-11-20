@@ -264,19 +264,24 @@ A promoted learning never copies another project's text. It cites each source as
 
 ### Bring a scheduled run's candidates here
 
-A lesson found on another machine cannot be promoted from its own record: the paths in it belong to a runner that is gone. `fetch:<run>.<attempt>` brings the candidates of a run of Systematic's `ce:connect` workflow to your machine and re-checks them against your own checkouts, so you can promote them with the usual line. The workflow is described in [Scheduled runs](#scheduled-runs).
+A lesson found on another machine cannot be promoted from its own record: the paths in it belong to a runner that is gone. `fetch:` brings the candidates of one attempt of a scheduled run to your machine and re-checks them against your own checkouts, so you can promote them with the usual line. The workflow is described in [Scheduled runs](#scheduled-runs).
 
 ```text
 /ce:connect fetch:<run>.<attempt>
+/ce:connect fetch:<owner>/<repo>:<run>.<attempt>
 ```
 
-`<run>` is the GitHub run id and `<attempt>` is the attempt number. Each is a positive integer, digits only. A scheduled report prints this form for each candidate, with the attempt that found it, for example `fetch:43525490720.1`. A bare `fetch:<run>` still works and reads the newest attempt of that run. A `fetch:` word stands alone: combined with `group:` or `projects:` it stops with `conflicting-selection`, and it takes no `mode:`, because a fetch dispatches no researcher, asks nothing and observes no host.
+The first form is a run of Systematic's own workflow. The second is a run in another repository that called Systematic's reusable workflow ([Call it from another repository](#call-it-from-another-repository)), and it names that repository. A bare word always means Systematic, so a report names a repository only when it is not Systematic's own. The owner and repository in a named word are case-insensitive.
 
-The fetch needs the GitHub CLI (`gh`), logged in with a token that can read the Actions runs and artifacts of `marcusrbrown/systematic`. The skill runs `gh` with your own credentials, as explicit commands. The helper never touches the network. In order:
+`<run>` is the GitHub run id and `<attempt>` is the attempt number. Each is a positive integer, digits only. A scheduled report prints this form for each candidate, with the attempt that found it, for example `fetch:43525490720.1`, or `fetch:fro-bot/agent:43525490720.1` in another repository's report. A bare `fetch:<run>` still works for Systematic and reads the newest attempt of that run. A named word always carries the attempt. A `fetch:` word stands alone: combined with `group:` or `projects:` it stops with `conflicting-selection`, and it takes no `mode:`, because a fetch dispatches no researcher, asks nothing and observes no host.
 
-1. **Check the run before downloading anything.** Its workflow must be `.github/workflows/connect.yaml` and its event must be `schedule` or `workflow_dispatch`. A run of another workflow, or one started by a pull request, is refused whatever its artifacts hold.
-2. **Pick the artifact** named `connect-run-<run>-<attempt>`, and download it into a fresh temporary directory that is removed afterwards.
-3. **Import.** The helper reads only `run.json` from that directory (a plain file of at most 2 MiB; never a symlink), as untrusted input.
+The fetch needs the GitHub CLI (`gh`), logged in with a token that can read the Actions runs and artifacts of the repository the word names (`marcusrbrown/systematic` for a bare word). The skill runs `gh` with your own credentials, as explicit commands. Every command names github.com (`--hostname github.com` for an API call, `--repo github.com/<owner>/<repo>` for the download), because the allow-list origin is a github.com origin: `GH_HOST` or a GitHub Enterprise remote does not redirect the checks. The helper never touches the network. In order:
+
+1. **Check the repository (a named word only).** Before any `gh` command, the skill asks the helper's `allowed-origins` operation, which reads configuration and `.git` files and nothing else, for the GitHub origin of each allowed checkout. If the helper answers that it failed, or answers without the list of origins, the skill stops and prints the helper's reason, and runs no `gh` command. A repository that is not the `origin` of one allowed checkout is refused with `origin-not-allowed`, and nothing is downloaded. To fetch from a repository, add a local checkout of it to `connect.allow_projects`. A repository that two or more allowed checkouts share is refused with `repo-ambiguous`.
+2. **Check the run before downloading anything.** Its event must be `schedule` or `workflow_dispatch`. A run started by a pull request is refused whatever its artifacts hold. A bare word also needs the run's workflow to be `.github/workflows/connect.yaml` or `.github/workflows/connect-scheduled.yaml`, Systematic's own wrapper. It reads no `referenced_workflows`, so Systematic's own fetch does not depend on the proof below. A run of any other workflow is refused as `not-a-connect-run`.
+3. **Prove where a named run came from.** A named run's own workflow is the caller's wrapper, which proves nothing, so the skill reads the named attempt's `referenced_workflows` and never another attempt's, and hands the text `gh` printed to the helper's `verify-provenance` operation. The helper decides, not the model: it takes no lock, reads no network or configuration and writes nothing. Exactly one entry must name `marcusrbrown/systematic/.github/workflows/connect.yaml` (owner and repository without regard to case, the file path exactly) with a full 40-character commit SHA. GitHub's compare API must then show that commit as `behind` or `identical` against Systematic's `main`, so it is a commit in Systematic's own history. A copy of the workflow in a fork, a workflow of another path, or a commit that is not on `main` fails. The skill sends the helper the same text a second time with the compare status, and the helper accepts only `behind` or `identical`. A field that is absent or malformed, text that is not JSON, an API error and a commit that cannot be looked up all fail closed as `provenance-unprovable`: the proof is missing, which is not a finding that the run is hostile. To fix it, check that the caller's wrapper calls `marcusrbrown/systematic/.github/workflows/connect.yaml` at a commit on Systematic's `main`, then retry; if an API call failed, retry later.
+4. **Pick the artifact** named `connect-run-<run>-<attempt>`, from the attempt the word names and no other, and download it into a fresh temporary directory that is removed afterwards. A named word or an explicit attempt looks the artifact up by its exact name. A bare `fetch:<run>`, which must find the newest attempt, lists every page of the run's artifacts.
+5. **Import.** The helper reads only `run.json` from that directory (a plain file of at most 2 MiB; never a symlink), as untrusted input.
 
 The import maps each project in the record to exactly one allowed local checkout by its `origin` remote (`owner/repo`). It then recomputes every candidate id and rule id from your local roots, never trusting a recorded one, and re-verifies each cited file's fingerprint and each excerpt against your files. It inserts the accepted candidates into your local ledger as a local run, so the usual promotion lines come out unchanged, and prints them. It never changes coverage, and it writes no learning.
 
@@ -297,7 +302,11 @@ A refused candidate is not proof the lesson is wrong. A later scheduled run prop
 
 Your checkout may be at a different commit than the one the run read. That is accepted when every check passes, and the summary shows both commits for each project. A candidate you already decided locally is skipped and named. A rerun of the same fetch writes nothing new and prints the lines of the candidates that are still open.
 
-If the fetch stops before the import, the skill prints one of these reasons: `not-a-connect-run`, `unsupported-run-event`, `run-not-found`, `gh-not-authenticated`, `artifact-list-failed`, `artifact-not-found`, `artifact-expired` or `download-failed`. If `node` or the helper file is missing, or the import prints no answer, it prints `helper-unavailable`. In every case it ends with `Connect failed`. An artifact is kept for a limited time. When it has expired, tick Rejected on the candidate in the run's report, or wait for a later run to propose it again.
+A named fetch that passes the checks above has shown where the run came from. It does not widen what the import accepts: every project the record names is still matched to an allowed checkout by the import's own check, and a candidate whose evidence repository is not allowed is refused as `repo-not-allowed`.
+
+If the fetch stops before the import, the skill prints one of these reasons: `origin-not-allowed`, `repo-ambiguous`, `provenance-unprovable`, `not-a-connect-run`, `unsupported-run-event`, `run-not-found`, `gh-not-authenticated`, `artifact-list-failed`, `artifact-not-found`, `artifact-expired` or `download-failed`. The first three apply to a named word only, and `run-not-found` also covers an attempt that does not exist. If `node` or the helper file is missing, or the import prints no answer, it prints `helper-unavailable`. In every case it ends with `Connect failed`. An artifact is kept for a limited time. When it has expired, tick Rejected on the candidate in the run's report, or wait for a later run to propose it again.
+
+Fetching a run of `connect-scheduled.yaml`, Systematic's own wrapper, needs a Systematic release that includes the change that made that wrapper call the reusable workflow. An earlier skill accepts only runs of `connect.yaml` and refuses a run of `connect-scheduled.yaml` as `not-a-connect-run`. Earlier runs of `connect.yaml` still fetch on any version. If you see that refusal for a recent run, update Systematic and fetch again.
 
 ### Settle a candidate on a report
 
@@ -340,27 +349,32 @@ A lock held by a process that has died is reclaimed by the next run without any 
 
 ## Scheduled runs
 
-Systematic's repository runs one headless `ce:connect` slice a day over public repositories, and posts what it found as a GitHub issue. The workflow is `.github/workflows/connect.yaml`. It starts every day at 05:41 UTC, and you can start it by hand with `workflow_dispatch`. Both triggers run only on the repository's default branch; on any other branch every job is skipped.
+Systematic's repository runs one headless `ce:connect` slice a day over public repositories, and posts what it found as a GitHub issue. Two workflow files do it:
+
+- **`.github/workflows/connect.yaml`** holds the four jobs. It is a reusable workflow that runs only when another workflow calls it (`workflow_call`), and it cannot be started on its own.
+- **`.github/workflows/connect-scheduled.yaml`** is Systematic's own wrapper. It owns the triggers: every day at 05:41 UTC, and `workflow_dispatch` for a manual start. It also owns the permissions ceiling and the settings, and it passes them to `connect.yaml` as inputs and secrets. It calls that workflow from the same repository, so it pins nothing.
+
+Any repository can call `connect.yaml` from a wrapper of its own ([Call it from another repository](#call-it-from-another-repository)). Every job checks the event and the branch of the run that called it: it runs only for `schedule` or `workflow_dispatch`, and only on the calling repository's default branch. On any other branch, or from a wrapper on another trigger such as `pull_request_target`, every job is skipped.
 
 The run is headless, so it asks nothing and decides nothing. It proposes candidates. You settle them by ticking boxes on the report ([Settle a candidate on a report](#settle-a-candidate-on-a-report)) or by fetching them to your machine ([Bring a scheduled run's candidates here](#bring-a-scheduled-runs-candidates-here)).
 
 ### Set it up
 
-The workflow reads five repository variables and two repository secrets.
+Systematic's wrapper reads five repository variables and two repository secrets, and passes each to the workflow by name. The workflow reads no repository variables itself, so every setting it uses is an input you can see in the wrapper. The wrapper turns each variable into an input, and an unset variable arrives as an empty string. The workflow treats an empty `variant` as none and an empty `step-timeout-minutes` as 40, and it fails a run whose `projects`, `parent-model` or `researcher-model` is empty.
 
-| Name | Kind | What it holds |
-|---|---|---|
-| `FRO_BOT_CONNECT_PROJECTS` | Variable | The projects to read, as `owner/repo` entries separated by whitespace or commas. Case is folded, duplicates are dropped, and a list must hold between 1 and 16 entries. An entry's checkout name, `owner__repo`, may be at most 100 characters, because the workflow reads the repository back from that name. A longer entry stops the run. |
-| `FRO_BOT_CONNECT_MODEL` | Variable | Required. The researcher's model, as `provider/model`. |
-| `FRO_BOT_CONNECT_VARIANT` | Variable | Optional. A model variant for the researcher. |
-| `FRO_BOT_CONNECT_STEP_TIMEOUT` | Variable | Optional. The minutes the agent step may run, as a whole number below the run job's 50-minute timeout. The default is 40. It bounds the agent step so a hung run still posts its report. |
-| `FRO_BOT_MODEL` | Variable | The model of the parent agent that runs the skill, as `provider/model`. It is the same variable the Fro Bot workflow uses. The workflow does not check it: if it is unset, the action falls back to its own default model. |
-| `OPENCODE_AUTH_JSON` | Secret | The model provider's credential. |
-| `OPENCODE_CONFIG` | Secret | The OpenCode configuration the action needs next to the credential. The credential alone fails provider authentication, so both are required. |
+| Name | Kind | Reaches the workflow as | What it holds |
+|---|---|---|---|
+| `FRO_BOT_CONNECT_PROJECTS` | Variable | `projects` | The projects to read, as `owner/repo` entries separated by whitespace or commas. Case is folded, duplicates are dropped, and a list must hold between 1 and 16 entries. An entry's checkout name, `owner__repo`, may be at most 100 characters, because the workflow reads the repository back from that name. A longer entry stops the run. |
+| `FRO_BOT_CONNECT_MODEL` | Variable | `researcher-model` | Required. The researcher's model, as `provider/model`. |
+| `FRO_BOT_CONNECT_VARIANT` | Variable | `variant` | Optional. A model variant for the researcher. |
+| `FRO_BOT_CONNECT_STEP_TIMEOUT` | Variable | `step-timeout-minutes` | Optional. The minutes the agent step may run, as a whole number below the run job's 50-minute timeout. The default is 40. It bounds the agent step so a hung run still posts its report. |
+| `FRO_BOT_MODEL` | Variable | `parent-model` | Required. The model of the parent agent that runs the skill, as `provider/model`. It is the same variable the Fro Bot workflow uses. |
+| `OPENCODE_AUTH_JSON` | Secret | `OPENCODE_AUTH_JSON` | The model provider's credential. |
+| `OPENCODE_CONFIG` | Secret | `OPENCODE_CONFIG` | The OpenCode configuration the action needs next to the credential. The credential alone fails provider authentication, so both are required. |
 
-The two secrets reach only the step that runs the agent, as the action's `auth-json` and `opencode-config` inputs. No other job or step references them.
+The wrapper names both secrets one by one, because `secrets: inherit` does not cross owners and a call that works for another repository has to work here the same way. The two secrets reach only the step that runs the agent, as the action's `auth-json` and `opencode-config` inputs. The first job checks that each is non-empty by comparing it to the empty string inside an expression, so only a true or false reaches a script, and the value never enters a step environment. No other job or step references them. A well-formed but wrong credential is a provider failure at run time, not a failure of that check.
 
-A bad variable stops the run in its first job, before anything is cloned or posted, and the workflow ends red. That covers a missing or malformed model, an entry that is not `owner/repo`, an empty list, a list over 16 and a step timeout that is not a whole number of minutes below 50.
+A bad setting stops the run in its first job, before anything is cloned or posted, and the workflow ends red. That covers an empty secret, a missing or malformed model (the parent's as well as the researcher's), a variant that is not a variant name, an entry that is not `owner/repo`, an empty list, a list over 16 and a step timeout that is not a whole number of minutes below 50.
 
 **Only public repositories are read.** The first job asks the GitHub API for each repository's visibility and treats an error as not public. One repository that is not public stops the whole run. The render job checks again before it saves the cache or uploads anything, and the last job checks again right before it writes, so a repository made private during the run is caught too. Both rechecks cover every repository the cached state names, shown or not: the repositories behind all stored candidates and every retained run record, including ones that have left the list. The first job runs the same check before it uploads the restored cache, and a repository that is no longer public fails the run with nothing uploaded, cached or posted. A repository that cannot be named fails the run too. To recover, delete the connect cache with `gh cache list --key connect-v1- --limit 100 --json id --jq '.[].id' | xargs -n 1 gh cache delete`. The next run then starts with an empty ledger. Each repository is cloned without credentials, at its default branch, with its history cut to the latest commit.
 
@@ -371,11 +385,13 @@ The four jobs split the work by what each may touch:
 3. **Render** has no permissions and no secrets. It renders the report from what the run left, rechecks visibility, saves the ledger cache and checks that the save left a cache behind.
 4. **Post** is the only job that can write, and it can write only issues. It writes the report and closes the reports it replaces.
 
-Only the run job checks out Systematic's repository, and it takes `.github/actions` alone: the shared agent action that the Fro Bot workflow runs too. The checkout lands in `.fro-bot-actions`, keeps no credential and leaves the connect layout alone. No job runs a script from the repository. The jobs pass files to each other as artifacts, and an artifact carries only the connect files on an allow list: the ledger, the stores behind the report, the invocation record, and each run's `run.json` and `digest.md`. These artifacts are kept for one day.
+Only the run job checks out any repository. It takes the called workflow's own repository, at the commit that was called, and only `.github/actions` of it: the shared agent action that the Fro Bot workflow runs too. For Systematic's wrapper that is this repository. For a caller elsewhere it is still Systematic, never the caller, so a caller cannot put its own code in the action's place. The checkout lands in `.fro-bot-actions`, keeps no credential and leaves the connect layout alone. Repository skills are off for this run (the action's `repo-skills` input is `"false"`). No job runs a script from the repository. The jobs pass files to each other as artifacts, and an artifact carries only the connect files on an allow list: the ledger, the stores behind the report, the invocation record, and each run's `run.json` and `digest.md`. These artifacts are kept for one day.
 
 ### Pin the Systematic version
 
-The workflow installs one exact release of `@fro.bot/systematic`. The same version feeds the action's `systematic-version` input and the helper that renders the report and reads the ticks, so the skill that wrote the state and the helper that reads it are the same release. Bump it by editing `SYSTEMATIC_VERSION` at the top of the workflow. Do it with each Systematic release that changes the format of the ledger or the run records.
+The workflow installs one exact release of `@fro.bot/systematic`. The same version feeds the action's `systematic-version` input and the helper that renders the report and reads the ticks, so the skill that wrote the state and the helper that reads it are the same release. Bump it by editing `SYSTEMATIC_VERSION` at the top of `connect.yaml`. Do it with each Systematic release that changes the format of the ledger or the run records.
+
+The value is read from the commit that was called. A caller pins `connect.yaml` at a commit, and that commit's `SYSTEMATIC_VERSION` decides which helper its runs use. Nothing a caller sets changes it.
 
 The `fro-bot/agent` action is pinned by commit in one place, `.github/actions/fro-bot-agent/action.yml`, which this workflow and the Fro Bot workflow both run, and its pin follows Renovate. A headless run refuses a host and version that `HOST_SUPPORT_TABLE` does not list ([Supported hosts](#supported-hosts)): the run ends `Connect failed` with the reason `unsupported-host`, and the workflow turns red.
 
@@ -387,7 +403,7 @@ The report lists the candidates that are still open and have verified details, o
 
 - the sources and the target evidence, shown as quoted text,
 - for a code mismatch, its reason and each evidence item as `project:path:span:HEAD`, without the excerpt (`fetch:` supplies it),
-- a `fetch:<run>.<attempt>` line for the run and attempt that found it, to bring it to your machine, and
+- a `fetch:<run>.<attempt>` line for the run and attempt that found it, to bring it to your machine (a report posted in another repository names it: `fetch:<owner>/<repo>:<run>.<attempt>`), and
 - two boxes, **Promoted** and **Rejected**.
 
 Tick **one** box per candidate. Ticking both is a conflict, and neither is recorded. The next run reads the ticks from the newest open report. Ticks on a closed report are ignored, so settle a candidate before the next report supersedes the report that lists it. A box ticked on any line the report did not generate records nothing.
@@ -398,7 +414,7 @@ The report also says how the run ended: `Connect complete`, `Connect degraded`, 
 
 The agent step has its own timeout, `FRO_BOT_CONNECT_STEP_TIMEOUT` (40 minutes by default), shorter than the run job's. A hung run is cut off at that point and the steps after it still run: the run record is read, handed on and posted, and the report says the run ended with no final line. The job's own timeout is only a backstop. When a job is cancelled or times out, every step after the agent is skipped and nothing is posted.
 
-A failure before the report can be rendered turns the workflow red and posts nothing. This covers an agent step that stopped before `ce:connect` began, a run record that does not belong to this run, projects that differ from the allow list the workflow wrote, a store that cannot be read, and a lock that is held. The next run starts from the last good state and reads the same open report again.
+A failure before the report can be rendered turns the workflow red and posts nothing. This covers an agent step that stopped before `ce:connect` began, a run record that does not belong to this run, projects that differ from the allow list the workflow wrote, a store that cannot be read, a lock that is held, and, in a repository other than Systematic, a pinned helper too old for it. The first job checks the installed helper before any agent work and fails when it has no `verify-provenance` operation. The render job fails when the helper does not name your repository in the fetch lines it generates (fetch words quoted inside a candidate's text are not read), and stops before it saves the cache or uploads anything. Both say to pin a newer callee commit whose `SYSTEMATIC_VERSION` carries named fetch words. The next run starts from the last good state and reads the same open report again.
 
 ### What the cache holds
 
@@ -417,7 +433,7 @@ GitHub evicts caches that go unused for seven days or push a repository over its
 
 The run saves its run record as an artifact named `connect-run-<run>-<attempt>`, kept for 30 days. It holds the run record and nothing else. `fetch:<run>.<attempt>` reads that attempt's artifact and no other ([Bring a scheduled run's candidates here](#bring-a-scheduled-runs-candidates-here)). After a workflow rerun, each attempt keeps its own artifact, and a candidate carried over from an earlier attempt still names that attempt. If the named artifact is missing, `fetch` reports `artifact-not-found`, and once it has expired, `artifact-expired`. It never reads another attempt in its place. Tick **Rejected** on the report, or wait for a later run to propose the candidate again.
 
-`fetch:` reads runs of `marcusrbrown/systematic` only. A copy of the workflow in another repository posts its own reports and ticks, but its runs cannot be fetched.
+A bare `fetch:` reads runs of `marcusrbrown/systematic` only. A named `fetch:` reads a run of an allowed repository that called Systematic's `connect.yaml` at a commit on Systematic's default branch, and refuses everything else. A copy of the workflow, in a fork or under another path, posts its own reports and ticks, but its runs cannot be fetched.
 
 ### What the credential can reach
 
@@ -435,6 +451,104 @@ The mitigations narrow what a leak is worth. None of them stops the leak:
 - The report is inert: model text is fenced and neutralised, and a quoted checkbox records nothing.
 
 If that exposure is more than you accept, do not enable the workflow, or use a provider credential that you can scope and revoke.
+
+## Call it from another repository
+
+A repository of your own can run the same sweep. You add one small workflow, the wrapper, that calls Systematic's `connect.yaml`. The wrapper owns the schedule and the settings. Systematic's workflow owns the jobs. The report issue, the ledger cache and the artifacts all live in the repository that calls it, and Systematic's own report and cache are not touched.
+
+### Copy the wrapper
+
+Save this as a workflow file in the calling repository and fill in the pin. Systematic's own wrapper, `.github/workflows/connect-scheduled.yaml`, has the same shape.
+
+```yaml
+name: Connect
+
+on:
+  schedule:
+    - cron: "17 4 * * *" # pick your own time, in UTC
+  workflow_dispatch:
+
+# No permissions at the top: each job asks for its own.
+permissions: {}
+
+jobs:
+  connect:
+    name: Connect
+    # A called workflow can only narrow what its caller grants, so this is the
+    # ceiling for all four of its jobs: read for the first two, and the report
+    # issue in the last one.
+    permissions:
+      contents: read
+      issues: write
+    # Pin by full 40-character commit SHA, with the release as a comment.
+    # Renovate reads the comment and keeps both current.
+    uses: marcusrbrown/systematic/.github/workflows/connect.yaml@<40-character SHA> # vX.Y.Z
+    with:
+      # Your own repository variables, passed in by name. The called workflow
+      # reads no variables itself, and an unset one arrives empty.
+      projects: ${{ vars.CONNECT_PROJECTS }}
+      parent-model: ${{ vars.CONNECT_PARENT_MODEL }}
+      researcher-model: ${{ vars.CONNECT_RESEARCHER_MODEL }}
+      variant: ${{ vars.CONNECT_VARIANT }}
+      step-timeout-minutes: ${{ vars.CONNECT_STEP_TIMEOUT }}
+    # Both secrets, one by one: `secrets: inherit` does not cross owners.
+    secrets:
+      OPENCODE_AUTH_JSON: ${{ secrets.OPENCODE_AUTH_JSON }}
+      OPENCODE_CONFIG: ${{ secrets.OPENCODE_CONFIG }}
+```
+
+Set no `concurrency` in the wrapper. The called workflow holds its own group, scoped to your repository, and queues runs behind one another instead of cancelling them. The `uses:` line may write the owner and repository in any case, because GitHub and the `fetch:` check both ignore it there. The path after them is exact: `.github/workflows/connect.yaml`.
+
+The workflow runs only for `schedule` and `workflow_dispatch` and only on your repository's default branch. Keep the wrapper on the default branch, and give it no other trigger: a run from another trigger starts no job.
+
+### Choose the commit
+
+The commit you pin decides everything that runs. The called workflow's own `SYSTEMATIC_VERSION` names the release that supplies the skill and the helper, so the helper of your runs is the release named at your pinned commit, and nothing you set changes it. Named `fetch:` words and the report lines that carry them need a helper that has them. A release's tag commit names the previous release, because Renovate bumps `SYSTEMATIC_VERSION` after the tag, so read the value in the commit you mean to pin before you pin it. With an older helper the report would print bare words, which mean Systematic and would not fetch your run, so the render job refuses to go on: in a repository other than Systematic it fails red when any fetch word does not name your repository, before the ledger cache is saved or any artifact is uploaded. Pin a commit whose `SYSTEMATIC_VERSION` carries named fetch words, then run again.
+
+The agent action itself is pinned inside Systematic's repository, at the commit you call, and you do not set it.
+
+### Before the first run
+
+Work through this list once.
+
+1. **The agent can read the credentials.** The agent step has shell and network access, and it can read the provider credential and the job's token. A prompt injection hidden in a public repository could try to leak either. This is the exposure described in [What the credential can reach](#what-the-credential-can-reach), and it applies in your repository. Use a provider credential you can scope and revoke.
+2. **Content from your repository that still reaches the agent.** The workflow turns the agent action's repository skills off (`repo-skills` is `"false"`), and it never checks out your repository: the only checkout is the called workflow's own `.github/actions`. A read of the pinned action's source (`fro-bot/agent` v0.146.0 on OpenCode v2.3.2) shows that with the setting off, your repository's `.agents/skills`, `AGENTS.md`, `CLAUDE.md`, `opencode.json` and repository plugins are not loaded, because the action turns project configuration off for every spawn. That is read from source and not observed in a live skills-off run, and `.claude/skills` and `.opencode/` plugin directories were not traced to a line. Confirm it in the agent step's log on the first run. Whatever else sits on the runner's disk, the agent can read.
+3. **The report is not screened for secret values.** The report is an issue in your repository, and it is public when the repository is. It quotes excerpts of the repositories it read, and the run record is an artifact for 30 days, readable by anyone who can read your artifacts. Nothing checks either for secret values.
+4. **The Actions policy must allow the callee.** An organization or repository policy may limit which actions and reusable workflows run. Allow `marcusrbrown/systematic` workflows at the pinned commit, or the policy refuses the call. A call from one organization to a public, SHA-pinned `connect.yaml` in another owner ran without a policy error in a probe, but your policy is your own, and it was not read.
+5. **Issues must be enabled.** The report is an issue, written with the job token under the `issues: write` ceiling. In a repository with Issues off, the last job cannot write it.
+6. **Inputs and secrets.** All inputs are strings. A required input that is empty fails the first job red, and an unset repository variable arrives as an empty string.
+
+   | Input | Required | Default |
+   |---|---|---|
+   | `projects` | Yes | None. `owner/repo` entries, 1 to 16, public repositories only, separated by whitespace or commas. |
+   | `parent-model` | Yes | None. `provider/model` for the parent agent. |
+   | `researcher-model` | Yes | None. `provider/model` for `connections-researcher`. |
+   | `variant` | No | Empty, which means none. |
+   | `step-timeout-minutes` | No | Empty, which means 40. A whole number below 50. |
+
+   Both secrets are required: `OPENCODE_AUTH_JSON` and `OPENCODE_CONFIG`. The first job fails red when either is empty.
+7. **Renovate, in the calling repository.** Renovate's `github-actions` manager bumps a SHA pin and its `# vX.Y.Z` comment on its own. The pinned workflow runs with your provider credential, so a person should review each bump. Disable automerge for it, and put the rule after any preset that sets automerge for that manager, because a later rule wins:
+
+   ```json5
+   {
+     packageRules: [
+       {
+         description: 'Review each ce:connect workflow bump by hand: it runs with provider credentials',
+         matchManagers: ['github-actions'],
+         matchDepTypes: ['workflow'],
+         matchPackageNames: ['marcusrbrown/systematic'],
+         automerge: false,
+       },
+     ],
+   }
+   ```
+
+   Check it with a simulated update before you rely on it: the proposal should keep a full SHA and a version comment, and it should not automerge. Systematic's own wrapper calls the workflow with `./`, so it has no pin and needs no rule.
+8. **A bump can change the format.** A Systematic release that changes the format of the ledger or the run records changes what a report's boxes mean ([Settle a candidate on a report](#settle-a-candidate-on-a-report)). Before such a bump merges, settle the open rows on the current report: tick Promoted or Rejected on each. Nothing detects a format change, and Renovate does not enforce this step.
+9. **Trust limits.** Read these before you allow another repository's runs.
+   - **Allowing an origin trusts its workflows.** A named `fetch:` needs the repository to be the `origin` of an allowed checkout. The run record comes from a run in that repository, so it is only as trustworthy as that repository. The import still checks fingerprints, spans and excerpts against your own files, and the title and summary are still model text that nothing checks.
+   - **Provenance is run-level.** The check shows that the run called Systematic's `connect.yaml` at a commit in `main`'s history. It does not tie the downloaded artifact to a job of that workflow: another job in the same run could upload an artifact with the expected name. The import's own checks are what stand between such a record and your ledger.
+   - **Old callee commits stay trusted.** Any commit in `main`'s history passes the check, and there is no version floor. After a security fix in `connect.yaml`, re-pin every caller to the fixed commit. Nothing refuses a run that called an older one.
 
 ## Supported hosts
 
@@ -480,4 +594,4 @@ Read these before you add a project.
 
 The helper opens no connection at all. Apart from `fetch:` (below) and the scheduled workflow, `ce:connect` makes no network call of its own and sends nothing to anyone but your model provider. Everything a run reads and writes is on your machine. The text the researcher reads, and the digest, reach your model provider like any other tool result.
 
-The one command that reaches GitHub is `fetch:<run>`, and only when you type it. The skill runs `gh` with your own credentials to read one run and download one artifact of `marcusrbrown/systematic`. The requests carry the run id and your `gh` token. Nothing from your projects is uploaded. See [Privacy](/systematic/privacy/#connecting-your-projects).
+The one command that reaches GitHub is `fetch:`, and only when you type it. A bare `fetch:<run>` reads one run and downloads one artifact of `marcusrbrown/systematic`. A named `fetch:<owner>/<repo>:<run>.<attempt>` first asks the helper which repositories your allowed checkouts come from, reading configuration and `.git` files and nothing else. For a repository on that list it then makes three kinds of request with your own `gh` credentials: it reads the run and its attempt in that repository, it asks Systematic's repository to compare the commit that run called against `main`, and it downloads one artifact of the run. The requests carry the repository, the run id, the attempt, a commit hash and your `gh` token. For a repository that is not on the list it makes none. Nothing from your projects is uploaded. See [Privacy](/systematic/privacy/#connecting-your-projects).

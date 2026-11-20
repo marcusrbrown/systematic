@@ -89,6 +89,8 @@ function withOf(id: JobId, name: string): RecordValue {
 
 const GUARD =
   "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+const EVENT_GUARD =
+  "(github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')"
 const CONNECT_TITLE = 'ce:connect report — 2026-11-12 (UTC)'
 const FRO_BOT_TITLE = 'Daily Fro Bot Report — 2026-11-12 (UTC)'
 const AGENT_STEP = 'Run ce:connect'
@@ -96,26 +98,58 @@ const CHECKOUT_STEP = 'Check out the shared agent action'
 const SHARED_ACTION_FILE = '.github/actions/fro-bot-agent/action.yml'
 const SHARED_ACTION_USES = './.github/actions/fro-bot-agent'
 const STEP_TIMEOUT_EXPRESSION =
-  "${{ fromJSON(vars.FRO_BOT_CONNECT_STEP_TIMEOUT || '40') }}"
+  "${{ fromJSON(inputs.step-timeout-minutes || '40') }}"
+/** The inputs a caller supplies, and which of them it must. */
+const REQUIRED_INPUTS = ['parent-model', 'projects', 'researcher-model']
+const OPTIONAL_INPUTS = ['step-timeout-minutes', 'variant']
+const SECRET_NAMES = ['OPENCODE_AUTH_JSON', 'OPENCODE_CONFIG']
 
 // ── Structure ───────────────────────────────────────────────────────────────
 
 describe('connect workflow structure', () => {
-  it('runs on a daily schedule and on dispatch only', () => {
+  it('runs only when called: the one trigger is workflow_call, with no schedule or dispatch of its own', () => {
     const on = asRecord(WORKFLOW.on, 'on')
-    expect(Object.keys(on).sort()).toEqual(['schedule', 'workflow_dispatch'])
-    const schedule = asArray(on.schedule, 'schedule')
-    expect(schedule).toHaveLength(1)
-    const cron = asString(asRecord(schedule[0], 'cron entry').cron, 'cron')
-    expect(cron).toMatch(/^([1-9]|[1-5][0-9]) ([0-9]|1[0-9]|2[0-3]) \* \* \*$/)
+    expect(Object.keys(on)).toEqual(['workflow_call'])
   })
 
-  it('serializes runs in one group without cancelling a run in progress', () => {
-    expect(WORKFLOW.concurrency).toEqual({
-      group: 'ce-connect-scheduled',
-      'cancel-in-progress': false,
-      queue: 'max',
-    })
+  it('declares the caller inputs as strings: three required, two optional', () => {
+    const call = asRecord(asRecord(WORKFLOW.on, 'on').workflow_call, 'call')
+    const inputs = asRecord(call.inputs, 'inputs')
+    expect(Object.keys(inputs).sort()).toEqual(
+      [...REQUIRED_INPUTS, ...OPTIONAL_INPUTS].sort(),
+    )
+    for (const [name, value] of Object.entries(inputs)) {
+      const input = asRecord(value, name)
+      expect(input.type).toBe('string')
+      expect(input.required).toBe(REQUIRED_INPUTS.includes(name))
+      expect(typeof input.description).toBe('string')
+      // An unset input arrives empty, and prepare normalizes it; a default here
+      // would hide a caller that forgot to pass one.
+      expect(input).not.toHaveProperty('default')
+    }
+  })
+
+  it('declares the two provider secrets by name and no other', () => {
+    const call = asRecord(asRecord(WORKFLOW.on, 'on').workflow_call, 'call')
+    const secrets = asRecord(call.secrets, 'secrets')
+    expect(Object.keys(secrets).sort()).toEqual([...SECRET_NAMES].sort())
+    for (const [name, value] of Object.entries(secrets)) {
+      expect(asRecord(value, name).required).toBe(true)
+    }
+  })
+
+  it('serializes runs in one group of its own without cancelling a run in progress', () => {
+    const concurrency = asRecord(WORKFLOW.concurrency, 'concurrency')
+    expect(Object.keys(concurrency).sort()).toEqual([
+      'cancel-in-progress',
+      'group',
+      'queue',
+    ])
+    // The caller's repository scopes the group, and a wrapper sets none, so a
+    // static name here cannot collide. It must not be an expression.
+    expect(asString(concurrency.group, 'group')).toMatch(/^[a-z][a-z0-9-]+$/)
+    expect(concurrency['cancel-in-progress']).toBe(false)
+    expect(concurrency.queue).toBe('max')
   })
 
   it('grants no permissions at the top and the narrowest set per job', () => {
@@ -129,9 +163,15 @@ describe('connect workflow structure', () => {
     expect(job('post').permissions).toEqual({ issues: 'write' })
   })
 
-  it('guards every job to the default branch and orders them with needs', () => {
+  it('guards every job to the allowed events and the caller default branch, and orders them with needs', () => {
     for (const id of JOB_IDS) {
-      expect(asString(job(id).if, `${id} if`)).toContain(GUARD)
+      const condition = asString(job(id).if, `${id} if`)
+      expect(condition).toContain(EVENT_GUARD)
+      expect(condition).toContain(GUARD)
+    }
+    // The prepare and run jobs have nothing else to say.
+    for (const id of ['prepare', 'run'] as const) {
+      expect(job(id).if).toBe(`${EVENT_GUARD} && ${GUARD}`)
     }
     expect(job('run').needs).toBe('prepare')
     expect(job('render').needs).toEqual(['prepare', 'run'])
@@ -203,31 +243,47 @@ describe('connect workflow structure', () => {
     }
   })
 
-  it('reads the variables in one prepare step and nowhere else', () => {
-    const names = [
-      'FRO_BOT_CONNECT_PROJECTS',
-      'FRO_BOT_CONNECT_MODEL',
-      'FRO_BOT_CONNECT_VARIANT',
-      'FRO_BOT_CONNECT_STEP_TIMEOUT',
-    ]
-    // The step timeout is also read where it bounds the agent step; prepare
-    // validates it first, and the run job needs prepare.
-    for (const name of names) {
-      const reads = name === 'FRO_BOT_CONNECT_STEP_TIMEOUT' ? 2 : 1
-      expect(SOURCE.split(`vars.${name}`).length - 1).toBe(reads)
-    }
+  it('reads no repository variable anywhere: a callee reads its caller repository variables', () => {
+    expect(SOURCE).not.toMatch(/\bvars\./)
+  })
+
+  it('reads each caller input in prepare, and only the timeout and the parent model again for the agent step', () => {
+    const declared = [...REQUIRED_INPUTS, ...OPTIONAL_INPUTS]
+    const reads = [...SOURCE.matchAll(/\binputs\.([a-z-]+)/g)].map(
+      (match) => match[1],
+    )
+    // No read of an input the workflow does not declare, and none unread.
+    expect([...new Set(reads)].sort()).toEqual([...declared].sort())
     const env = asRecord(
       stepNamed('prepare', 'Validate configuration').env,
       'config env',
     )
     expect(Object.values(env)).toEqual(
-      expect.arrayContaining(names.map((name) => `\${{ vars.${name} }}`)),
+      expect.arrayContaining(declared.map((name) => `\${{ inputs.${name} }}`)),
     )
-    expect(
-      JSON.stringify(
-        stepsOf('run').filter((step) => step.name !== 'Run ce:connect'),
-      ),
-    ).not.toContain('vars.')
+    const agentOnly = stepsOf('run')
+      .filter((step) => step.name !== 'Run ce:connect')
+      .map((step) => JSON.stringify(step))
+      .join('')
+    expect(agentOnly).not.toContain('inputs.')
+    for (const id of ['render', 'post'] as const) {
+      expect(JSON.stringify(stepsOf(id))).not.toContain('inputs.')
+    }
+  })
+
+  it('names no repository literally outside comments, so it runs in any caller', () => {
+    const code = SOURCE.split('\n')
+      .map((line) => line.replace(/(^|\s)#.*$/, ''))
+      .join('\n')
+    // The one exception: the two checks that a caller other than Systematic
+    // gets named fetch words (prepare's capability check and render's word
+    // check). The helper keeps bare words for Systematic alone, so the checks
+    // have to name it, and they are the only places.
+    const exception = 'if [ "$caller" != marcusrbrown/systematic ]; then'
+    expect(code.split(exception).length - 1).toBe(2)
+    const rest = code.replaceAll(exception, '')
+    expect(rest).not.toMatch(/marcusrbrown\/systematic/)
+    expect(code).not.toMatch(/github\.com\/(?!\$\{)[A-Za-z0-9_-]+\/[A-Za-z]/)
   })
 
   it('keeps the report title apart from the Fro Bot daily report in both directions', () => {
@@ -254,28 +310,38 @@ describe('connect workflow structure', () => {
 })
 
 describe('connect workflow credentials', () => {
-  it('references each provider secret once, as the action step input', () => {
-    expect(SOURCE.split('secrets.OPENCODE_AUTH_JSON').length - 1).toBe(1)
-    expect(SOURCE.split('secrets.OPENCODE_CONFIG').length - 1).toBe(1)
+  it('hands each provider secret to the action step, and reads it elsewhere only as an emptiness check in prepare', () => {
     const action = withOf('run', 'Run ce:connect')
     expect(action['auth-json']).toBe('${{ secrets.OPENCODE_AUTH_JSON }}')
     expect(action['opencode-config']).toBe('${{ secrets.OPENCODE_CONFIG }}')
-    expect(SOURCE.match(/secrets\.[A-Z_]+/g)?.sort()).toEqual([
-      'secrets.OPENCODE_AUTH_JSON',
-      'secrets.OPENCODE_CONFIG',
+    expect(SOURCE.match(/secrets\.[A-Z_]+[^}]*/g)?.sort()).toEqual([
+      'secrets.OPENCODE_AUTH_JSON ',
+      "secrets.OPENCODE_AUTH_JSON != '' ",
+      'secrets.OPENCODE_CONFIG ',
+      "secrets.OPENCODE_CONFIG != '' ",
     ])
   })
 
-  it('gives the agent only the job token and keeps secrets out of env blocks', () => {
+  it('gives the agent only the job token and lets no secret value into an env block', () => {
     expect(withOf('run', 'Run ce:connect')['github-token']).toBe(
       '${{ github.token }}',
     )
-    for (const { step } of allSteps()) {
+    // A secret may be compared with the empty string inside an expression, so
+    // only a boolean reaches the script. The value itself never does.
+    const booleanOnly = /^\$\{\{ secrets\.[A-Z_]+ != '' \}\}$/
+    const checks: Array<[JobId, string]> = []
+    for (const { id, step } of allSteps()) {
       if (step.env === undefined) continue
       for (const value of Object.values(asRecord(step.env, 'env'))) {
-        expect(String(value)).not.toContain('secrets.')
+        if (!String(value).includes('secrets.')) continue
+        expect(String(value)).toMatch(booleanOnly)
+        checks.push([id, String(step.name)])
       }
     }
+    expect(checks).toEqual([
+      ['prepare', 'Validate configuration'],
+      ['prepare', 'Validate configuration'],
+    ])
     for (const id of JOB_IDS) {
       expect(job(id).env).toBeUndefined()
     }
@@ -387,6 +453,7 @@ const SHARED_OPTIONAL_DEFAULTS: Readonly<Record<string, string>> = {
   'agent-state-home': '',
   'isolate-agent': 'false',
   'output-mode': '',
+  'repo-skills': 'true',
   'response-mode': 'github',
   'systematic-version': '',
   'trusted-head-sha': '',
@@ -423,7 +490,6 @@ describe('the shared fro-bot agent action', () => {
   it('owns the runtime settings both callers share', () => {
     const step = sharedActionStep()
     expect(asRecord(step.with, 'with').timeout).toBe(0)
-    expect(asRecord(step.with, 'with')['repo-skills']).toBe('true')
     expect(asRecord(step.env, 'env')).toEqual({
       OPENCODE_PROMPT_ARTIFACT: 'true',
     })
@@ -457,11 +523,62 @@ describe('the shared fro-bot agent action', () => {
       asRecord(readSharedAction().action.inputs, 'inputs'),
     )
     const given = asRecord(sharedActionStep().with, 'with')
-    expect(Object.keys(given).sort()).toEqual(
-      [...inputs, 'timeout', 'repo-skills'].sort(),
-    )
+    expect(Object.keys(given).sort()).toEqual([...inputs, 'timeout'].sort())
     for (const name of inputs) {
       expect(given[name]).toBe(`\${{ inputs.${name} }}`)
+    }
+  })
+
+  it('declares repo-skills as an optional input that defaults on, and forwards it unchanged', () => {
+    const inputs = asRecord(readSharedAction().action.inputs, 'inputs')
+    const input = asRecord(inputs['repo-skills'], 'repo-skills')
+    expect(input.required).toBe(false)
+    expect(input.default).toBe('true')
+    expect(asString(input.description, 'repo-skills description')).toContain(
+      '.agents/skills',
+    )
+    expect(asRecord(sharedActionStep().with, 'with')['repo-skills']).toBe(
+      '${{ inputs.repo-skills }}',
+    )
+  })
+
+  it('leaves repo-skills at its default on every consumer but the connect run, which turns it off', () => {
+    const consumers = [
+      ...new Bun.Glob('.github/workflows/*.{yml,yaml}').scanSync({ cwd: ROOT }),
+    ].flatMap((file) => {
+      const parsed = asRecord(
+        yaml.load(fs.readFileSync(path.join(ROOT, file), 'utf8'), {
+          schema: yaml.JSON_SCHEMA,
+        }),
+        file,
+      )
+      const jobs = isRecord(parsed.jobs) ? Object.values(parsed.jobs) : []
+      return jobs.flatMap((candidate) => {
+        const steps =
+          isRecord(candidate) && Array.isArray(candidate.steps)
+            ? candidate.steps
+            : []
+        return steps.flatMap((step) =>
+          isRecord(step) &&
+          typeof step.uses === 'string' &&
+          step.uses.endsWith(SHARED_ACTION_USES.slice(2))
+            ? [{ file, given: asRecord(step.with ?? {}, 'with') }]
+            : [],
+        )
+      })
+    })
+    expect(consumers.map(({ file }) => file).sort()).toEqual([
+      '.github/workflows/connect.yaml',
+      '.github/workflows/fro-bot.yaml',
+    ])
+    for (const { file, given } of consumers) {
+      if (file === '.github/workflows/fro-bot.yaml') {
+        expect(given).not.toHaveProperty('repo-skills')
+      } else {
+        // A callee runs in a caller's repository; its default-branch skills
+        // must never load into the sweep.
+        expect(given['repo-skills']).toBe('false')
+      }
     }
   })
 
@@ -479,19 +596,19 @@ describe('the shared fro-bot agent action', () => {
   it('keeps the shared settings off both callers', () => {
     for (const step of [connectStep(), froBotAgentStep()]) {
       expect(asRecord(step.with, 'with')).not.toHaveProperty('timeout')
-      expect(asRecord(step.with, 'with')).not.toHaveProperty('repo-skills')
       expect(asRecord(step.env ?? {}, 'env')).not.toHaveProperty(
         'OPENCODE_PROMPT_ARTIFACT',
       )
     }
   })
 
-  it('runs the parent agent on the model both callers read from FRO_BOT_MODEL', () => {
-    for (const step of [connectStep(), froBotAgentStep()]) {
-      expect(asRecord(step.with, 'with').model).toBe(
-        '${{ vars.FRO_BOT_MODEL }}',
-      )
-    }
+  it('runs the parent agent on the parent-model input here and on FRO_BOT_MODEL in the Fro Bot workflow', () => {
+    expect(asRecord(connectStep().with, 'with').model).toBe(
+      '${{ inputs.parent-model }}',
+    )
+    expect(asRecord(froBotAgentStep().with, 'with').model).toBe(
+      '${{ vars.FRO_BOT_MODEL }}',
+    )
   })
 
   it('passes exactly the connect-only inputs, with their values and reasons', () => {
@@ -500,7 +617,9 @@ describe('the shared fro-bot agent action', () => {
     expect(given).toEqual({
       'auth-json': '${{ secrets.OPENCODE_AUTH_JSON }}',
       'opencode-config': '${{ secrets.OPENCODE_CONFIG }}',
-      model: '${{ vars.FRO_BOT_MODEL }}',
+      model: '${{ inputs.parent-model }}',
+      // A caller's .agents/skills never load into the sweep.
+      'repo-skills': 'false',
       // The read-only job token, not the Fro Bot personal token.
       'github-token': '${{ github.token }}',
       // The skill and the helper must be one release.
@@ -576,6 +695,21 @@ describe('connect workflow injection and artifacts', () => {
       expect(String(step.run)).not.toContain('${{')
     }
     expect(SOURCE).not.toMatch(/github\.event\.(issue|comment)/)
+  })
+
+  it('never lets a caller input or a secret into a run body, which would make it script text', () => {
+    for (const { step } of allSteps()) {
+      if (step.run === undefined) continue
+      expect(String(step.run)).not.toMatch(/\$\{\{\s*(inputs|secrets|vars)\./)
+    }
+    // Every input a script uses arrives through the step's own env.
+    const config = asRecord(
+      stepNamed('prepare', 'Validate configuration').env,
+      'config env',
+    )
+    for (const name of [...REQUIRED_INPUTS, ...OPTIONAL_INPUTS]) {
+      expect(Object.values(config)).toContain(`\${{ inputs.${name} }}`)
+    }
   })
 
   it('uploads hand-off artifacts for one day and only allowlisted files', () => {
@@ -1049,9 +1183,12 @@ function handoffFromState(box: Box, invocation: Json): void {
 function renderDay(
   box: Box,
   date: string,
-  options: { cacheRestored?: boolean; run?: string } = {},
+  options: { cacheRestored?: boolean; run?: string; repo?: string } = {},
 ): { render: StepResult; body: string } {
-  const env = { GITHUB_RUN_ID: options.run ?? '555' }
+  const env = {
+    GITHUB_RUN_ID: options.run ?? '555',
+    ...(options.repo === undefined ? {} : { GITHUB_REPOSITORY: options.repo }),
+  }
   const validate = runStep(box, 'render', 'Validate hand-off', env)
   expect(validate.stderr).toBe('')
   expect(validate.exitCode).toBe(0)
@@ -1147,10 +1284,16 @@ function statusOf(box: Box, index: number): string | undefined {
   return ledger.entries.find((entry) => entry.id === idOf(index))?.status
 }
 
+// What the validation step's env holds: the caller's inputs, and a boolean for
+// each secret. The step never sees a secret itself.
 const CONFIG_ENV = {
   PROJECTS_RAW: 'Acme/Target, other/repo',
-  MODEL: 'anthropic/claude-sonnet-5-5',
+  RESEARCHER_MODEL: 'anthropic/claude-sonnet-5-5',
+  PARENT_MODEL: 'openai/gpt-5.5',
   VARIANT: 'high',
+  STEP_TIMEOUT: '',
+  HAS_AUTH_JSON: 'true',
+  HAS_OPENCODE_CONFIG: 'true',
 }
 
 // ── Prepare ─────────────────────────────────────────────────────────────────
@@ -1186,14 +1329,14 @@ describe('prepare: date and configuration', () => {
     expect(result.outputs.get('projects')).toBe(
       'acme/target other/repo third/one',
     )
-    expect(result.outputs.get('model')).toBe(CONFIG_ENV.MODEL)
+    expect(result.outputs.get('model')).toBe(CONFIG_ENV.RESEARCHER_MODEL)
     expect(result.outputs.get('variant')).toBe('high')
     expect(
       calls(box).filter((line) => line.startsWith('gh api repos/')),
     ).toHaveLength(3)
   })
 
-  it('accepts an unset variant', () => {
+  it('takes an unset variant, which arrives as an empty string, as none', () => {
     const box = makeBox()
     const result = runStep(box, 'prepare', 'Validate configuration', {
       ...CONFIG_ENV,
@@ -1201,6 +1344,24 @@ describe('prepare: date and configuration', () => {
     })
     expect(result.exitCode).toBe(0)
     expect(result.outputs.get('variant')).toBe('')
+  })
+
+  it('takes an unset step timeout, which arrives as an empty string, as the default the agent step also applies', () => {
+    const script = asString(
+      stepNamed('prepare', 'Validate configuration').run,
+      'config script',
+    )
+    const given = /STEP_TIMEOUT:-(\d+)/.exec(script)?.[1]
+    const applied = /\|\| '(\d+)'/.exec(STEP_TIMEOUT_EXPRESSION)?.[1]
+    expect(given).toBeDefined()
+    expect(given).toBe(applied)
+    const box = makeBox()
+    const result = runStep(box, 'prepare', 'Validate configuration', {
+      ...CONFIG_ENV,
+      STEP_TIMEOUT: '',
+    })
+    expect(result.exitCode).toBe(0)
+    expect(Number(given)).toBeLessThan(Number(job('run')['timeout-minutes']))
   })
 
   it('accepts an unset step timeout and any whole number of minutes below the job timeout', () => {
@@ -1286,9 +1447,40 @@ describe('prepare: date and configuration', () => {
         },
         () => undefined,
       ],
-      ['an unset model', { MODEL: '' }, () => undefined],
-      ['a malformed model', { MODEL: 'no-provider-slash' }, () => undefined],
+      ['an unset researcher model', { RESEARCHER_MODEL: '' }, () => undefined],
+      [
+        'a malformed researcher model',
+        { RESEARCHER_MODEL: 'no-provider-slash' },
+        () => undefined,
+      ],
+      ['an unset parent model', { PARENT_MODEL: '' }, () => undefined],
+      [
+        'a malformed parent model',
+        { PARENT_MODEL: 'no-provider-slash' },
+        () => undefined,
+      ],
+      [
+        'a parent model with a shell metacharacter',
+        { PARENT_MODEL: 'openai/gpt;rm' },
+        () => undefined,
+      ],
+      ['an unset project list', { PROJECTS_RAW: '' }, () => undefined],
       ['a malformed variant', { VARIANT: 'high; rm -rf' }, () => undefined],
+      [
+        'an empty OPENCODE_AUTH_JSON',
+        { HAS_AUTH_JSON: 'false' },
+        () => undefined,
+      ],
+      [
+        'an empty OPENCODE_CONFIG',
+        { HAS_OPENCODE_CONFIG: 'false' },
+        () => undefined,
+      ],
+      [
+        'a secret check that is not a boolean',
+        { HAS_AUTH_JSON: '' },
+        () => undefined,
+      ],
     ]
   for (const [label, env, arrange] of failures) {
     it(`fails red before any checkout or write for ${label}`, () => {
@@ -1304,6 +1496,65 @@ describe('prepare: date and configuration', () => {
       expect(calls(box).filter((line) => line.startsWith('git '))).toEqual([])
     })
   }
+
+  const named: Array<[string, Record<string, string>, string]> = [
+    ['projects', { PROJECTS_RAW: '' }, 'projects'],
+    ['researcher-model', { RESEARCHER_MODEL: '' }, 'researcher-model'],
+    ['parent-model', { PARENT_MODEL: '' }, 'parent-model'],
+    ['parent-model (malformed)', { PARENT_MODEL: 'nope' }, 'parent-model'],
+    ['OPENCODE_AUTH_JSON', { HAS_AUTH_JSON: 'false' }, 'OPENCODE_AUTH_JSON'],
+    ['OPENCODE_CONFIG', { HAS_OPENCODE_CONFIG: 'false' }, 'OPENCODE_CONFIG'],
+  ]
+  for (const [label, env, name] of named) {
+    it(`names ${label} in the error and makes no network call`, () => {
+      const box = makeBox()
+      const result = runStep(box, 'prepare', 'Validate configuration', {
+        ...CONFIG_ENV,
+        ...env,
+      })
+      expect(result.exitCode).toBe(1)
+      expect(result.stdout).toContain(`::error::`)
+      expect(result.stdout).toContain(name)
+      expect(calls(box).filter((line) => line.startsWith('gh '))).toEqual([])
+    })
+  }
+
+  it('applies one model rule to the parent and the researcher model', () => {
+    for (const model of [
+      'anthropic/claude-sonnet-5-5',
+      'openai/gpt-5.5',
+      'amazon-bedrock/anthropic.claude-3:0',
+    ]) {
+      for (const key of ['PARENT_MODEL', 'RESEARCHER_MODEL']) {
+        const result = runStep(makeBox(), 'prepare', 'Validate configuration', {
+          ...CONFIG_ENV,
+          [key]: model,
+        })
+        expect(result.exitCode).toBe(0)
+      }
+    }
+    for (const model of ['gpt', '/gpt', 'openai/', 'a b/c', 'a/b c']) {
+      for (const key of ['PARENT_MODEL', 'RESEARCHER_MODEL']) {
+        const result = runStep(makeBox(), 'prepare', 'Validate configuration', {
+          ...CONFIG_ENV,
+          [key]: model,
+        })
+        expect(result.exitCode).toBe(1)
+      }
+    }
+  })
+
+  it('never receives a secret value: the script reads two booleans and the validation step env holds nothing else secret', () => {
+    const step = stepNamed('prepare', 'Validate configuration')
+    const script = asString(step.run, 'config script')
+    // It may name a secret in its error; it never reads one as a variable.
+    expect(script).not.toMatch(/\$\{?OPENCODE_/)
+    expect(script).not.toContain('secrets')
+    expect(asRecord(step.env, 'env')).toMatchObject({
+      HAS_AUTH_JSON: "${{ secrets.OPENCODE_AUTH_JSON != '' }}",
+      HAS_OPENCODE_CONFIG: "${{ secrets.OPENCODE_CONFIG != '' }}",
+    })
+  })
 })
 
 describe('prepare: finding the open report', () => {
@@ -1742,6 +1993,350 @@ describe('render: outcomes and failures', () => {
   })
 })
 
+describe('render: the calling repository in the request', () => {
+  const fetchWords = (body: string): string[] =>
+    [...body.matchAll(/ce:connect fetch:([^`]+)`/g)].map(
+      (match) => match[1] ?? '',
+    )
+
+  it('sends the repository from the runner environment, never from an expression in the script', () => {
+    const step = stepNamed('render', 'Render report')
+    const script = asString(step.run, 'render script')
+    expect(script).toContain('"$GITHUB_REPOSITORY"')
+    expect(script).toMatch(/repo: \$repo/)
+  })
+
+  it('names a caller other than Systematic in every fetch word', () => {
+    const box = makeBox()
+    seedHandoff(box)
+    const { render, body } = renderDay(box, DATE_ONE, { repo: 'acme/caller' })
+    expect(render.exitCode).toBe(0)
+    const words = fetchWords(body)
+    expect(words.length).toBeGreaterThan(0)
+    for (const word of words) expect(word).toBe('acme/caller:555.1')
+  })
+
+  it('keeps the words bare for Systematic, whatever the case of its name', () => {
+    for (const repo of ['marcusrbrown/systematic', 'MarcusRBrown/Systematic']) {
+      const box = makeBox()
+      seedHandoff(box)
+      const { render, body } = renderDay(box, DATE_ONE, { repo })
+      expect(render.exitCode).toBe(0)
+      const words = fetchWords(body)
+      expect(words.length).toBeGreaterThan(0)
+      for (const word of words) expect(word).toBe('555.1')
+    }
+  })
+
+  it('fails red on a repository name that is not owner/repo, as the helper refuses it', () => {
+    const box = makeBox()
+    seedHandoff(box)
+    const { render } = renderDay(box, DATE_ONE, { repo: 'not a repo' })
+    expect(render.exitCode).toBe(1)
+  })
+})
+
+describe('render: a helper too old to name the calling repository', () => {
+  /**
+   * A stand-in for the pinned helper. It runs the real one, so the body and the
+   * stores are real, and then changes only what the mode names.
+   * - `old`: the request's `repo` is dropped first, as a release that predates the field would.
+   * - `old-no-fetches`: as `old`, and the answer's `fetches` list is emptied, so only the body is bare.
+   * - `bare-fetches`: the body is named, but the answer's `fetches` list holds bare words.
+   * - `bare-fetch-line`: only the generated `- Fetch:` lines of the body are bare.
+   * - `bare-index-line`: only the generated index lines of the body are bare.
+   */
+  const STUB_HELPER = `import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+const mode = process.env.STUB_MODE ?? 'old'
+const request = JSON.parse(fs.readFileSync(0, 'utf8'))
+const keepsRepo = ['bare-fetches', 'bare-fetch-line', 'bare-index-line']
+if (!keepsRepo.includes(mode)) delete request.repo
+const run = spawnSync('node', [process.env.HELPER_SRC, ...process.argv.slice(2)], {
+  input: JSON.stringify(request),
+  encoding: 'utf8',
+})
+const answer = JSON.parse(run.stdout)
+if (mode === 'old-no-fetches') answer.fetches = []
+if (mode === 'bare-fetches') answer.fetches = ['555.1']
+const reportFile = process.env.XDG_STATE_HOME + '/systematic/connect/report.md'
+if (mode === 'bare-fetch-line' || mode === 'bare-index-line') {
+  const lead = mode === 'bare-fetch-line' ? '- Fetch: ' : '- '
+  const line = new RegExp('^(' + lead + '\\x60/ce:connect fetch:)[^\\x60:]*:', 'gm')
+  fs.writeFileSync(reportFile, fs.readFileSync(reportFile, 'utf8').replace(line, '$1'))
+}
+process.stdout.write(JSON.stringify(answer) + '\\n')
+process.exit(run.status ?? 1)
+`
+
+  function renderWith(
+    repo: string,
+    mode:
+      | 'real'
+      | 'old'
+      | 'old-no-fetches'
+      | 'bare-fetches'
+      | 'bare-fetch-line'
+      | 'bare-index-line',
+    seed: SeedOptions = {},
+  ): { render: StepResult; body: string; box: Box } {
+    const box = makeBox()
+    seedHandoff(box, seed)
+    const env = { GITHUB_REPOSITORY: repo, STUB_MODE: mode }
+    expect(runStep(box, 'render', 'Validate hand-off', env).exitCode).toBe(0)
+    expect(runStep(box, 'render', 'Install helper', env).exitCode).toBe(0)
+    if (mode !== 'real') {
+      fs.writeFileSync(
+        path.join(
+          box.tmp,
+          'connect-helper/node_modules/@fro.bot/systematic/skills/ce-connect/scripts/connect.mjs',
+        ),
+        STUB_HELPER,
+      )
+    }
+    const render = runStep(box, 'render', 'Render report', {
+      ...env,
+      DATE: DATE_ONE,
+      CACHE_RESTORED: 'true',
+    })
+    const bodyFile = path.join(box.tmp, 'report', 'body.md')
+    return {
+      render,
+      box,
+      body: fs.existsSync(bodyFile) ? fs.readFileSync(bodyFile, 'utf8') : '',
+    }
+  }
+
+  it('fails red for a calling repository other than Systematic when the helper returns bare fetch words', () => {
+    const { render, body } = renderWith('acme/caller', 'old')
+    expect(render.exitCode).toBe(1)
+    const said = render.stderr + render.stdout
+    expect(said).toContain('too old to name the calling repository')
+    expect(said).toContain('SYSTEMATIC_VERSION')
+    expect(said).toContain('named fetch words')
+    expect(body).toBe('')
+  })
+
+  it('writes no output and no report file when it fails, so nothing later has anything to save or upload', () => {
+    const { render, box } = renderWith('acme/caller', 'old')
+    expect(render.exitCode).toBe(1)
+    expect(render.outputs.size).toBe(0)
+    expect(fs.existsSync(path.join(box.tmp, 'report'))).toBe(false)
+  })
+
+  it('fails on a bare word in the rendered body even when the helper lists no fetch words', () => {
+    const { render, body } = renderWith('acme/caller', 'old-no-fetches')
+    expect(render.exitCode).toBe(1)
+    expect(render.stderr + render.stdout).toContain(
+      'too old to name the calling repository',
+    )
+    expect(body).toBe('')
+  })
+
+  it('fails on a bare word the helper lists even when the body names the caller', () => {
+    const { render, body } = renderWith('acme/caller', 'bare-fetches')
+    expect(render.exitCode).toBe(1)
+    expect(body).toBe('')
+  })
+
+  it('fails on a bare generated Fetch line even when the helper lists only named words', () => {
+    const { render, body, box } = renderWith('acme/caller', 'bare-fetch-line')
+    expect(render.exitCode).toBe(1)
+    expect(render.stderr + render.stdout).toContain(
+      'too old to name the calling repository',
+    )
+    expect(body).toBe('')
+    expect(fs.existsSync(path.join(box.tmp, 'report'))).toBe(false)
+  })
+
+  it('fails on a bare generated index line even when the helper lists only named words', () => {
+    const { render, body } = renderWith('acme/caller', 'bare-index-line')
+    expect(render.exitCode).toBe(1)
+    expect(render.stderr + render.stdout).toContain(
+      'too old to name the calling repository',
+    )
+    expect(body).toBe('')
+  })
+
+  it('does not read free text inside a fence: a candidate summary may quote a bare fetch bullet', () => {
+    const quoted = [
+      'A summary that quotes the report:',
+      '- Fetch: `/ce:connect fetch:123.1` (run 123, attempt 1)',
+      '- `/ce:connect fetch:123.1` for candidates 1',
+    ].join('\n')
+    const { render, body } = renderWith('acme/caller', 'real', {
+      candidates: [blockCandidate(1, { summary: quoted }), blockCandidate(2)],
+    })
+    expect(render.exitCode).toBe(0)
+    // The text is in the body, inside a fence, and only there.
+    expect(body).toContain('- `/ce:connect fetch:123.1` for candidates 1')
+    expect(
+      outsideFences(body).filter((line) => line.includes('fetch:123.1')),
+    ).toEqual([])
+    for (const line of outsideFences(body)) {
+      if (line.includes('/ce:connect fetch:')) {
+        expect(line).toContain('fetch:acme/caller:555.1')
+      }
+    }
+    expect(render.outputs.get('manifest')).toBeTruthy()
+  })
+
+  it('passes for a calling repository other than Systematic when every word names it, whatever the case', () => {
+    for (const repo of ['acme/caller', 'Acme/Caller']) {
+      const { render, body } = renderWith(repo, 'real')
+      expect(render.exitCode, repo).toBe(0)
+      expect(body, repo).toContain(`fetch:${repo}:555.1`)
+      expect(render.outputs.get('manifest'), repo).toBeTruthy()
+    }
+  })
+
+  it('passes for Systematic with bare words, whatever the case of its name', () => {
+    for (const repo of ['marcusrbrown/systematic', 'MarcusRBrown/Systematic']) {
+      const { render, body } = renderWith(repo, 'old')
+      expect(render.exitCode, repo).toBe(0)
+      expect(body, repo).toContain('ce:connect fetch:555.1`')
+    }
+  })
+
+  it('checks before anything is saved or uploaded, and no later step runs after a failure', () => {
+    const steps = stepsOf('render')
+    const names = steps.map((step) => step.name)
+    const after = steps.slice(names.indexOf('Render report') + 1)
+    expect(after.length).toBeGreaterThan(0)
+    for (const step of after) {
+      expect(String(step.if ?? ''), String(step.name)).not.toMatch(
+        /always\(\)|failure\(\)|cancelled\(\)/,
+      )
+    }
+    const render = asString(stepNamed('render', 'Render report').run, 'script')
+    const refusal = render.indexOf('too old to name the calling repository')
+    expect(refusal).toBeGreaterThan(-1)
+    expect(refusal).toBeLessThan(render.indexOf('report/body.md'))
+    expect(render).not.toContain('${{')
+  })
+})
+
+describe('prepare: a pinned helper without verify-provenance', () => {
+  /** A usage line whose op list carries `extraOps` (each with a leading `|`) and, after it, `prose`. */
+  const usageWith = (extraOps: string, prose = ''): string =>
+    `process.stderr.write('Usage: node connect.mjs <begin|validate|publish|decide|import|apply-ticks|render-report|allowed-origins${extraOps}|ledger show [--offset N]|ledger clear|ledger unlock>${prose}\\n')
+process.exit(2)
+`
+  const USAGE = (withOp: boolean): string =>
+    usageWith(withOp ? '|verify-provenance' : '')
+  /** Usage text that holds `verify` but never the exact `|verify-provenance|` op. */
+  const NEAR_MISSES: Record<string, string> = {
+    'an op named verify': usageWith('|verify'),
+    'an op named verify-provenance-v0': usageWith('|verify-provenance-v0'),
+    'an op named pre-verify-provenance': usageWith('|pre-verify-provenance'),
+    'the word verify in prose': usageWith(
+      '',
+      ' Run verify to check a fetched run.',
+    ),
+  }
+
+  /** Install a stub helper whose usage lists the operation or not, then run the capability check. */
+  function checkWith(
+    repo: string,
+    helper: 'with' | 'without' | 'real' | 'broken' | { nearMiss: string },
+  ): { check: StepResult; box: Box } {
+    const box = makeBox()
+    const stubs: Record<string, string> = {
+      with: USAGE(true),
+      without: USAGE(false),
+      broken: 'throw new Error("no usage")\n',
+    }
+    let source = HELPER_SOURCE
+    if (helper !== 'real') {
+      source = path.join(box.dir, 'stub-helper.mjs')
+      fs.writeFileSync(
+        source,
+        typeof helper === 'string'
+          ? (stubs[helper] ?? '')
+          : (NEAR_MISSES[helper.nearMiss] ?? ''),
+      )
+    }
+    const env = { GITHUB_REPOSITORY: repo, HELPER_SRC: source }
+    expect(runStep(box, 'prepare', 'Install helper', env).exitCode).toBe(0)
+    return {
+      check: runStep(box, 'prepare', 'Check helper capability', env),
+      box,
+    }
+  }
+
+  const MESSAGE = /Pin a newer callee commit/
+
+  it('fails red for a caller other than Systematic when the usage does not list verify-provenance', () => {
+    const { check } = checkWith('acme/caller', 'without')
+    expect(check.exitCode).toBe(1)
+    const said = check.stderr + check.stdout
+    expect(said).toContain('verify-provenance')
+    expect(said).toMatch(MESSAGE)
+    expect(said).toContain('SYSTEMATIC_VERSION')
+    expect(said).toContain('named fetch words')
+  })
+
+  it.each(Object.keys(NEAR_MISSES))(
+    'fails red for a caller other than Systematic when the usage holds verify only as %s',
+    (nearMiss) => {
+      const { check } = checkWith('acme/caller', { nearMiss })
+      expect(check.exitCode).toBe(1)
+      expect(check.stderr + check.stdout).toMatch(MESSAGE)
+    },
+  )
+
+  it('still skips the check for Systematic when the usage holds only a near miss', () => {
+    for (const nearMiss of Object.keys(NEAR_MISSES)) {
+      expect(
+        checkWith('marcusrbrown/systematic', { nearMiss }).check.exitCode,
+        nearMiss,
+      ).toBe(0)
+    }
+  })
+
+  it('fails closed for a caller other than Systematic when the helper cannot print its usage at all', () => {
+    const { check } = checkWith('acme/caller', 'broken')
+    expect(check.exitCode).toBe(1)
+    expect(check.stderr + check.stdout).toMatch(MESSAGE)
+  })
+
+  it('passes for a caller other than Systematic when the usage lists verify-provenance, and for the real helper', () => {
+    for (const helper of ['with', 'real'] as const) {
+      const { check } = checkWith('acme/caller', helper)
+      expect(check.exitCode, helper).toBe(0)
+      expect(check.stderr + check.stdout, helper).not.toMatch(MESSAGE)
+    }
+  })
+
+  it('skips the check for Systematic, whatever the case of its name, even with an older helper', () => {
+    for (const repo of ['marcusrbrown/systematic', 'MarcusRBrown/Systematic']) {
+      for (const helper of ['without', 'broken'] as const) {
+        const { check } = checkWith(repo, helper)
+        expect(check.exitCode, `${repo} ${helper}`).toBe(0)
+      }
+    }
+  })
+
+  it('runs in the prepare job right after the helper is installed, before any other work needs the helper', () => {
+    const names = stepsOf('prepare').map((step) => String(step.name))
+    const install = names.indexOf('Install helper')
+    expect(install).toBeGreaterThan(-1)
+    expect(names.indexOf('Check helper capability')).toBe(install + 1)
+    expect(names.indexOf('Check helper capability')).toBeLessThan(
+      names.indexOf('Create state root'),
+    )
+  })
+
+  it('reads the repository from the runner environment and the helper path from its own step', () => {
+    const script = asString(
+      stepNamed('prepare', 'Check helper capability').run,
+      'capability script',
+    )
+    expect(script).toContain('"$GITHUB_REPOSITORY"')
+    expect(script).not.toContain('${{')
+  })
+})
+
 describe('render: finalizing and the run record', () => {
   it('appends the fixed line before computing the digest when the cache save failed', () => {
     const box = makeBox()
@@ -2039,15 +2634,36 @@ describe('run job: the checkout of the shared agent action', () => {
 
   it('is sparse, takes no credentials and leaves what is already in the workspace alone', () => {
     expect(String(checkout().uses)).toMatch(/^actions\/checkout@[0-9a-f]{40}$/)
-    // The job token is the default, and so is the ref: this repository, at the
-    // commit the run started from.
+    // The job token is the default. The repository and commit are the called
+    // workflow's own, never the caller's, so the action and helper come from the
+    // pinned release in any caller.
     expect(asRecord(checkout().with, 'checkout with')).toEqual({
+      repository: '${{ job.workflow_repository }}',
+      ref: '${{ job.workflow_sha }}',
       path: '.fro-bot-actions',
       'sparse-checkout': '/.github/actions/\n',
       'sparse-checkout-cone-mode': false,
       'persist-credentials': false,
       clean: false,
     })
+  })
+
+  it('reads the called workflow context in this step only, where the job context exists', () => {
+    // `job.workflow_*` is a step-level context: a job-level key cannot read it.
+    expect(SOURCE.match(/job\.workflow_[a-z_]+/g)?.sort()).toEqual([
+      'job.workflow_repository',
+      'job.workflow_sha',
+    ])
+    for (const { step } of allSteps()) {
+      if (step === checkout()) continue
+      expect(JSON.stringify(step)).not.toContain('job.workflow_')
+    }
+    for (const id of JOB_IDS) {
+      const jobLevel = Object.entries(job(id)).filter(
+        ([key]) => key !== 'steps',
+      )
+      expect(JSON.stringify(jobLevel)).not.toContain('job.workflow_')
+    }
   })
 
   it('runs before the layout is created', () => {
@@ -2654,18 +3270,50 @@ interface NeedsFixture {
   outputs?: Record<string, string>
 }
 
-/** Evaluate a job's `if` against the results of the jobs it needs. Only the terms the workflow uses are understood. */
+/** The caller's side of a run: the event, the ref it ran on and the repository's default branch. */
+interface CallerFixture {
+  event?: string
+  ref?: string
+  defaultBranch?: string
+}
+
+/** `text` split at `separator`, ignoring any separator inside parentheses. */
+function splitTopLevel(text: string, separator: '&&' | '||'): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let start = 0
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (char === '(') depth += 1
+    else if (char === ')') depth -= 1
+    else if (depth === 0 && text.startsWith(separator, index)) {
+      parts.push(text.slice(start, index).trim())
+      start = index + separator.length
+      index += separator.length - 1
+    }
+  }
+  parts.push(text.slice(start).trim())
+  return parts
+}
+
+/** Evaluate a job's `if` against the caller and the results of the jobs it needs. Only the terms the workflow uses are understood. */
 function jobRuns(
   id: JobId,
   needs: Record<string, NeedsFixture>,
-  ref = 'refs/heads/main',
+  caller: CallerFixture = {},
 ): boolean {
-  const terms = asString(job(id).if, `${id} if`)
-    .split('&&')
-    .map((term) => term.trim())
-  return terms.every((term) => {
+  const event = caller.event ?? 'schedule'
+  const defaultBranch = caller.defaultBranch ?? 'main'
+  const ref = caller.ref ?? `refs/heads/${defaultBranch}`
+  const holds = (term: string): boolean => {
+    // A parenthesized group is `||` between its own terms, or one term.
+    if (term.startsWith('(') && term.endsWith(')')) {
+      return splitTopLevel(term.slice(1, -1), '||').some(holds)
+    }
     if (term === 'always()') return true
-    if (term === GUARD) return ref === 'refs/heads/main'
+    if (term === GUARD) return ref === `refs/heads/${defaultBranch}`
+    const eventMatch = /^github\.event_name == '([a-z_]+)'$/.exec(term)
+    if (eventMatch !== null) return event === eventMatch[1]
     const match =
       /^needs\.([a-z]+)\.(result|outputs\.[a-z-]+) == '([^']*)'$/.exec(term)
     if (match === null) throw new Error(`unsupported condition: ${term}`)
@@ -2676,7 +3324,9 @@ function jobRuns(
         ? entry?.result
         : entry?.outputs?.[field.slice('outputs.'.length)]
     return actual === expected
-  })
+  }
+  const condition = asString(job(id).if, `${id} if`)
+  return splitTopLevel(condition, '&&').every(holds)
 }
 
 /** Fill in `${{ needs.<job>.outputs.<name> }}` the way the runner does. */
@@ -2784,8 +3434,118 @@ describe('post: runs only when render succeeded', () => {
 
   it('stays off the default branch only', () => {
     expect(
-      jobRuns('post', rendered('success', 'true'), 'refs/heads/topic'),
+      jobRuns('post', rendered('success', 'true'), { ref: 'refs/heads/topic' }),
     ).toBe(false)
+  })
+})
+
+describe('every job: which runs may start it', () => {
+  const ALL_GOOD: Record<string, NeedsFixture> = {
+    prepare: { result: 'success' },
+    run: { result: 'success', outputs: { accepted: 'true' } },
+    render: { result: 'success', outputs: { 'has-body': 'true' } },
+  }
+  const ALLOWED = ['schedule', 'workflow_dispatch']
+  const REFUSED = [
+    'pull_request_target',
+    'pull_request',
+    'push',
+    'issue_comment',
+    'workflow_run',
+    'repository_dispatch',
+  ]
+
+  it('understands the combined expression: the evaluator refuses a term it does not know', () => {
+    // A guard on its own proves nothing if the evaluator skipped what it cannot read.
+    expect(splitTopLevel(EVENT_GUARD, '&&')).toEqual([EVENT_GUARD])
+    expect(splitTopLevel(`${EVENT_GUARD} && ${GUARD}`, '&&')).toEqual([
+      EVENT_GUARD,
+      GUARD,
+    ])
+    expect(splitTopLevel(EVENT_GUARD.slice(1, -1), '||')).toEqual([
+      "github.event_name == 'schedule'",
+      "github.event_name == 'workflow_dispatch'",
+    ])
+  })
+
+  it('runs all four jobs for a schedule and for a dispatch on the default branch', () => {
+    for (const event of ALLOWED) {
+      for (const id of JOB_IDS) {
+        expect(jobRuns(id, ALL_GOOD, { event })).toBe(true)
+      }
+    }
+  })
+
+  it('skips all four jobs for any event a wrapper should never forward', () => {
+    for (const event of REFUSED) {
+      for (const id of JOB_IDS) {
+        expect(jobRuns(id, ALL_GOOD, { event })).toBe(false)
+      }
+    }
+  })
+
+  it('skips all four jobs on a ref that is not the caller default branch', () => {
+    for (const event of ALLOWED) {
+      for (const id of JOB_IDS) {
+        expect(jobRuns(id, ALL_GOOD, { event, ref: 'refs/heads/topic' })).toBe(
+          false,
+        )
+        expect(jobRuns(id, ALL_GOOD, { event, ref: 'refs/tags/main' })).toBe(
+          false,
+        )
+      }
+    }
+  })
+
+  it('follows the default branch of the calling repository, not a fixed name', () => {
+    for (const id of JOB_IDS) {
+      expect(
+        jobRuns(id, ALL_GOOD, {
+          defaultBranch: 'trunk',
+          ref: 'refs/heads/trunk',
+        }),
+      ).toBe(true)
+      expect(
+        jobRuns(id, ALL_GOOD, {
+          defaultBranch: 'trunk',
+          ref: 'refs/heads/main',
+        }),
+      ).toBe(false)
+    }
+  })
+
+  it('still skips render and post on an allowed event when an upstream job did not succeed or an output is missing', () => {
+    const cases: Array<[JobId, Record<string, NeedsFixture>]> = [
+      ['render', { ...ALL_GOOD, prepare: { result: 'failure' } }],
+      ['render', { ...ALL_GOOD, run: { result: 'failure' } }],
+      ['render', { ...ALL_GOOD, run: { result: 'cancelled' } }],
+      ['render', { ...ALL_GOOD, run: { result: 'skipped' } }],
+      ['render', { ...ALL_GOOD, run: { result: 'success', outputs: {} } }],
+      [
+        'render',
+        { ...ALL_GOOD, run: { result: 'success', outputs: { accepted: '' } } },
+      ],
+      ['post', { ...ALL_GOOD, prepare: { result: 'failure' } }],
+      ['post', { ...ALL_GOOD, render: { result: 'failure' } }],
+      ['post', { ...ALL_GOOD, render: { result: 'skipped' } }],
+      ['post', { ...ALL_GOOD, render: { result: 'success', outputs: {} } }],
+    ]
+    for (const event of ALLOWED) {
+      for (const [id, needs] of cases) {
+        expect(jobRuns(id, needs, { event })).toBe(false)
+      }
+    }
+  })
+
+  it('keeps always() on render and post, so they judge their own upstream results', () => {
+    for (const id of ['render', 'post'] as const) {
+      expect(splitTopLevel(asString(job(id).if, `${id} if`), '&&')).toContain(
+        'always()',
+      )
+    }
+    for (const id of ['prepare', 'run'] as const) {
+      expect(asString(job(id).if, `${id} if`)).not.toContain('always()')
+    }
   })
 })
 

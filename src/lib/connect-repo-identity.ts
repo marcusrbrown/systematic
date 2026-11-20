@@ -28,8 +28,32 @@ export interface RepoIdentity {
 
 // ── The remote ──────────────────────────────────────────────────────────────
 
-const OWNER = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/
+/** A GitHub owner: 1 to 39 letters, digits and hyphens, with no hyphen at either end. */
+const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
+/** A GitHub repository name: 1 to 100 letters, digits, `.`, `_` and `-`. */
 const REPO = /^[A-Za-z0-9._-]{1,100}$/
+
+/**
+ * `owner/repo`, shaped as GitHub allows and nothing else. The one rule for a
+ * repository that is printed into a command, put in an API path or recorded as
+ * provenance, so every `connect-*` module and the helper agree on it. It checks
+ * the shape only and keeps the case; it says nothing about whether the
+ * repository exists.
+ */
+export function isGithubOwnerRepo(value: string): boolean {
+  const parts = value.split('/')
+  const [owner, name] = parts
+  return (
+    parts.length === 2 &&
+    owner !== undefined &&
+    name !== undefined &&
+    OWNER.test(owner) &&
+    REPO.test(name) &&
+    name !== '.' &&
+    name !== '..'
+  )
+}
+
 const HTTPS_FORM = /^https:\/\/(?:[^/@\s]*@)?github\.com\/(\S+)$/i
 const SSH_URL_FORM = /^ssh:\/\/(?:[A-Za-z0-9._-]+@)?github\.com\/(\S+)$/i
 const SCP_FORM = /^(?:[A-Za-z0-9._-]+@)?github\.com:(\S+)$/i
@@ -39,9 +63,8 @@ function ownerAndRepo(pathPart: string): string | undefined {
   if (segments.length !== 2) return undefined
   const [owner = '', named = ''] = segments
   const repo = named.endsWith('.git') ? named.slice(0, -'.git'.length) : named
-  if (!OWNER.test(owner) || !REPO.test(repo)) return undefined
-  if (repo === '.' || repo === '..') return undefined
-  return `${owner}/${repo}`.toLowerCase()
+  const slug = `${owner}/${repo}`
+  return isGithubOwnerRepo(slug) ? slug.toLowerCase() : undefined
 }
 
 /**

@@ -3215,6 +3215,259 @@ describe('the report lists the rows that can be settled before the rows that can
   })
 })
 
+describe('the fetch word names the caller repository', () => {
+  const GOLDEN = path.join(
+    import.meta.dir,
+    '../fixtures/connect-report/systematic-report.golden.md',
+  )
+  const FOREIGN = 'fro-bot/agent'
+  /** The longest owner and repository GitHub accepts: 39 and 100 characters. */
+  const LONGEST = `${'o'.repeat(39)}/${'r'.repeat(100)}`
+
+  /**
+   * Two runs' worth of state: candidates 1 and 2 from run 900 attempt 1, then
+   * candidate 3 from attempt 2 of run 905, with a ledger that was not restored
+   * and one entry with no bundle. Returns the second report.
+   */
+  function scenario(
+    over: Partial<RenderRequest> = {},
+  ): ReturnType<typeof rendered> & { root: string } {
+    const root = seeded(2)
+    rendered(root, over)
+    writeLedger(root, [entryOf(1), entryOf(2), entryOf(3), entryOf(4)])
+    writeRunRecord(root, [blockCandidate(3)], {}, 'run-three')
+    writeInvocation(root, '905-2', {}, 'run-three')
+    const second = rendered(root, {
+      date: DAY_TWO,
+      runId: '905',
+      attempt: '2',
+      cacheRestored: false,
+      ...over,
+    })
+    return { ...second, root }
+  }
+
+  /** Every word that follows `fetch:` in a body, whatever the line. */
+  function wordsIn(body: string): string[] {
+    return [...body.matchAll(/fetch:(\S+?)`/g)].map((match) => match[1] ?? '')
+  }
+
+  it('keeps the bare words, byte for byte, when no repository is named', () => {
+    const { body } = scenario()
+    expect(body).toBe(fs.readFileSync(GOLDEN, 'utf8'))
+  })
+
+  it.each([
+    'marcusrbrown/systematic',
+    'MarcusRBrown/Systematic',
+    'MARCUSRBROWN/SYSTEMATIC',
+  ])('keeps the bare words, byte for byte, for %s', (repo) => {
+    const { body, fetches } = scenario({ repo })
+    expect(body).toBe(fs.readFileSync(GOLDEN, 'utf8'))
+    expect(fetches).toEqual(['900.1', '905.2'])
+  })
+
+  it('names the repository on the row and in the fetch lines for another caller', () => {
+    const { body, fetches } = scenario({ repo: FOREIGN })
+    expect(fetches).toEqual([`${FOREIGN}:900.1`, `${FOREIGN}:905.2`])
+    const lines = body.split('\n')
+    expect(lines.filter((line) => line.startsWith('- Fetch: '))).toEqual([
+      `- Fetch: \`/ce:connect fetch:${FOREIGN}:900.1\` (run 900, attempt 1)`,
+      `- Fetch: \`/ce:connect fetch:${FOREIGN}:900.1\` (run 900, attempt 1)`,
+      `- Fetch: \`/ce:connect fetch:${FOREIGN}:905.2\` (run 905, attempt 2)`,
+    ])
+    expect(lines.filter((line) => line.endsWith('for candidates 1-2'))).toEqual(
+      [`- \`/ce:connect fetch:${FOREIGN}:900.1\` for candidates 1-2`],
+    )
+    expect(lines.filter((line) => line.endsWith('for candidates 3'))).toEqual([
+      `- \`/ce:connect fetch:${FOREIGN}:905.2\` for candidates 3`,
+    ])
+    // No bare word is left anywhere.
+    for (const word of wordsIn(body)) expect(word).toMatch(/^fro-bot\/agent:/)
+    expect(body).not.toMatch(/fetch:\d/)
+  })
+
+  it.each([
+    'marcusrbrown/metacogs',
+    'marcusrbrown/systematic-fork',
+    'fro-bot/systematic',
+  ])(
+    "names a caller that only shares part of Systematic's identity: %s",
+    (repo) => {
+      const { body, fetches } = scenario({ repo })
+      expect(fetches).toEqual([`${repo}:900.1`, `${repo}:905.2`])
+      const lines = body.split('\n')
+      expect(lines.filter((line) => line.startsWith('- Fetch: '))).toEqual([
+        `- Fetch: \`/ce:connect fetch:${repo}:900.1\` (run 900, attempt 1)`,
+        `- Fetch: \`/ce:connect fetch:${repo}:900.1\` (run 900, attempt 1)`,
+        `- Fetch: \`/ce:connect fetch:${repo}:905.2\` (run 905, attempt 2)`,
+      ])
+      expect(lines.filter((line) => line.includes('for candidates'))).toEqual([
+        `- \`/ce:connect fetch:${repo}:900.1\` for candidates 1-2`,
+        `- \`/ce:connect fetch:${repo}:905.2\` for candidates 3`,
+      ])
+      expect(body).not.toMatch(/fetch:\d/)
+    },
+  )
+
+  it('changes nothing but the fetch word: the checkbox lines, the manifest and the stored payloads are the same', () => {
+    const bare = scenario()
+    const named = scenario({ repo: FOREIGN })
+    const strip = (body: string): string => body.replaceAll(`${FOREIGN}:`, '')
+    expect(strip(named.body)).toBe(bare.body)
+    expect(named.manifest).toBe(bare.manifest)
+    expect(readJson(named.root, PAYLOAD_FILE)).toEqual(
+      readJson(bare.root, PAYLOAD_FILE),
+    )
+    expect(JSON.stringify(readJson(named.root, PAYLOAD_FILE))).not.toContain(
+      'fro-bot',
+    )
+  })
+
+  it('renders an old payload store, with runs and attempts only, under both forms', () => {
+    const root = seeded(2)
+    rendered(root)
+    // Next day: no run record, so the stored bundles are all there is.
+    fs.rmSync(path.join(root, 'runs'), { recursive: true, force: true })
+    fs.mkdirSync(path.join(root, 'runs'))
+    writeInvocation(root, '901-1', {}, null)
+    const bare = rendered(root, { date: DAY_TWO, runId: '901' })
+    expect(bare.fetches).toEqual(['900.1'])
+
+    writeInvocation(root, '902-1', {}, null)
+    const named = rendered(root, {
+      date: DAY_TWO,
+      runId: '902',
+      repo: FOREIGN,
+    })
+    expect(named.fetches).toEqual([`${FOREIGN}:900.1`])
+    expect(named.body).toContain(
+      `- Fetch: \`/ce:connect fetch:${FOREIGN}:900.1\` (run 900, attempt 1)`,
+    )
+    // The store still holds runs and attempts only for the caller's own rows.
+    for (const payload of payloadsOf(root)) {
+      expect(payload.runId).toBe('900')
+      expect(payload.attempt).toBe('1')
+    }
+  })
+
+  it('still applies ticks from a body with named words', () => {
+    const { root, body } = scenario({ repo: FOREIGN })
+    const result = applyTicks(root, {
+      body: ticked(body, [
+        [1, 'rejected'],
+        [3, 'promoted'],
+      ]),
+      issue: 9,
+    })
+    expect(result).toMatchObject({
+      status: 'applied',
+      accepted: [
+        { id: idOf(1), status: 'rejected' },
+        { id: idOf(3), status: 'promoted' },
+      ],
+      skipped: [],
+      unresolved: [],
+    })
+  })
+
+  it('accepts the longest owner and repository GitHub allows', () => {
+    const { fetches } = rendered(seeded(1), { repo: LONGEST })
+    expect(fetches).toEqual([`${LONGEST}:900.1`])
+  })
+
+  it.each([
+    '',
+    ' ',
+    'fro-bot',
+    'fro-bot/',
+    '/agent',
+    'fro-bot//agent',
+    'fro bot/agent',
+    'fro-bot/age nt',
+    'fro-bot/agent/extra',
+    'fro-bot/agent\n',
+    'fro-bot/agent`',
+    'fro-bot/agent:1',
+    '-fro/agent',
+    'fro-/agent',
+    'fro_bot/agent',
+    'fro-bot/..',
+    'fro-bot/.',
+    '../agent',
+    './agent',
+    `${'o'.repeat(40)}/agent`,
+    `fro-bot/${'r'.repeat(101)}`,
+    'fro-bot/agént',
+  ])('refuses the repository %j and renders nothing', (repo) => {
+    const root = seeded(1)
+    expect(renderReport(root, request({ repo }))).toEqual({
+      status: 'failed',
+      reason: 'invalid-request',
+    })
+    expect(fs.existsSync(path.join(root, REPORT_FILE))).toBe(false)
+    expect(fs.existsSync(path.join(root, PAYLOAD_FILE))).toBe(false)
+  })
+
+  describe('near the size cap, with the longest repository name', () => {
+    /** Rows large enough that the cap binds, after `legacy` older entries with no bundle. */
+    function crowdedRoot(legacy: number): string {
+      const root = seeded(1)
+      writeLedger(
+        root,
+        Array.from({ length: legacy + 200 }, (_, i) => entryOf(i + 1)),
+      )
+      writeRunRecord(
+        root,
+        Array.from({ length: 200 }, (_, i) =>
+          blockCandidate(legacy + i + 1, {
+            title: 'Lesson',
+            summary: `S ${'x'.repeat(500)}`,
+            sources: [],
+          }),
+        ),
+      )
+      return root
+    }
+
+    it.each([0, MAX_UNVERIFIED_IDS + 1, 5000])(
+      'keeps the body under the renderer cap and the workflow cap, whole rows only, with %i entries that have no bundle',
+      (legacy) => {
+        const bare = rendered(crowdedRoot(legacy))
+        const named = rendered(crowdedRoot(legacy), { repo: LONGEST })
+
+        expect(named.body.length).toBeLessThanOrEqual(REPORT_MAX_CHARS)
+        expect(`${named.body}${CACHE_SAVE_LINE}`.length).toBeLessThanOrEqual(
+          WORKFLOW_BODY_CAP,
+        )
+        // The longer word costs room on every row, so fewer rows fit.
+        expect(named.shown).toBeLessThan(bare.shown)
+        expect(named.shown).toBeGreaterThan(0)
+        expect(named.hidden).toBe(200 - named.shown)
+        expect(named.body).toContain(
+          `**${named.hidden} open candidates are not shown.**`,
+        )
+        // Whole rows: the shown ones are the oldest, from the first, each with both boxes.
+        const numbers = [...named.body.matchAll(/### Candidate (\d+)/g)].map(
+          (match) => Number(match[1]),
+        )
+        expect(numbers).toEqual(
+          Array.from({ length: named.shown }, (_, i) => i + 1),
+        )
+        expect(named.body.match(/- \[ \] Promoted <!--/g)).toHaveLength(
+          named.shown,
+        )
+        expect(named.body.match(/- \[ \] Rejected <!--/g)).toHaveLength(
+          named.shown,
+        )
+        for (const word of wordsIn(named.body)) {
+          expect(word).toBe(`${LONGEST}:900.1`)
+        }
+      },
+    )
+  })
+})
+
 describe('readReportBody', () => {
   it('reads a regular file', () => {
     const dir = makeDir('connect-ci-body-')

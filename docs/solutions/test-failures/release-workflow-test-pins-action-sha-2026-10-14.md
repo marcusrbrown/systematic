@@ -77,7 +77,7 @@ The fix in #1407 made each row a floor, so a newer release in the same major ver
 
 The risk is that a newer host release is supported without its own observation. What catches a release that breaks the limits is the researcher deny proofs in the Host Contract jobs, which run on every host pin bump ([`host-contract-evidence-is-ci-owned-2026-09-04.md`](../workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md)). #1407 did not run a real host above a floor.
 
-An exact pin still follows Renovate. `env.SYSTEMATIC_VERSION` in `.github/workflows/connect.yaml` must be the one published release the scheduled run installs, so it keeps its annotation and regex manager (`.github/workflows/connect.yaml:40`, `SYSTEMATIC_VERSION`; `.github/renovate.json5:37-49`, `SYSTEMATIC_VERSION`; pinned by `tests/unit/renovate-workflow.test.ts:224`, `renovate Systematic pin tracking`).
+An exact pin still follows Renovate. `env.SYSTEMATIC_VERSION` in `.github/workflows/connect.yaml` must be the one published release the scheduled run installs, so it keeps its annotation and regex manager (`.github/workflows/connect.yaml:73`, `SYSTEMATIC_VERSION`; `.github/renovate.json5:37-49`, `SYSTEMATIC_VERSION`; pinned by `tests/unit/renovate-workflow.test.ts:224`, `renovate Systematic pin tracking`).
 
 ## Related Issues
 

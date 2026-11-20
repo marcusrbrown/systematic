@@ -36,14 +36,15 @@ The digest header and the run record name the selection: `all`, the group, or th
 
 ## Reading a fetch
 
-A `fetch:<run>.<attempt>` word, or a bare `fetch:<run>` for the newest attempt, is read from the same place as the mode tokens and the selection words. It brings the candidates of a scheduled CI run to this machine and follows `fetch-and-import.md`.
+A `fetch:<run>.<attempt>` word, a bare `fetch:<run>` for the newest attempt, or a named `fetch:<owner>/<repo>:<run>.<attempt>` for a run of another repository, is read from the same place as the mode tokens and the selection words. It brings the candidates of a scheduled CI run to this machine and follows `fetch-and-import.md`. A bare word means Systematic. A named word must name an allowed origin and must prove that its run called Systematic's reusable workflow; the reference lists both checks.
 
 | Words found | Result |
 |---|---|
-| One `fetch:<run>.<attempt>` or `fetch:<run>`, or the same word twice or more | A fetch of that attempt, or of the newest attempt of that run. It observes no host, dispatches no agent and asks nothing, so `mode:` has no effect. |
+| One `fetch:<run>.<attempt>`, `fetch:<run>` or `fetch:<owner>/<repo>:<run>.<attempt>`, or the same word twice or more | A fetch of that attempt, of the newest attempt of that run, or of that attempt of the named repository's run. It observes no host, dispatches no agent and asks nothing, so `mode:` has no effect. |
 | `fetch:` with a `group:` or `projects:` word | Stop: `conflicting-selection`. |
 | Two different `fetch:` words | Stop: `conflicting-selection`. |
 | An empty value, or a value that is not a positive run id, or a run id and a positive attempt | Stop: `invalid-request`. |
+| A named word without an attempt, or with a repository that is not a GitHub `owner/repo`, or with a run or attempt that is not a positive integer | Stop: `invalid-request`. |
 
 A stop here happens before any command. End as for a failed run: the reason on a line of its own, then `Connect failed`.
 
@@ -76,7 +77,7 @@ Every run ends with exactly one of these lines as its last line. The reason and 
 | `Connect complete` | `import` answered `complete` (a fetch whose candidates were all checked and none refused), or `publish` answered `complete`: every project read, every offered rule covered by a complete family, nothing failed, and the run committed. Rules the run was not offered are not a degrade reason, and neither is the stale-citation check reaching its cap: the digest notes it under "Not read or not covered" and the run record keeps the counts, and the outcome is unchanged. Nothing found is still `complete`, labeled "no candidate in searched scope". |
 | `Connect degraded` | `import` answered `degraded` (at least one candidate of the fetched record was refused; the summary names each), or `publish` answered `degraded`: something was not read, an offered rule was not covered, a file a candidate cited changed or vanished during the run (`evidence-changed`, `unresolved-source`; the rule of that candidate is then not counted as covered), or a bound on the file inventory, a family or a batch was reached. The digest names what. A degraded run is never proof that nothing is there. A dropped candidate never changes the outcome; the digest lists each one under "Dropped candidates" with its reason and quoted title, and the run record keeps the same list. |
 | `Connect busy` | `begin` or `import` answered `busy`: another run holds the lock, or the holder cannot be verified. Nothing was written and nothing was dispatched. |
-| `Connect failed` | Any other stop: a bad mode token, a bad `fetch:` word, a run that is not a scheduled `ce:connect` run, a missing or expired artifact, a record `import` cannot use, a refused selection, the helper missing, an unsupported host in headless mode, consent declined, no allowed projects, a malformed batch, or a helper error. Nothing was published. |
+| `Connect failed` | Any other stop: a bad mode token, a bad `fetch:` word, a run that is not a scheduled `ce:connect` run, a named repository that is not an allowed origin, a named run whose provenance cannot be proven, a missing or expired artifact, a record `import` cannot use, a refused selection, the helper missing, an unsupported host in headless mode, consent declined, no allowed projects, a malformed batch, or a helper error. Nothing was published. |
 
 Copy the final line from the helper's `finalLine` when `publish` answers. For every other stop, print the line from this table.
 

@@ -50,6 +50,7 @@ import {
   renderSweepLine,
   sanitizeText,
 } from './connect-helper-core.js'
+import { isGithubOwnerRepo } from './connect-repo-identity.js'
 import {
   acquireLock,
   decideLedgerEntry,
@@ -922,6 +923,12 @@ export interface RenderRequest {
   readonly attempt: string
   /** Whether an Actions cache was restored for this run. */
   readonly cacheRestored: boolean
+  /**
+   * The `owner/repo` that called the workflow. Absent, or Systematic itself
+   * (ignoring case), the fetch words stay bare: a bare word always means
+   * Systematic. Any other repository is named in every fetch word.
+   */
+  readonly repo?: string
 }
 
 export type RenderResult =
@@ -940,7 +947,7 @@ export type RenderResult =
       readonly unverified: number
       /** Candidates listed for the first time on this date. */
       readonly fresh: number
-      /** The `<run>.<attempt>` fetch words of the listed candidates, in the order they appear. */
+      /** The fetch words of the listed candidates, in the order they appear: `<run>.<attempt>`, or `<owner>/<repo>:<run>.<attempt>` for a caller other than Systematic. */
       readonly fetches: readonly string[]
       readonly outcome: ReportOutcome
       /** The workflow job turns red after posting. */
@@ -979,6 +986,8 @@ export interface BodyInput {
   readonly rows: readonly Row[]
   /** The ids of the other open entries, oldest first. */
   readonly unverified: readonly string[]
+  /** The caller repository the fetch words name; absent for Systematic, whose words are bare. */
+  readonly fetchRepo?: string
 }
 
 export interface Assembled {
@@ -989,12 +998,24 @@ export interface Assembled {
   readonly fresh: number
 }
 
+/** The repository whose fetch words stay bare. */
+const SYSTEMATIC_REPO = 'marcusrbrown/systematic'
+
 function validRequest(request: RenderRequest): boolean {
   return (
     validDate(request.date) &&
     isDigits(request.runId) &&
-    isDigits(request.attempt)
+    isDigits(request.attempt) &&
+    (request.repo === undefined || isGithubOwnerRepo(request.repo))
   )
+}
+
+/** The repository the fetch words name: the caller, unless it is Systematic or none was sent. */
+function fetchRepoOf(request: RenderRequest): string | undefined {
+  const { repo } = request
+  return repo === undefined || repo.toLowerCase() === SYSTEMATIC_REPO
+    ? undefined
+    : repo
 }
 
 function factsOf(id: string, payload: Payload): string {
@@ -1029,9 +1050,16 @@ function factsOf(id: string, payload: Payload): string {
   return lines.join('\n')
 }
 
-/** `<run>.<attempt>`: the artifact of the attempt that listed the candidate. A bare run would read the newest attempt. */
-function fetchWord(payload: Payload): string {
-  return `${payload.runId}.${payload.attempt}`
+/**
+ * `<run>.<attempt>`: the artifact of the attempt that listed the candidate. A
+ * bare run would read the newest attempt. A caller other than Systematic gets
+ * `<owner>/<repo>:` in front, because a bare word always means Systematic. The
+ * repository is not stored with the payload: a caller's store holds that
+ * caller's rows alone, so the one the request names applies to all of them.
+ */
+function fetchWord(payload: Payload, repo: string | undefined): string {
+  const run = `${payload.runId}.${payload.attempt}`
+  return repo === undefined ? run : `${repo}:${run}`
 }
 
 function blockOf(
@@ -1040,6 +1068,7 @@ function blockOf(
   revision: string,
   payload: Payload,
   isNew: boolean,
+  fetchRepo: string | undefined,
 ): string {
   const { id } = entry
   const marks = [
@@ -1051,7 +1080,7 @@ function blockOf(
     '',
   ]
   lines.push(
-    `- Fetch: \`/ce:connect fetch:${fetchWord(payload)}\` (run ${payload.runId}, attempt ${payload.attempt})`,
+    `- Fetch: \`/ce:connect fetch:${fetchWord(payload, fetchRepo)}\` (run ${payload.runId}, attempt ${payload.attempt})`,
     '',
     fenceText(factsOf(id, payload)),
   )
@@ -1077,13 +1106,16 @@ function ranges(positions: readonly number[]): string {
     .join(', ')
 }
 
-function fetchLines(rows: readonly Row[]): {
+function fetchLines(
+  rows: readonly Row[],
+  repo: string | undefined,
+): {
   fetches: string[]
   lines: string[]
 } {
   const byFetch = new Map<string, number[]>()
   rows.forEach((row, index) => {
-    const word = fetchWord(row.payload)
+    const word = fetchWord(row.payload, repo)
     const list = byFetch.get(word) ?? []
     list.push(index + 1)
     byFetch.set(word, list)
@@ -1159,7 +1191,7 @@ export function assembleReport(
   const rows = input.rows.slice(0, shown)
   const ids = rows.map((row) => row.id)
   const hash = manifestHash(ids)
-  const fetch = fetchLines(rows)
+  const fetch = fetchLines(rows, input.fetchRepo)
   const fresh = rows.filter((row) => row.isNew).length
   const open = input.rows.length
   const out = [manifestMarker(hash), '', ...headOf(input)]
@@ -1327,6 +1359,7 @@ function rowsOf(
   open: readonly LedgerEntry[],
   payloads: ReadonlyMap<string, Payload>,
   date: string,
+  fetchRepo: string | undefined,
 ): { rows: Row[]; unverified: string[] } {
   const rows: Row[] = []
   const unverified: string[] = []
@@ -1344,7 +1377,7 @@ function rowsOf(
       id: entry.id,
       payload: held,
       isNew,
-      block: blockOf(rows.length + 1, entry, revision, held, isNew),
+      block: blockOf(rows.length + 1, entry, revision, held, isNew, fetchRepo),
     })
   }
   return { rows, unverified }
@@ -1418,7 +1451,8 @@ function renderState(
     proposed(run, new Set(open.map((entry) => entry.id)), request),
   )
   const outcome = outcomeOf(invocation)
-  const { rows, unverified } = rowsOf(open, payloads, request.date)
+  const fetchRepo = fetchRepoOf(request)
+  const { rows, unverified } = rowsOf(open, payloads, request.date, fetchRepo)
   const input: BodyInput = {
     outcome,
     facts: factLines(invocation, run),
@@ -1426,6 +1460,7 @@ function renderState(
     stateUpdated: recordState,
     rows,
     unverified,
+    ...(fetchRepo === undefined ? {} : { fetchRepo }),
   }
   const { shown, named } = fitReport(input)
   const result = assembleReport(input, shown, named)

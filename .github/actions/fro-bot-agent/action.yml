@@ -52,6 +52,10 @@ inputs:
     description: With isolate-agent, a directory in the checkout to use as the agent's XDG_STATE_HOME. Empty keeps the agent's own.
     required: false
     default: ""
+  repo-skills:
+    description: Load the repository's .agents/skills from the default branch on trusted runs, true or false.
+    required: false
+    default: "true"
 
 runs:
   using: composite
@@ -74,9 +78,7 @@ runs:
         brokered-push-extra-paths: ${{ inputs.brokered-push-extra-paths }}
         isolate-agent: ${{ inputs.isolate-agent }}
         agent-state-home: ${{ inputs.agent-state-home }}
+        repo-skills: ${{ inputs.repo-skills }}
         # The action's own runtime is unbounded; each caller bounds the step or
         # the job instead.
         timeout: 0
-        # Load the repository's .agents/skills. The action takes them from the
-        # default branch, and only on trusted runs.
-        repo-skills: "true"

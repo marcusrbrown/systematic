@@ -112,7 +112,7 @@ subdirectory of core modules.
   `projectSynthesizedFindings` with `runReviewPipeline`); bundled to
   `skills/ce-review/scripts/validate-review.mjs`
 - `src/ce-connect-helper.ts` — entry of the `ce:connect` helper: `begin`, `validate`, `publish`, `decide`, `import`,
-  `apply-ticks`, `render-report` and `ledger show|clear|unlock`, each one JSON request on stdin and one JSON line out; the rule index,
+  `apply-ticks`, `render-report`, `allowed-origins`, `verify-provenance` and `ledger show|clear|unlock`, each one JSON request on stdin (`verify-provenance`: the raw `gh` text) and one JSON line out; the rule index,
   candidate checks and digest live in `src/lib/connect-helper-core.ts`; bundled to
   `skills/ce-connect/scripts/connect.mjs`
 

@@ -1,7 +1,7 @@
 ---
 name: ce:connect
 description: "Use when searching the projects the user has allowed for contradictions between their learnings, for a lesson that one project recorded and a sibling project still needs, or for a learning whose claim the code no longer supports. Also use when the user asks what their other projects have learned about a failure."
-argument-hint: "[mode:headless | mode:interactive] [group:<name> | projects:<a>,<b> | fetch:<run>[.<attempt>]]"
+argument-hint: "[mode:headless | mode:interactive] [group:<name> | projects:<a>,<b> | fetch:<run>[.<attempt>] | fetch:<owner>/<repo>:<run>.<attempt>]"
 metadata:
   harness-portability: neutral-v1
 ---
@@ -57,11 +57,12 @@ In the same pass, list every word that starts with `group:` or `projects:`, from
 
 ### Fetch word
 
-In the same pass, list every word that starts with `fetch:`. `fetch:<run>.<attempt>` brings the candidates of a scheduled CI run to this machine from exactly that attempt of the run. A bare `fetch:<run>` means the newest attempt of that run. A scheduled report prints the `<run>.<attempt>` form. `<run>` is the GitHub run id and `<attempt>` the attempt number; each is a positive integer, digits only, with no sign, no space and no leading zero. A `<run>` has at most 20 digits and an `<attempt>` at most 10. The value must match `^[1-9][0-9]{0,19}(\.[1-9][0-9]{0,9})?$` and nothing else. The same `fetch:` word twice or more counts once. `fetch:<run>` and `fetch:<run>.<attempt>` are different words.
+In the same pass, list every word that starts with `fetch:`. `fetch:<run>.<attempt>` brings the candidates of a scheduled CI run to this machine from exactly that attempt of the run. A bare `fetch:<run>` means the newest attempt of that run. A bare word always means Systematic: its repository is `marcusrbrown/systematic`. `fetch:<owner>/<repo>:<run>.<attempt>` is the named form: it brings the candidates of a scheduled run of another repository, one that called Systematic's reusable workflow, from exactly that attempt. In the named form the attempt is required. A scheduled report prints the bare `<run>.<attempt>` form for Systematic's own run and the named form for another repository's run. `<run>` is the GitHub run id and `<attempt>` the attempt number; each is a positive integer, digits only, with no sign, no space and no leading zero. A `<run>` has at most 20 digits and an `<attempt>` at most 10. The value must match `^[1-9][0-9]{0,19}(\.[1-9][0-9]{0,9})?$` and nothing else. A named value must match `^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/(?!\.{1,2}:)[A-Za-z0-9._-]{1,100}:[1-9][0-9]{0,19}\.[1-9][0-9]{0,9}$` and nothing else: an owner of at most 39 letters, digits and hyphens with no hyphen at either end, one `/`, a repository of 1 to 100 letters, digits, `.`, `_` and `-` (not `.` or `..`), a `:`, then the run and the attempt. A value that holds a `/` or a `:` is checked as named; any other value is checked as bare. The same `fetch:` word twice or more counts once. `fetch:<run>` and `fetch:<run>.<attempt>` are different words, and a bare word and a named word are different words.
 
 - A `fetch:` word together with a `group:` or `projects:` word: stop. The reason is `conflicting-selection: fetch: cannot be combined with group: or projects:`.
 - Two different `fetch:` words: stop. The reason is `conflicting-selection: two different fetch: words`.
-- A `fetch:` value that does not match that pattern, such as an empty one, a zero attempt or a second dot: stop. The reason is `invalid-request: fetch: needs a numeric GitHub run id`. Check this before any value reaches a command.
+- A bare `fetch:` value that does not match the bare pattern, such as an empty one, a zero attempt or a second dot: stop. The reason is `invalid-request: fetch: needs a numeric GitHub run id`. Check this before any value reaches a command.
+- A named `fetch:` value that does not match the named pattern, such as a missing attempt, a repository with a leading or trailing hyphen on the owner, a `..` repository or a third segment: stop. The reason is `invalid-request: fetch: a named word is <owner>/<repo>:<run>.<attempt>`, with the remedy on the same line: `Supply `fetch:<owner>/<repo>:<run>.<attempt>` and try again.` Check this before any value reaches a command, including the helper.
 - A stop here happens before any command, in the two-line form of Step 1.
 - One valid `fetch:` word: skip Steps 2 to 7 and follow `references/fetch-and-import.md`. A fetch observes no host, dispatches no agent, asks nothing and takes no mode: `mode:` has no effect on it. It ends with the final line that reference names.
 

@@ -47,11 +47,11 @@ createHash('sha256').update(JSON.stringify([
 ```
 
 - **Equal content gives an equal revision.** No failed write or rollback can make one revision name two contents, so the special cases for them are gone. Going back to the first content gives the first revision (`tests/unit/connect-state.test.ts:2407-2417`).
-- **The digest shows the revision before the ledger write.** `revisionOfCandidate` computes it from the candidate itself (`src/ce-connect-helper.ts:1758`). A decision from a run whose write failed is refused while the ledger holds other evidence, and accepted if identical evidence commits later.
+- **The digest shows the revision before the ledger write.** `revisionOfCandidate` computes it from the candidate itself (`src/ce-connect-helper.ts:1764`). A decision from a run whose write failed is refused while the ledger holds other evidence, and accepted if identical evidence commits later.
 - **Re-citing evidence recomputes it.** `withEvidence` drops the stored revision and hashes the new evidence, so a decision from the earlier digest is refused (`src/lib/connect-state.ts:1438-1449`).
-- **`decide` refuses a stale revision under the ledger lock** as `stale-revision` (`src/lib/connect-state.ts:2456-2466`, `refusalOf`). The skill tells the model to send the value from the digest's `Revision:` line, never its own, and not to retry on a refusal (`skills/ce-connect/SKILL.md:209-213`).
-- **The box marker carries the revision** as `:r<12 hex>` (`src/lib/connect-ci.ts:112-120`, `decisionLine`). A tick is recorded only when its revision equals the entry's (`src/lib/connect-ci.ts:1683-1687`, `judge`). A box with no revision is skipped as `unversioned`, and one with another revision as `stale`.
-- **One bundle per proposal.** The text, the revision and the run and attempt that hold the evidence travel together. `mergedPayloads` keeps whichever of this run's bundle and the stored one has the ledger's revision (`src/lib/connect-ci.ts:1277-1309`). `rowsOf` makes a row only from a bundle with that revision, and counts every other entry as unverified (`src/lib/connect-ci.ts:1326-1351`).
+- **`decide` refuses a stale revision under the ledger lock** as `stale-revision` (`src/lib/connect-state.ts:2456-2466`, `refusalOf`). The skill tells the model to send the value from the digest's `Revision:` line, never its own, and not to retry on a refusal (`skills/ce-connect/SKILL.md:210-214`).
+- **The box marker carries the revision** as `:r<12 hex>` (`src/lib/connect-ci.ts:113-121`, `decisionLine`). A tick is recorded only when its revision equals the entry's (`src/lib/connect-ci.ts:1664-1668`, `judge`). A box with no revision is skipped as `unversioned`, and one with another revision as `stale`.
+- **One bundle per proposal.** The text, the revision and the run and attempt that hold the evidence travel together. `mergedPayloads` keeps whichever of this run's bundle and the stored one has the ledger's revision (`src/lib/connect-ci.ts:1309-1341`). `rowsOf` makes a row only from a bundle with that revision, and counts every other entry as unverified (`src/lib/connect-ci.ts:1358-1384`).
 
 ## Why This Works
 
@@ -61,10 +61,10 @@ The binding is only as strong as its caller. `refusalOf` checks a revision only 
 
 ## Prevention
 
-- **Test the failure sequence, not the counter.** Fail one proposal's ledger write, then commit the same evidence and assert the first digest's decision applies. Commit different evidence and assert it is refused and the candidate stays open (`tests/unit/ce-connect-helper-ops.test.ts:4427-4436`, `tests/unit/ce-connect-helper-ops.test.ts:4438-4454`).
-- **Test the rollback.** Tick revision A, roll the cache back, publish revision B in A's place, and assert the tick is neither carried nor recorded (`tests/unit/connect-workflow.test.ts:3379-3403`).
+- **Test the failure sequence, not the counter.** Fail one proposal's ledger write, then commit the same evidence and assert the first digest's decision applies. Commit different evidence and assert it is refused and the candidate stays open (`tests/unit/ce-connect-helper-ops.test.ts:4560-4569`, `tests/unit/ce-connect-helper-ops.test.ts:4571-4587`).
+- **Test the rollback.** Tick revision A, roll the cache back, publish revision B in A's place, and assert the tick is neither carried nor recorded (`tests/unit/connect-workflow.test.ts:4091-4115`).
 - **Seed text from before revisions** and text whose artifact holds other evidence, and assert the row has no boxes and no Fetch line (`tests/unit/connect-ci.test.ts:2764-2790`, `tests/unit/connect-ci.test.ts:2839-2868`).
-- **Pin the paths the main tests skip.** Test identical-content paths separately (`tests/unit/connect-import.test.ts:1834-1864`), pin the skill's decide template and its instruction to send the displayed revision (`tests/unit/connect-skill-contract.test.ts:617-653`; a text pin, not proof a live model sends it), and verify that ledger rewrites keep history fields (`tests/unit/connect-state.test.ts:1467-1509`). Each is pinned by a named test.
+- **Pin the paths the main tests skip.** Test identical-content paths separately (`tests/unit/connect-import.test.ts:1907-1937`), pin the skill's decide template and its instruction to send the displayed revision (`tests/unit/connect-skill-contract.test.ts:989-1025`; a text pin, not proof a live model sends it), and verify that ledger rewrites keep history fields (`tests/unit/connect-state.test.ts:1467-1509`). Each is pinned by a named test.
 
 ## Related
 

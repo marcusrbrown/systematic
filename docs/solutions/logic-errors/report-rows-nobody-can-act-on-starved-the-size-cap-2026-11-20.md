@@ -31,15 +31,15 @@ Both defects were found in review before the change merged. The starvation follo
 
 **Keeping every open entry as a row.** The cap counts characters, not usefulness. Rows with no verified details have no boxes and no Fetch entry, but they still take space and they sort first.
 
-**Fitting the rows, then appending the collapsed section.** Appending up to 20 ids after the 60,000-character renderer cap (`src/lib/connect-ci.ts:70-71`, `REPORT_MAX_CHARS`) could add about 1,360 characters, past the workflow's 60,500 cap (`.github/workflows/connect.yaml:48-50`, `REPORT_BODY_CAP`). The 500-character slack under that cap also has to hold the 133-character cache-save line (`.github/workflows/connect.yaml:837`). The verifier compares the final body to the cap (`.github/workflows/connect.yaml:948`).
+**Fitting the rows, then appending the collapsed section.** Appending up to 20 ids after the 60,000-character renderer cap (`src/lib/connect-ci.ts:71-72`, `REPORT_MAX_CHARS`) could add about 1,360 characters, past the workflow's 60,500 cap (`.github/workflows/connect.yaml:81-83`, `REPORT_BODY_CAP`). The 500-character slack under that cap also has to hold the 133-character cache-save line (`.github/workflows/connect.yaml:948`). The verifier compares the final body to the cap (`.github/workflows/connect.yaml:1060`).
 
 ## Solution
 
-**List only what can be acted on.** `rowsOf` makes a row only for an entry with a bundle for its live revision. Every other open entry goes into an `unverified` list (`src/lib/connect-ci.ts:1326-1351`).
+**List only what can be acted on.** `rowsOf` makes a row only for an entry with a bundle for its live revision. Every other open entry goes into an `unverified` list (`src/lib/connect-ci.ts:1307-1332`).
 
-**Collapse the rest into one bounded section.** `unverifiedSection` counts the entries and names at most `MAX_UNVERIFIED_IDS` of them, 20, oldest first, then says how many more (`src/lib/connect-ci.ts:1128-1146`; `src/lib/connect-ci.ts:73-74`). It has no boxes, and the manifest does not hold its ids.
+**Collapse the rest into one bounded section.** `unverifiedSection` counts the entries and names at most `MAX_UNVERIFIED_IDS` of them, 20, oldest first, then says how many more (`src/lib/connect-ci.ts:1160-1178`; `src/lib/connect-ci.ts:74-75`). It has no boxes, and the manifest does not hold its ids.
 
-**Budget the section inside the cap.** `assembleReport` puts the section in the body, so every length check includes it (`src/lib/connect-ci.ts:1154-1189`). `fitReport` tries the full id list first and measures how many rows fit beside it. If the oldest row would not fit, it halves the list, down to the count alone (`src/lib/connect-ci.ts:1217-1231`):
+**Budget the section inside the cap.** `assembleReport` puts the section in the body, so every length check includes it (`src/lib/connect-ci.ts:1186-1221`). `fitReport` tries the full id list first and measures how many rows fit beside it. If the oldest row would not fit, it halves the list, down to the count alone (`src/lib/connect-ci.ts:1249-1263`):
 
 ```ts
 for (let named = Math.min(MAX_UNVERIFIED_IDS, input.unverified.length); named > 0; named = Math.floor(named / 2)) {
@@ -59,7 +59,7 @@ Budget the collapsed backlog and the actionable rows together, shrinking the id 
 
 - **Seed the backlog that starves the queue.** An older backlog with no bundles, large enough to fill the report, then a newer candidate with one. Assert the newer one is shown in full with Fetch and boxes, and that the legacy ids appear only in the collapsed section (`tests/unit/connect-ci.test.ts:2917-2959`). Assert its tick is recorded on the next apply and the backlog stays open (`tests/unit/connect-ci.test.ts:2961-2979`).
 - **Read the cap from the verifier, never restate it.** The test parses `REPORT_BODY_CAP` and extracts the cache-save line from the workflow text (`tests/unit/connect-ci.test.ts:250-265`). It asserts `REPORT_MAX_CHARS` plus that line is within the cap (`tests/unit/connect-ci.test.ts:3088-3096`). A tolerance written into the test can pass while the real verifier refuses.
-- **Run the real verify step on a near-cap body.** Seed 25 entries without bundles and enough rows that the cap binds, append the cache-save line, and assert the verifier passes. Assert it refuses the same body once it is over the cap (`tests/unit/connect-workflow.test.ts:1782-1810`, `tests/unit/connect-workflow.test.ts:1812-1828`).
+- **Run the real verify step on a near-cap body.** Seed 25 entries without bundles and enough rows that the cap binds, append the cache-save line, and assert the verifier passes. Assert it refuses the same body once it is over the cap (`tests/unit/connect-workflow.test.ts:2377-2405`, `tests/unit/connect-workflow.test.ts:2407-2423`).
 - **Test the shrink and the fallback.** The id list names fewer ids when twenty would push the first row out, and falls back to the count alone with the body still under the cap (`tests/unit/connect-ci.test.ts:3131-3146`, `tests/unit/connect-ci.test.ts:3148-3159`).
 - **Whenever a section is appended to a bounded artifact,** list who else adds to it later, and budget against the final reader's limit.
 
