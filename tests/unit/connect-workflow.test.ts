@@ -387,6 +387,7 @@ const SHARED_OPTIONAL_DEFAULTS: Readonly<Record<string, string>> = {
   'agent-state-home': '',
   'isolate-agent': 'false',
   'output-mode': '',
+  'repo-skills': 'true',
   'response-mode': 'github',
   'systematic-version': '',
   'trusted-head-sha': '',
@@ -423,7 +424,6 @@ describe('the shared fro-bot agent action', () => {
   it('owns the runtime settings both callers share', () => {
     const step = sharedActionStep()
     expect(asRecord(step.with, 'with').timeout).toBe(0)
-    expect(asRecord(step.with, 'with')['repo-skills']).toBe('true')
     expect(asRecord(step.env, 'env')).toEqual({
       OPENCODE_PROMPT_ARTIFACT: 'true',
     })
@@ -457,11 +457,60 @@ describe('the shared fro-bot agent action', () => {
       asRecord(readSharedAction().action.inputs, 'inputs'),
     )
     const given = asRecord(sharedActionStep().with, 'with')
-    expect(Object.keys(given).sort()).toEqual(
-      [...inputs, 'timeout', 'repo-skills'].sort(),
-    )
+    expect(Object.keys(given).sort()).toEqual([...inputs, 'timeout'].sort())
     for (const name of inputs) {
       expect(given[name]).toBe(`\${{ inputs.${name} }}`)
+    }
+  })
+
+  it('declares repo-skills as an optional input that defaults on, and forwards it unchanged', () => {
+    const inputs = asRecord(readSharedAction().action.inputs, 'inputs')
+    const input = asRecord(inputs['repo-skills'], 'repo-skills')
+    expect(input.required).toBe(false)
+    expect(input.default).toBe('true')
+    expect(asString(input.description, 'repo-skills description')).toContain(
+      '.agents/skills',
+    )
+    expect(asRecord(sharedActionStep().with, 'with')['repo-skills']).toBe(
+      '${{ inputs.repo-skills }}',
+    )
+  })
+
+  it('leaves repo-skills at its default on every consumer but the connect run, which may only turn it off', () => {
+    const consumers = [
+      ...new Bun.Glob('.github/workflows/*.{yml,yaml}').scanSync({ cwd: ROOT }),
+    ].flatMap((file) => {
+      const parsed = asRecord(
+        yaml.load(fs.readFileSync(path.join(ROOT, file), 'utf8'), {
+          schema: yaml.JSON_SCHEMA,
+        }),
+        file,
+      )
+      const jobs = isRecord(parsed.jobs) ? Object.values(parsed.jobs) : []
+      return jobs.flatMap((candidate) => {
+        const steps =
+          isRecord(candidate) && Array.isArray(candidate.steps)
+            ? candidate.steps
+            : []
+        return steps.flatMap((step) =>
+          isRecord(step) &&
+          typeof step.uses === 'string' &&
+          step.uses.endsWith(SHARED_ACTION_USES.slice(2))
+            ? [{ file, given: asRecord(step.with ?? {}, 'with') }]
+            : [],
+        )
+      })
+    })
+    expect(consumers.map(({ file }) => file).sort()).toEqual([
+      '.github/workflows/connect.yaml',
+      '.github/workflows/fro-bot.yaml',
+    ])
+    for (const { file, given } of consumers) {
+      if (file === '.github/workflows/fro-bot.yaml') {
+        expect(given).not.toHaveProperty('repo-skills')
+      } else if ('repo-skills' in given) {
+        expect(given['repo-skills']).toBe('false')
+      }
     }
   })
 
@@ -479,7 +528,6 @@ describe('the shared fro-bot agent action', () => {
   it('keeps the shared settings off both callers', () => {
     for (const step of [connectStep(), froBotAgentStep()]) {
       expect(asRecord(step.with, 'with')).not.toHaveProperty('timeout')
-      expect(asRecord(step.with, 'with')).not.toHaveProperty('repo-skills')
       expect(asRecord(step.env ?? {}, 'env')).not.toHaveProperty(
         'OPENCODE_PROMPT_ARTIFACT',
       )
