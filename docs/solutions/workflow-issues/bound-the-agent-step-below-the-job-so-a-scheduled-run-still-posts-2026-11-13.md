@@ -40,7 +40,7 @@ run:
     - name: Run ce:connect
       id: agent
       continue-on-error: true
-      timeout-minutes: ${{ fromJSON(vars.FRO_BOT_CONNECT_STEP_TIMEOUT || '40') }}
+      timeout-minutes: ${{ fromJSON(inputs.step-timeout-minutes || '40') }}
       uses: ./.fro-bot-actions/.github/actions/fro-bot-agent
     - name: Read run record
       env:
@@ -49,9 +49,9 @@ run:
 
 The step ends as a failed step when its timeout fires, and the job goes on (`.github/workflows/connect.yaml:527-535`, `continue-on-error` and `timeout-minutes`). The next step reads the helper's invocation record, not the step's exit, and decides the outcome from it (`.github/workflows/connect.yaml:569-613`, `Read run record`). The reader (`.github/workflows/connect.yaml:585-598`, `phase` and `outcome`) has three cases. A record with this run's marker in phase `begun` becomes the outcome `no-final-line` and is posted. A record with this run's marker in phase `terminal` keeps its own outcome. A missing record, a symlink or a record with another run's marker fails the step red, and nothing is posted. The `render` and `post` jobs run on the record, post the report, and a last `Settle result` step in `post` turns the workflow red so the failure stays visible.
 
-Keep the step's bound below the job's. The `prepare` job rejects a `FRO_BOT_CONNECT_STEP_TIMEOUT` that is not a whole number of minutes below the job limit (`.github/workflows/connect.yaml:153-164`, `job_limit`), so a variable cannot lift the step past the backstop. The tests pin the expression and its fallback below the job timeout (`tests/unit/connect-workflow.test.ts:200-206`, `STEP_TIMEOUT_EXPRESSION`).
+Keep the step's bound below the job's. The `prepare` job rejects a `step-timeout-minutes` input (an empty one means 40) that is not a whole number of minutes below the job limit (`.github/workflows/connect.yaml:153-164`, `job_limit`), so a caller's setting cannot lift the step past the backstop. The tests pin the expression and its fallback below the job timeout (`tests/unit/connect-workflow.test.ts:200-206`, `STEP_TIMEOUT_EXPRESSION`).
 
-**Write the numeric field as `fromJSON(vars.X || '40')`.** actionlint's type check rejects the bare form for a numeric field. On a scratch copy of the workflow with the `queue:` line removed (actionlint 1.7.12 does not know that key), `timeout-minutes: ${{ vars.FRO_BOT_CONNECT_STEP_TIMEOUT || 40 }}` fails with `type of expression at "float number value" must be number but found type string`, and the `fromJSON(... || '40')` form passes.
+**Write the numeric field as `fromJSON(inputs.X || '40')`.** actionlint's type check rejects the bare form for a numeric field. On a scratch copy of the workflow with the `queue:` line removed (actionlint 1.7.12 does not know that key), `timeout-minutes: ${{ inputs.step-timeout-minutes || 40 }}` fails with `type of expression at "float number value" must be number but found type string`, and the `fromJSON(... || '40')` form passes.
 
 **Match a workflow's own reports by exact author login.** The report lookup in `prepare` and `post` accepts only issues whose REST `user.login` is in the `REPORT_AUTHORS` list (`.github/workflows/connect.yaml:80`, `REPORT_AUTHORS`; `.github/workflows/connect.yaml:339-345`, `reports`). A report posted with the job token is `github-actions[bot]` in REST and `app/github-actions` in `gh issue list --json author`; both were seen for issue #1389. Use the form of the API the lookup reads. Anyone can open an issue with a matching title, so the title rule alone is not enough: the body of a report is read back for the operator's ticks. The test pins the list to the one login (`tests/unit/connect-workflow.test.ts:298-302`, `REPORT_AUTHORS`).
 
@@ -61,7 +61,7 @@ With the bound, a hang produces a posted report that says the run ended without 
 
 ### Live proof
 
-Run 43475406631 was a dispatch with `FRO_BOT_CONNECT_STEP_TIMEOUT` set to `2`. Its log has `The action 'Run ce:connect' has timed out after 2 minutes.`, and the later steps then ran as designed. CN-6 in `HARNESSES.md` holds the full record.
+Run 43475406631 was a dispatch with the repository variable `FRO_BOT_CONNECT_STEP_TIMEOUT` set to `2`, which the workflow then read directly and Systematic's wrapper now passes in as `step-timeout-minutes`. Its log has `The action 'Run ce:connect' has timed out after 2 minutes.`, and the later steps then ran as designed. CN-6 in `HARNESSES.md` holds the full record.
 
 ## When to Apply
 
