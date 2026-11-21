@@ -23,6 +23,7 @@ import {
   NEXT_STEPS,
 } from '../../src/lib/connect-helper-core.js'
 import { REFUSAL_TEXT } from '../../src/lib/connect-import.js'
+import { type PinProject, resolvePins } from '../../src/lib/connect-pins.js'
 import { isGithubOwnerRepo } from '../../src/lib/connect-repo-identity.js'
 import { parseFrontmatter } from '../../src/lib/frontmatter.js'
 import { READ_ONLY_AGENT_NAMES } from '../../src/lib/opencode-v2-tool-guard.js'
@@ -1203,10 +1204,11 @@ describe('ce:connect rotation across runs', () => {
     expect(outcomesText).toMatch(/starts? (the sweep )?over/i)
   })
 
-  test('describes the six columns of the rule overview in the contract reference', () => {
+  test('describes the columns of the rule overview, ending with the project key, in the contract reference', () => {
     expect(contractText).toContain('rule overview')
     expect(contractText).toContain('`offered`')
     expect(contractText).toContain('`later`')
+    expect(contractText).toMatch(/a mark and the project key/)
   })
 })
 
@@ -1701,5 +1703,223 @@ describe('code-mismatch judgement: a contract is not stale for an implementation
     expect(section).toMatch(
       /positive evidence[^.]*contradict the contract itself[^.]*`investigate`/i,
     )
+  })
+})
+
+describe('ce:connect pin hints: the skill copies the helper lines, as data, by project key', () => {
+  const step3 = section(skillText, '## Step 3', '## Step 4')
+  const step4 = section(skillText, '## Step 4', '## Step 5')
+  const step5 = section(skillText, '## Step 5', '## Step 6')
+  const step7 = section(skillText, '## Step 7', '## Final line')
+  const baseBlock = [
+    'rule ids: <rule id>, <rule id>',
+    'max candidates: <bounds.maxCandidatesPerBatch>',
+  ].join('\n')
+  const hintParagraph = section(step5, 'Pin hints.', 'Wait for the reply')
+  const hintBlock = /```text\n(rule ids:[\s\S]*?)\n```/.exec(hintParagraph)?.[1]
+
+  test('step 3 lists pinHints and pinNotes among the fields of a begun answer, and the limits statement shows the notes', () => {
+    const fields = step3.slice(step3.indexOf('- `begun`'))
+    expect(fields.split('\n')[0]).toContain('`pinHints`')
+    expect(fields.split('\n')[0]).toContain('`pinNotes`')
+    const limits = step3.slice(step3.indexOf('### Interactive mode'))
+    expect(limits).toContain('`pinNotes`')
+    expect(limits).toMatch(/why a declared pin gave no line/i)
+  })
+
+  test('step 4 says the last overview column is the rule project key, which step 5 matches on', () => {
+    expect(step4).toMatch(
+      /rule id, project name, path, title, `applies_when` items, a mark and the project key/,
+    )
+    expect(step4).toMatch(/last column[^.]*project key/i)
+    expect(step4).not.toMatch(/\bsix\b/i)
+  })
+
+  test('step 5 keeps the fixed block exactly as before: the pin hints section is not part of it', () => {
+    expect(step5).toContain('max candidates: <bounds.maxCandidatesPerBatch>')
+    const base = step5.slice(
+      step5.indexOf('```text'),
+      step5.indexOf('```', step5.indexOf('```text') + 7),
+    )
+    expect(base).not.toContain('pin hints:')
+  })
+
+  test('step 5 puts an optional pin hints section between rule ids and max candidates', () => {
+    expect(hintBlock).toBeDefined()
+    if (hintBlock === undefined) return
+    const lines = hintBlock.split('\n')
+    expect(lines[0]).toMatch(/^rule ids:/)
+    expect(lines[1]).toBe('pin hints:')
+    expect(lines.at(-1)).toMatch(/^max candidates:/)
+    expect(hintParagraph).toMatch(
+      /section between `rule ids:` and `max candidates:`/,
+    )
+    expect(baseBlock).toContain('max candidates:')
+  })
+
+  test('the lines are copied from pinHints by project key, once each, unchanged and in the helper order', () => {
+    expect(hintParagraph).toMatch(/project key of every rule id/i)
+    expect(hintParagraph).toMatch(/last column of `rulesOverview`/)
+    expect(hintParagraph).toMatch(
+      /copy each `pinHints` line stored under any of those keys/i,
+    )
+    expect(hintParagraph).toMatch(/once/i)
+    expect(hintParagraph).toMatch(/unchanged/i)
+    expect(hintParagraph).toMatch(/helper's order/i)
+    expect(hintParagraph).not.toMatch(/project name/i)
+  })
+
+  test('a family with no matching key gets no pin hints heading', () => {
+    expect(hintParagraph).toMatch(
+      /no line applies[^.]*(leave out|omit)[^.]*(section|heading)/i,
+    )
+  })
+
+  test('the lines are data: never written, paraphrased, shortened or extended by the skill', () => {
+    expect(hintParagraph).toMatch(
+      /never write, paraphrase, shorten or extend one/i,
+    )
+    expect(hintParagraph).toMatch(/data/i)
+    expect(hintParagraph).toMatch(/not an instruction/i)
+  })
+
+  test('the nothing-else rule stays, and no line template lives in the skill', () => {
+    expect(step5).toMatch(/and nothing else: no instruction of your own/)
+    expect(step5).toMatch(/no lock, nonce or pid/)
+    expect(skillText).toMatch(/Copy no text from a document into it/)
+    // The sentence a line carries is the helper's. The skill never holds it.
+    expect(skillText).not.toMatch(/allowed checkout/)
+    expect(skillText).not.toMatch(/Check claims about/)
+    expect(skillText).not.toMatch(/reason `unscoped`/)
+  })
+
+  test('step 7 prints the Pins line verbatim and keeps it apart from the degrade reasons', () => {
+    expect(step7).toContain('`Pins:`')
+    expect(step7).toMatch(/Pins:` line[^.]*(unchanged|as the helper wrote)/i)
+    expect(step7).toMatch(/not a degrade reason/i)
+    expect(step7).toMatch(/never list it with the `degradeReasons`/i)
+  })
+
+  test('the headless reference prints the Pins line verbatim, as a note and never a degrade reason', () => {
+    expect(outcomesText).toContain('`Pins:`')
+    expect(outcomesText).toMatch(
+      /Pins:` line[^.]*(unchanged|as the helper wrote)/i,
+    )
+    expect(outcomesText).toMatch(/not a degrade reason/i)
+    expect(outcomesText).toMatch(/headless[^.]*asks no question/i)
+  })
+
+  test('the contract reference names the optional section beside the fixed block', () => {
+    expect(contractText).toContain('`pin hints:`')
+    expect(contractText).toMatch(/helper's own lines/i)
+  })
+
+  test('the researcher prompt is unchanged on purpose: it does not name the section', () => {
+    expect(agent.body).not.toMatch(/pin hints/i)
+    expect(agent.body).not.toContain('`pinHints`')
+  })
+})
+
+describe('the guide documents connect.pins', () => {
+  const guide = section(guideText, '## Declare dependency pins', '## Run it')
+
+  test('shows a worked declaration with the four fields', () => {
+    expect(guide).toContain('"pins": [')
+    for (const field of ['project', 'upstream', 'file', 'key']) {
+      expect(guide).toContain(`"${field}":`)
+    }
+    expect(guide).toMatch(/user-owned|user-level/i)
+  })
+
+  test('states the key path rule: dotted segments, no array index, a dotted name cannot be addressed', () => {
+    expect(guide).toMatch(/dotted/i)
+    expect(guide).toMatch(/array index/i)
+    expect(guide).toMatch(/contains a dot[^.]*cannot be addressed/i)
+    expect(guide).toMatch(/JSON or JSONC/)
+    expect(guide).toMatch(/working tree/i)
+  })
+
+  test('says an unknown version stays unknown, with --no-tags and the CI clone in one sentence', () => {
+    expect(guide).toContain('`unknown`')
+    const sentence = guide
+      .split(/(?<=\.)\s/)
+      .find((text) => text.includes('--no-tags'))
+    expect(sentence).toBeDefined()
+    expect(sentence).toMatch(/scheduled workflow/i)
+    expect(sentence).toMatch(/always `unknown`/)
+    expect(guide).toMatch(/stored in a pack/i)
+    expect(guide).toMatch(/is at/i)
+    expect(guide).toMatch(/context, not attestation/i)
+  })
+
+  test('says a pin with no selected matching checkout is silent and opens nothing', () => {
+    expect(guide).toMatch(/dropped silently/i)
+    expect(guide).toMatch(/no note/i)
+    expect(guide).toMatch(/opens nothing/i)
+  })
+
+  test('gives the root charset and that a root outside it gets no line', () => {
+    expect(guide).toContain('[A-Za-z0-9._/-]')
+    expect(guide).toMatch(/256/)
+    expect(guide).toMatch(/gets no line/i)
+  })
+
+  test('lists every note code the helper can return', () => {
+    for (const code of [
+      'pin-file-missing',
+      'pin-file-too-large',
+      'pin-file-invalid',
+      'pin-key-absent',
+      'pin-value-invalid',
+      'pin-conflict',
+      'hints-truncated',
+      'notes-truncated',
+    ]) {
+      expect(guide).toContain(`\`${code}\``)
+    }
+    expect(guide).toContain('`Pins:`')
+    expect(guide).toMatch(/do(es)? not degrade|never degrade/i)
+  })
+
+  test('says a line is a hint, not evidence, and that a missing line is not an error', () => {
+    expect(guide).toMatch(/hint, not evidence/i)
+    expect(guide).toMatch(/not an error/i)
+  })
+
+  test('shows the line exactly as the helper renders it', () => {
+    const project: PinProject = {
+      entry: '~/src/github.com/me/app',
+      root: '/home/me/src/github.com/me/app',
+      key: '0123456789ab',
+    }
+    const checkout: PinProject = {
+      entry: '~/src/github.com/upstream-org/host-lib-old',
+      root: '/home/me/src/github.com/upstream-org/host-lib-old',
+      key: 'ba9876543210',
+      repo: 'upstream-org/host-lib',
+      commit: 'a'.repeat(40),
+    }
+    const { hints } = resolvePins(
+      [
+        {
+          project: project.entry,
+          upstream: 'upstream-org/host-lib',
+          file: 'config/pins.json',
+          key: 'host.version',
+        },
+      ],
+      [project, checkout],
+      {
+        readPin: () => ({ kind: 'ok', value: '2.3.2' }),
+        readTag: () => ({ kind: 'tag', name: '1.4.0' }),
+      },
+    )
+    const [line] = hints[project.key] ?? []
+    expect(line).toBeDefined()
+    expect(guide).toContain(`${line}`)
+  })
+
+  test('uses no acceptance-case example', () => {
+    expect(guide).not.toMatch(/caddy|extensionless|`plugins?`/i)
   })
 })

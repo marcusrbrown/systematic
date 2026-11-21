@@ -106,6 +106,75 @@ A bad selection stops the run before it takes the lock, in interactive and headl
 | `group-member-not-allowed` | A member of the group is not on the allow list. The refusal names the group and the member, and says why when the member did not resolve to a repository. |
 | `invalid-request` | A word is malformed: an empty value, an empty entry between commas, more than 32 words, or a word over 2,048 characters. |
 
+## Declare dependency pins
+
+A claim about a dependency can hold at the version one project pins and fail at another version. When you have both versions checked out, a pin tells the researcher which allowed checkout is the other version, so it checks the claim at both. The pin is yours to declare: Systematic never reads a lockfile, a workflow or a manifest to find one.
+
+Declare pins beside `allow_projects`, in your user-level config:
+
+```jsonc
+// ~/.config/opencode/systematic.jsonc
+{
+  "connect": {
+    "allow_projects": [
+      "~/src/github.com/me/app",
+      "~/src/github.com/upstream-org/host-lib-old"
+    ],
+    "pins": [
+      {
+        "project": "~/src/github.com/me/app",
+        "upstream": "upstream-org/host-lib",
+        "file": "config/pins.json",
+        "key": "host.version"
+      }
+    ]
+  }
+}
+```
+
+This says: `app` pins `upstream-org/host-lib` at the value under `host.version` in `config/pins.json`. The second allowed entry is a checkout of `host-lib` at another version, found because its git `origin` is `upstream-org/host-lib`.
+
+- **`project`.** An `allow_projects` entry written exactly as it is on the allow list, or that entry's resolved root, an absolute path. Another spelling of the same path does not match, and the pin is dropped without a read. A pin never adds a project to the allow list or to a selection.
+- **`upstream`.** A GitHub `owner/repo`. Case is ignored when it is compared with a checkout's `origin`.
+- **`file`.** A path inside the project, written with `[A-Za-z0-9._/-]`, at most 256 characters, with no leading `/` and no `..` segment. It is JSON or JSONC, read from the working tree as it is on disk, so an untracked file works. A symlink is refused.
+- **`key`.** Dotted segments that walk nested objects: `host.version` reads `{ "host": { "version": "2.3.2" } }`. There is no array index, and a key that contains a dot itself cannot be addressed. The value must be a string that starts with a letter or digit, then holds letters, digits, `.`, `_`, `+` and `-`, 64 characters at most. A tag may contain a `/`, a pinned value may not.
+- **Limits.** At most 64 pins per file. The four config layers merge as a union, and an identical pin written twice counts once. Entries that give the same project, upstream and key but different files are dropped at run time with a `pin-conflict` note, never resolved by picking one.
+
+### The version of a checkout
+
+A checkout's version is the one git tag at its HEAD. The helper reads it from the files in `.git` and runs no git command. It reports `unknown`, and never guesses, when no tag is at HEAD, when several tags are, and when a tag object is stored in a pack. Clones made by a fetch often store annotated tag objects that way. A clone made with `--no-tags`, as the scheduled workflow makes, has no tags and so is always `unknown`, and that workflow declares no pins. A checkout with an `unknown` version still gets a line, labelled `unknown`, and the researcher never reads `unknown` as a mismatch.
+
+The tag is context, not attestation. The working tree can differ from the tag, which is why a line says the checkout is at a tag rather than that it is that version.
+
+### What the researcher sees
+
+For each pin and each selected checkout of the upstream (other than the pinning project itself), the helper renders one fixed line from values that passed strict charsets. A value that fails is rejected, never cleaned up:
+
+```text
+pin: /home/me/src/github.com/me/app pins upstream-org/host-lib at 2.3.2 (config/pins.json); allowed checkout /home/me/src/github.com/upstream-org/host-lib-old is upstream-org/host-lib at 1.4.0. Check claims about upstream-org/host-lib at both versions; if a claim holds at one and not the other, report a `code-mismatch` with reason `unscoped` and cite the evidence from the other checkout.
+```
+
+Both roots are the ones the run lists under its projects. The skill copies a line, unchanged, into the dispatch of each family that holds a rule of the pinning project, and writes none of its own. A run keeps at most 8 lines, in a fixed order that does not depend on layer or filesystem order. Equal versions still produce a line: the helper states the versions and the researcher judges them. A line is a hint, not evidence. A candidate it leads to still has to quote evidence that validation checks, and the helper never reports a mismatch from a line.
+
+### When no line appears
+
+A missing line is not an error.
+
+- **No match is silent.** A pin is dropped silently, with no note, when its project is not selected or when no selected checkout has that `origin`. The helper opens nothing for it: not the pin file, and no checkout it did not select. If a pin seems to do nothing, check the selection and the `origin` of the checkout.
+- **A root outside the charset gets no line.** A project root or checkout root must be absolute, hold only `[A-Za-z0-9._/-]` and be at most 256 characters. A pair with a root that fails gets no line and a `pin-value-invalid` note. Moving the checkout fixes it.
+- **Notes explain the rest.** The summary shows one `Pins:` line when there are notes, such as `Pins: pin-key-absent (0123456789ab).` A note names a project by its 12-character project key and never carries a path, a key, a value or an upstream. Notes do not degrade the run.
+
+| Note | Meaning |
+|---|---|
+| `pin-file-missing` | The pin file is missing, a directory, a symlink, outside the project or unreadable. |
+| `pin-file-too-large` | The pin file is over the read cap. |
+| `pin-file-invalid` | The pin file is empty or is not valid JSON or JSONC. |
+| `pin-key-absent` | The key does not lead to a value in the file. |
+| `pin-value-invalid` | The value is not a string of the allowed form, or a root or path in the pin is outside its charset. |
+| `pin-conflict` | Entries for one project, upstream and key name different files. All of them are dropped. |
+| `hints-truncated` | More than 8 lines. The first 8 in order are kept. |
+| `notes-truncated` | More than 8 notes. The first are kept. |
+
 ## Run it
 
 In an interactive session:
@@ -238,7 +307,7 @@ A code mismatch names one learning, in the project that should change, whose cla
 
 The governing revision is the checkout of the project the claim is about. For a claim about a dependency it is the version the consuming project pins: a claim that was true at the pin is never `stale`. A learning that deliberately describes past behaviour is never a candidate.
 
-The evidence may sit in any allowed project, the target included. To check a dependency claim, add one checkout of that dependency, at the version the consumer pins, to `connect.allow_projects`. A project with no `docs/solutions` of its own is read only as evidence and adds no rules to the sweep. The helper reads lockfiles as plain text at most and parses none, so the pin has to be shown another way: an excerpt of the consumer's `package.json` or a workflow `uses:` line, or a note from the researcher that is labelled unverified. When neither is there, the candidate's next step is `investigate`.
+The evidence may sit in any allowed project, the target included. To check a dependency claim, add one checkout of that dependency, at the version the consumer pins, to `connect.allow_projects`. To have the helper tell the researcher which allowed checkout is the other version, declare a pin (see [Declare dependency pins](#declare-dependency-pins)). A project with no `docs/solutions` of its own is read only as evidence and adds no rules to the sweep. The helper reads lockfiles as plain text at most and parses none, so the pin has to be shown another way: an excerpt of the consumer's `package.json` or a workflow `uses:` line, or a note from the researcher that is labelled unverified. When neither is there, the candidate's next step is `investigate`.
 
 The helper checks provenance only: each evidence item's project, path, fingerprint, line span and word-for-word text. It cannot see a version, a pin or what the text means. The digest shows each evidence project's checkout HEAD from the run record. The HEAD is context for you, not proof that the text came from that revision, so recheck the evidence before you confirm a refresh.
 
@@ -580,6 +649,7 @@ Read these before you add a project.
 - **Read tools are not path-scoped.** The researcher cannot run commands, write or fetch. Its read, grep and glob tools can still open any file your user can, not only the allowed projects. The allow list decides which projects are indexed and which paths the helper validates, and a group or a pick narrows that further. Neither is a sandbox.
 - **Session MCP tools are not denied.** Tools from MCP servers connected to your session stay available to the researcher. Check what is connected before a run.
 - **A digest can carry content from those reads.** A validated excerpt must come from a tracked file in an allowed project. The digest's other free text is written by the researcher after unscoped reads, and nothing screens it for secrets. Treat a digest like the learnings it quotes, keep the state directory private, and read it before you share it.
+- **A pin line is a hint.** The helper states a pinned value and a checkout's tag at HEAD and nothing more. The tag is context, not attestation, a clone made with `--no-tags` always reads `unknown`, and no line is shown for a pin with no selected matching checkout.
 - **Everything read is evidence.** Candidates are checked against the files, but a candidate is a proposal, and a wrong one is possible. A run that found nothing, or that is `degraded`, does not show that nothing is there.
 - **The title and the summary are not checked against evidence.** The researcher writes them. The helper checks excerpts, fingerprints and paths, but not these two fields. Reads are not scoped to a path, so text from outside the allowed projects can reach the chat reply and the run records through them. Read every candidate before you promote it.
 - **Coverage is self-reported.** The helper records a rule as covered from the researcher's own report of what it searched. A run steered by a hostile learning can mark rules covered without searching them. `ledger clear` resets coverage.
