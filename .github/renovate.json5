@@ -108,6 +108,9 @@
       matchPackageNames: ['@opencode-ai/{/,}**', 'opencode-ai'],
       groupName: 'OpenCode',
       semanticCommitType: 'build',
+      // Dev inputs only. Unset, the pin file's regex dependency can give the
+      // group the releasing `deps` scope.
+      semanticCommitScope: 'dev',
     },
     {
       // The v2 CLI pin and the `@opencode/sdk`, `@opencode/plugin` and
@@ -115,6 +118,8 @@
       matchPackageNames: ['@opencode/{/,}**'],
       groupName: 'OpenCode v2',
       semanticCommitType: 'build',
+      // Dev inputs only, as in the v1 group.
+      semanticCommitScope: 'dev',
     },
     {
       matchPackageNames: ['@earendil-works/{/,}**'],

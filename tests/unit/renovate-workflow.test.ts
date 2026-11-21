@@ -59,6 +59,7 @@ interface PackageRule {
   matchManagers?: string[]
   groupName?: string
   semanticCommitType?: string
+  semanticCommitScope?: string
   minimumReleaseAge?: string | null
 }
 
@@ -180,6 +181,15 @@ describe('renovate host pin tracking', () => {
     expect(groupFor(config, '@opencode/cli')).not.toBe('OpenCode')
     expect(groupFor(config, 'opencode-ai')).not.toBe('OpenCode v2')
   })
+
+  test.each(['OpenCode', 'OpenCode v2'])(
+    'the %s group commits as a non-releasing build(dev)',
+    (group) => {
+      const rule = config.packageRules.find((r) => r.groupName === group)
+      expect(rule?.semanticCommitType).toBe('build')
+      expect(rule?.semanticCommitScope).toBe('dev')
+    },
+  )
 })
 
 /**
