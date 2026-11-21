@@ -4,8 +4,8 @@
  * it.
  *
  * `resolvePins` turns declared pins into hint lines. A pin matches only a
- * project the run has already selected and scanned, by the entry as written or
- * by its resolved root; a path a pin declares itself is never resolved or
+ * project the run has already selected and scanned, by an allow-list entry as
+ * written (any spelling that resolved to it) or by its resolved root; a path a pin declares itself is never resolved or
  * opened. It reads nothing until a pin has matched a selected project and a
  * selected checkout of the upstream. The line is a fixed template whose slots
  * passed strict charsets, and it names projects by the roots the `begin`
@@ -195,6 +195,8 @@ const NOTE_CODES: ReadonlySet<string> = new Set<PinNoteCode>([
 export interface PinProject {
   /** The allow-list entry as written. */
   readonly entry: string
+  /** Later allow-list entries that named the same checkout, as written. */
+  readonly aliases?: readonly string[]
   /** The resolved main root, as the `projects` block lists it. */
   readonly root: string
   /** `projectKey(root)`. */
@@ -264,17 +266,19 @@ interface PinGroup {
 }
 
 /**
- * The project a pin's `project` names: the selected project whose entry equals
- * it as written, else the one whose resolved root equals it. Nothing else
- * matches, and a pin's `project` is never resolved.
+ * The project a pin's `project` names: the selected project whose allow-list
+ * entry, or any other allow-list spelling that resolved to it, equals it as
+ * written, else the one whose resolved root equals it. Nothing else matches,
+ * and a pin's `project` is never resolved.
  */
 function matchProject(
   declared: string,
   projects: readonly PinProject[],
 ): PinProject | undefined {
   return (
-    projects.find((item) => item.entry === declared) ??
-    projects.find((item) => item.root === declared)
+    projects.find(
+      (item) => item.entry === declared || item.aliases?.includes(declared),
+    ) ?? projects.find((item) => item.root === declared)
   )
 }
 
@@ -339,69 +343,109 @@ function usableDeclaration(file: string, pinning: PinProject): boolean {
   )
 }
 
+/** A group whose pin value was read and whose checkouts can all be named: what its lines need. */
+interface ReadyGroup {
+  readonly group: PinGroup
+  readonly file: string
+  readonly value: string
+  readonly checkouts: readonly PinProject[]
+}
+
 /**
- * The hint entries of one group, or none. A group with two files is a
- * conflict. A group with no selected checkout of the upstream gives nothing
- * and reads nothing. Roots that cannot be rendered cost their pair a line and
- * add one `pin-value-invalid` note; only then is the pin value read, once, and
- * each checkout's tag.
+ * The group with its pin value read, or undefined when it gives no line. A
+ * group with two files is a conflict. A group with no selected checkout of the
+ * upstream gives nothing and reads nothing. Roots that cannot be rendered cost
+ * their pair a line and add one `pin-value-invalid` note; only then is the pin
+ * value read, once. No checkout's tag is read here.
  */
-function resolveGroup(
+function readyGroup(
   group: PinGroup,
   projects: readonly PinProject[],
   readers: PinReaders,
   addNote: (note: PinNote) => void,
-): HintEntry[] {
+): ReadyGroup | undefined {
   const { pinning, upstream } = group
   const [file] = group.files
   if (group.files.size > 1 || file === undefined) {
     addNote({ code: 'pin-conflict' })
-    return []
+    return undefined
   }
   const checkouts = projects.filter(
     (item) => item.root !== pinning.root && item.repo === upstream,
   )
-  if (checkouts.length === 0) return []
+  if (checkouts.length === 0) return undefined
   const invalid = (): void =>
     addNote({ code: 'pin-value-invalid', project: pinning.key })
   if (!usableDeclaration(file, pinning)) {
     invalid()
-    return []
+    return undefined
   }
   const renderable = checkouts.filter((item) => validRoot(item.root))
   const pinningRenderable = validRoot(pinning.root)
   if (renderable.length < checkouts.length || !pinningRenderable) invalid()
-  if (renderable.length === 0 || !pinningRenderable) return []
+  if (renderable.length === 0 || !pinningRenderable) return undefined
 
   const value = readers.readPin(pinning.root, file, group.key)
   if (value.kind === 'failed') {
     addNote({ code: value.code, project: pinning.key })
-    return []
+    return undefined
   }
   if (!PIN_VALUE_PATTERN.test(value.value)) {
     invalid()
-    return []
+    return undefined
   }
-  return renderable.map((checkout) => {
-    const tag: TagAtHead =
-      checkout.commit === undefined
-        ? { kind: 'unknown' }
-        : readers.readTag(checkout.root, checkout.commit)
-    return {
-      pinKey: pinning.key,
+  return { group, file, value: value.value, checkouts: renderable }
+}
+
+/** The hint entries of a ready group, reading each checkout's tag through `tagOf`. */
+function hintEntries(
+  ready: ReadyGroup,
+  tagOf: (checkout: PinProject) => TagAtHead,
+): HintEntry[] {
+  const { group, file, value, checkouts } = ready
+  const { pinning, upstream } = group
+  return checkouts.map((checkout) => ({
+    pinKey: pinning.key,
+    upstream,
+    key: group.key,
+    checkoutKey: checkout.key,
+    line: renderLine({
+      projectRoot: pinning.root,
       upstream,
-      key: group.key,
-      checkoutKey: checkout.key,
-      line: renderLine({
-        projectRoot: pinning.root,
-        upstream,
-        value: value.value,
-        file,
-        checkoutRoot: checkout.root,
-        tag: tagLabel(tag),
-      }),
-    }
-  })
+      value,
+      file,
+      checkoutRoot: checkout.root,
+      tag: tagLabel(tagOf(checkout)),
+    }),
+  }))
+}
+
+/**
+ * A tag reader that scans each checkout once per run: one checkout is named by
+ * many pins, and a scan walks untrusted `.git` metadata.
+ */
+function memoizedTags(
+  readTag: PinReaders['readTag'],
+): (checkout: PinProject) => TagAtHead {
+  const seen = new Map<string, TagAtHead>()
+  return (checkout) => {
+    const { commit } = checkout
+    if (commit === undefined) return { kind: 'unknown' }
+    const memo = `${checkout.root}\0${commit}`
+    const known = seen.get(memo)
+    if (known !== undefined) return known
+    const tag = readTag(checkout.root, commit)
+    seen.set(memo, tag)
+    return tag
+  }
+}
+
+function compareGroups(a: PinGroup, b: PinGroup): number {
+  return (
+    compareText(a.pinning.key, b.pinning.key) ||
+    compareText(a.upstream, b.upstream) ||
+    compareText(a.key, b.key)
+  )
 }
 
 /**
@@ -412,9 +456,11 @@ function resolveGroup(
  * upstream, key), drop a group whose entries name different files (one
  * `pin-conflict` note, never a pick), find the selected checkouts of the
  * upstream other than the pinning project, and only then read the pin value
- * and each checkout's tag. A pin with no selected matching checkout gives
- * nothing, no note either: that case cannot be told from an out-of-selection
- * one without a read.
+ * and each checkout's tag, a checkout's tag once however many pins name it.
+ * Groups are resolved in sorted order and resolution stops once the hint cap
+ * is passed, so work is bounded by what can be returned. A pin with no
+ * selected matching checkout gives nothing, no note either: that case cannot
+ * be told from an out-of-selection one without a read.
  */
 export function resolvePins(
   pins: readonly ConnectPin[],
@@ -426,9 +472,25 @@ export function resolvePins(
   const addNote = (note: PinNote): void => {
     notes.set(`${note.code}\0${note.project ?? ''}`, note)
   }
-  const entries = groupPins(pins, projects).flatMap((group) =>
-    resolveGroup(group, projects, readers, addNote),
-  )
+  const tagOf = memoizedTags(readers.readTag)
+  const entries: HintEntry[] = []
+  // Groups go in the order their lines sort, so the lines kept are the first
+  // ones. Once more lines exist than the cap keeps, the cut is certain and no
+  // later group is touched. A group met when the cap is exactly full is read
+  // for its pin value alone, to learn whether it would add a line, and is not
+  // given a tag read.
+  let cut = false
+  for (const group of groupPins(pins, projects).sort(compareGroups)) {
+    if (cut) break
+    const ready = readyGroup(group, projects, readers, addNote)
+    if (ready === undefined) continue
+    if (entries.length >= MAX_PIN_HINTS) {
+      cut = true
+      continue
+    }
+    entries.push(...hintEntries(ready, tagOf))
+    cut = entries.length > MAX_PIN_HINTS
+  }
 
   entries.sort(
     (a, b) =>
@@ -438,7 +500,7 @@ export function resolvePins(
       compareText(a.checkoutKey, b.checkoutKey),
   )
   const kept = entries.slice(0, MAX_PIN_HINTS)
-  if (kept.length < entries.length) addNote({ code: 'hints-truncated' })
+  if (cut) addNote({ code: 'hints-truncated' })
   const hints: Record<string, string[]> = {}
   for (const entry of kept) {
     const lines = hints[entry.pinKey] ?? []

@@ -47,7 +47,7 @@ createHash('sha256').update(JSON.stringify([
 ```
 
 - **Equal content gives an equal revision.** No failed write or rollback can make one revision name two contents, so the special cases for them are gone. Going back to the first content gives the first revision (`tests/unit/connect-state.test.ts:2407-2417`).
-- **The digest shows the revision before the ledger write.** `revisionOfCandidate` computes it from the candidate itself (`src/ce-connect-helper.ts:1804`). A decision from a run whose write failed is refused while the ledger holds other evidence, and accepted if identical evidence commits later.
+- **The digest shows the revision before the ledger write.** `revisionOfCandidate` computes it from the candidate itself (`src/ce-connect-helper.ts:1809`). A decision from a run whose write failed is refused while the ledger holds other evidence, and accepted if identical evidence commits later.
 - **Re-citing evidence recomputes it.** `withEvidence` drops the stored revision and hashes the new evidence, so a decision from the earlier digest is refused (`src/lib/connect-state.ts:1438-1449`).
 - **`decide` refuses a stale revision under the ledger lock** as `stale-revision` (`src/lib/connect-state.ts:2456-2466`, `refusalOf`). The skill tells the model to send the value from the digest's `Revision:` line, never its own, and not to retry on a refusal (`skills/ce-connect/SKILL.md:222-226`).
 - **The box marker carries the revision** as `:r<12 hex>` (`src/lib/connect-ci.ts:113-121`, `decisionLine`). A tick is recorded only when its revision equals the entry's (`src/lib/connect-ci.ts:1664-1668`, `judge`). A box with no revision is skipped as `unversioned`, and one with another revision as `stale`.

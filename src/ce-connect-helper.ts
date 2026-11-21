@@ -1361,10 +1361,15 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
     const rules = scans.flatMap((scan) => scan.rules)
     const provenance = scans.flatMap((scan) => scan.provenance)
     // Pins match only the projects this run scanned: the ones `begin` lists.
+    // A project allowed under several spellings answers to each of them.
+    const aliasesByRoot = new Map(
+      setup.projects.map((item) => [item.mainRoot, item.aliases ?? []]),
+    )
     const pins = resolvePins(
       setup.environment.pins,
       scans.map((scan) => ({
         entry: scan.digest.entry,
+        aliases: aliasesByRoot.get(scan.digest.root) ?? [],
         root: scan.digest.root,
         key: scan.digest.key,
         ...(scan.digest.repo === undefined ? {} : { repo: scan.digest.repo }),

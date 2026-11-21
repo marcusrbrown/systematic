@@ -142,7 +142,7 @@ This says: `app` pins `upstream-org/host-lib` at the value under `host.version` 
 
 ### The version of a checkout
 
-A checkout's version is the one git tag at its HEAD. The helper reads it from the files in `.git` and runs no git command. It reports `unknown`, and never guesses, when no tag is at HEAD, when several tags are, and when a tag object is stored in a pack. Clones made by a fetch often store annotated tag objects that way. A clone made with `--no-tags`, as the scheduled workflow makes, has no tags and so is always `unknown`, and that workflow declares no pins. A checkout with an `unknown` version still gets a line, labelled `unknown`, and the researcher never reads `unknown` as a mismatch.
+A checkout's version is the one git tag at its HEAD. The helper reads it from the files in `.git` and runs no git command. It reports `unknown`, and never guesses, when no tag is at HEAD, when several tags are, and when a tag it needs to read is stored in a pack, including a tag listed without its peeled commit in a `packed-refs` file that is not fully peeled. Clones made by a fetch often store annotated tag objects that way. A clone made with `--no-tags`, as the scheduled workflow makes, has no tags and so is always `unknown`, and that workflow declares no pins. A checkout with an `unknown` version still gets a line, labelled `unknown`, and the researcher never reads `unknown` as a mismatch.
 
 The tag is context, not attestation. The working tree can differ from the tag, which is why a line says the checkout is at a tag rather than that it is that version.
 

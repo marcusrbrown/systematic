@@ -2343,6 +2343,8 @@ export type Selection =
 export interface SelectionProject {
   readonly entry: string
   readonly mainRoot: string
+  /** Later allow-list spellings of the same project, as written. */
+  readonly aliases?: readonly string[]
 }
 
 export type MemberResolution =

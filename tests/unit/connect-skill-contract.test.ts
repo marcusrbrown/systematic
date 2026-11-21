@@ -1793,6 +1793,31 @@ describe('ce:connect pin hints: the skill copies the helper lines, as data, by p
     expect(skillText).not.toMatch(/reason `unscoped`/)
   })
 
+  test('the dispatch rule exempts helper-rendered pinHints lines, copied verbatim as data, and nothing else', () => {
+    const rule = skillText
+      .split('\n')
+      .find((line) => line.startsWith('- Put only ids, paths and names'))
+    expect(rule).toBeDefined()
+    expect(rule).toMatch(/Copy no text from a document into it/)
+    expect(rule).toMatch(
+      /except[^.]*`pinHints` lines?[^.]*(helper|rendered)[^.]*verbatim[^.]*data/i,
+    )
+    // The exemption is the helper's lines only: nothing from a project's text.
+    expect(rule).not.toMatch(/\bany\b[^.]*text/i)
+  })
+
+  test('the headless reference points connect.pins at the setup section of the published guide', () => {
+    const pins = section(outcomesText, '## Pin hints and notes', '\n## ')
+    expect(pins).toContain(
+      'https://fro.bot/systematic/guides/cross-project-connections/#declare-dependency-pins',
+    )
+    expect(pins).toMatch(
+      /setting up `connect\.pins`, see the \[guide\]\(https:/i,
+    )
+    // The anchor is a real heading of the guide.
+    expect(guideText).toContain('## Declare dependency pins')
+  })
+
   test('step 7 prints the Pins line verbatim and keeps it apart from the degrade reasons', () => {
     expect(step7).toContain('`Pins:`')
     expect(step7).toMatch(/Pins:` line[^.]*(unchanged|as the helper wrote)/i)

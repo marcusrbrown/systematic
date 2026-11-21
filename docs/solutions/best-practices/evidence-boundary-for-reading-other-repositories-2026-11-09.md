@@ -1,7 +1,7 @@
 ---
 title: Reading other people's repositories needs an evidence boundary, a modest citation claim, and a user-only allow list
 date: 2026-11-09
-last_updated: 2026-11-20
+last_updated: 2026-11-21
 category: best-practices
 module: ce-connect
 problem_type: architecture_pattern
@@ -18,7 +18,7 @@ tags: [evidence-boundary, hardened-git, symlink-containment, fingerprint, citati
 
 ## Context
 
-`ce:connect` reads the tracked files of several repositories the user listed and lets a model propose connections between them. A repository is untrusted input: its git config, its file names, its symlinks, and its text can all try to steer the reader. This note records the boundary around evidence the helper validates, what the citation check can honestly claim, and how the allow list that sits in front of it is protected from the repositories it names. It is not a sandbox for the model; see [Limits of this boundary](#limits-of-this-boundary).
+`ce:connect` reads the tracked files of several repositories the user listed as evidence and lets a model propose connections between them. One read sits outside that rule: a dependency pin file, which may be untracked and is only ever a hint (see [section 3](#3-the-helper-inventories-and-validates-only-what-the-user-named)). A repository is untrusted input: its git config, its file names, its symlinks, and its text can all try to steer the reader. This note records the boundary around evidence the helper validates, what the citation check can honestly claim, and how the allow list that sits in front of it is protected from the repositories it names. It is not a sandbox for the model; see [Limits of this boundary](#limits-of-this-boundary).
 
 ## Guidance
 
@@ -53,7 +53,8 @@ The same shape is in `scripts/content-integrity.ts`, which checks the `path:line
 The allow list is `connect.allow_projects` in user-level config. It decides which projects the helper indexes and which paths it validates. Several things keep a repository from writing to it:
 
 - **Classify the field at load and strip it from project config.** `config.ts` removes the whole `connect` block from a project source before schema validation and warns once, naming the file and the field but never a value (`PROJECT_ALWAYS_PROTECTED_FIELDS`, `src/lib/config.ts:467-470`; the warning at `src/lib/config.ts:2415-2425`).
-- **Fail closed.** `validateConnectBlock` accepts an object whose only key is `allow_projects`. An unknown key, a wrong type, or a list over its limit makes that layer's block unreadable, and an unreadable block contributes no entries. A bad layer can never widen the list (`src/lib/connect-config.ts:74-104`).
+- **Fail closed.** `validateConnectBlock` accepts an object whose keys are only `allow_projects`, `groups` and `pins`. An unknown key, a wrong type, or a list over its limit makes that layer's block unreadable, and an unreadable block contributes no entries. A bad layer can never widen the list (`src/lib/connect-config.ts:311-334`). `groups` and `pins` add no project: a group member that is not already on the allow list is refused, and a pin matches only a project the run has selected and scanned.
+- **A pin file is a hint, never evidence.** A pin names a file in one project's working tree and a dotted key in it. `readPinValue` reads that file live through the contained, size-capped reader and does not check whether it is tracked, so it may be untracked or ignored (`src/lib/connect-pins.ts:107-142`). That is why nothing from it is evidence: its value passes a strict charset and appears only in a fixed hint line the helper renders, and a candidate still has to cite tracked files whose fingerprints the helper took at begin. A path a pin declares is never resolved or opened outside the selection.
 - **Never read project config.** The helper's own reader opens user, user.local, custom and custom.local files only (`selectConnectConfigFiles`, `src/lib/connect-config.ts:414-440`).
 - **Refuse containers a repository could control.** A custom config directory that is inside a checkout or inside an allowed root is refused and none of its files are opened. The state root is refused for the same reasons (`containerRefusal`, `src/lib/connect-config.ts:485-502`; `prepareStateRoot`, `src/lib/connect-state.ts:203-228`).
 - **Pin discovery to the search reader.** The helper repeats the layer-discovery logic because the search reader imports zod, which the helper bundle cannot carry. A parity test asserts both pick the same files (`tests/unit/connect-config.test.ts:584-671`).
@@ -79,7 +80,7 @@ Everything above governs what the helper reads and what it accepts as evidence. 
 - The researcher's read, grep and glob tools are not path-scoped. They can open any file the user can, inside the allow list or not.
 - Session MCP tools are not denied.
 - The candidate title and summary are written by the researcher and are not checked against evidence, so text from those reads can reach chat replies and run records, and so the model provider.
-- Coverage is the researcher's own report. The helper does not count a rule as covered when the complete batch that names it omits its learning from `files`: the run degrades with `uncovered-rules` and the rule is offered again (`coverageReasons`, `src/ce-connect-helper.ts:1968-1974`). A listed file is not proof the file was read.
+- Coverage is the researcher's own report. The helper does not count a rule as covered when the complete batch that names it omits its learning from `files`: the run degrades with `uncovered-rules` and the rule is offered again (`coverageReasons`, `src/ce-connect-helper.ts:1973-1979`). A listed file is not proof the file was read.
 
 Read every candidate before promoting it, and treat a digest like the learnings it quotes. The user guide's [Limits section](../../src/content/docs/guides/cross-project-connections.mdx) lists these in full.
 

@@ -388,6 +388,8 @@ function plantTag(
 }
 
 const FAKE_ID = '1234abcd'.repeat(5)
+/** The header git writes: a tag with no peeled line is known not to be an annotated tag. */
+const FULLY_PEELED = '# pack-refs with: peeled fully-peeled sorted \n'
 const rawObject = (type: string, body: string): Buffer =>
   zlib.deflateSync(Buffer.from(`${type} ${Buffer.byteLength(body)}\0${body}`))
 
@@ -704,12 +706,12 @@ describe('readTagAtHead', () => {
       Array.from({ length: count }, (_, i) => `${other} refs/tags/t${i}`)
     fs.writeFileSync(
       path.join(work, '.git/packed-refs'),
-      `${lines(50_000).join('\n')}\n`,
+      `${FULLY_PEELED}${lines(50_000).join('\n')}\n`,
     )
     expect(readTagAtHead(work, head)).toEqual(tag('v1'))
     fs.writeFileSync(
       path.join(work, '.git/packed-refs'),
-      `${lines(50_001).join('\n')}\n`,
+      `${FULLY_PEELED}${lines(50_001).join('\n')}\n`,
     )
     expect(readTagAtHead(work, head)).toEqual(UNKNOWN)
   })
@@ -724,13 +726,199 @@ describe('readTagAtHead', () => {
     expect(readTagAtHead(work, head)).toEqual(UNKNOWN)
   })
 
-  it('ignores a packed ref with no peeled line whose id is not HEAD', () => {
+  it('ignores a packed ref with no peeled line whose id is not HEAD when the file is fully peeled', () => {
     const { work, head } = createClone('https://github.com/o/r.git')
     fs.writeFileSync(
       path.join(work, '.git/packed-refs'),
-      `${'b'.repeat(40)} refs/tags/other\n${head} refs/tags/at-head\n^${'c'.repeat(40)}\n`,
+      `${FULLY_PEELED}${'b'.repeat(40)} refs/tags/other\n${head} refs/tags/at-head\n^${'c'.repeat(40)}\n`,
     )
     expect(readTagAtHead(work, head)).toEqual(tag('at-head'))
+  })
+
+  describe('an unpeeled packed tag', () => {
+    const packedRefs = (work: string) => path.join(work, '.git/packed-refs')
+
+    /** Rewrites a real packed-refs file as an old git wrote it: no peeled lines and no `fully-peeled` trait. */
+    function stripPeeling(work: string, keepPeeledLines = false): void {
+      const text = fs
+        .readFileSync(packedRefs(work), 'utf8')
+        .split('\n')
+        .filter((line) => keepPeeledLines || !line.startsWith('^'))
+        .map((line) =>
+          line.startsWith('# pack-refs with:')
+            ? '# pack-refs with: sorted '
+            : line,
+        )
+        .join('\n')
+      fs.writeFileSync(packedRefs(work), text)
+    }
+
+    /** A distinct object id per `n`. */
+    const fakeId = (n: number): string =>
+      `${n.toString(16).padStart(2, '0')}${'cd'.repeat(19)}`
+
+    const tagObjectElsewhere = rawObject(
+      'tag',
+      `object ${'b'.repeat(40)}\ntype commit\ntag t\n\nm\n`,
+    )
+
+    it('is not read when git wrote the file fully peeled', () => {
+      const { work } = createClonePastAnnotatedTag()
+      git(work, ['tag', 'light', git(work, ['rev-parse', 'old^{commit}'])])
+      git(work, ['tag', 'v2'])
+      git(work, ['pack-refs', '--all', '--prune'])
+      expect(fs.readFileSync(packedRefs(work), 'utf8')).toMatch(
+        /^# pack-refs with: .*\bfully-peeled\b/,
+      )
+      // `light` is a packed tag with no peeled line. Fully-peeled says that
+      // means it is not a tag object, so no object is read.
+      const inflate = spyOn(zlib, 'inflateSync')
+      try {
+        expect(tagAtHead(work)).toEqual(tag('v2'))
+        expect(inflate).not.toHaveBeenCalled()
+      } finally {
+        inflate.mockRestore()
+      }
+    })
+
+    it('is unknown beside a lightweight tag at HEAD when the file is not fully peeled', () => {
+      const { work } = createClone('https://github.com/o/r.git')
+      git(work, ['tag', 'light'])
+      git(work, ['tag', '-a', 'noted', '-m', 'm'])
+      git(work, ['pack-refs', '--all', '--prune'])
+      expect(tagAtHead(work)).toEqual(UNKNOWN)
+      stripPeeling(work)
+      expect(fs.readFileSync(packedRefs(work), 'utf8')).not.toContain('^')
+      expect(tagAtHead(work)).toEqual(UNKNOWN)
+    })
+
+    it('is unknown, never a single tag, when its object is stored in a pack', () => {
+      const { work } = createClonePastAnnotatedTag()
+      git(work, ['tag', 'v2'])
+      git(work, ['pack-refs', '--all', '--prune'])
+      git(work, ['repack', '-a', '-d', '-q'])
+      const objectId = git(work, ['rev-parse', 'old'])
+      expect(fs.existsSync(looseObjectFile(work, objectId))).toBe(false)
+      expect(tagAtHead(work)).toEqual(tag('v2'))
+      stripPeeling(work)
+      expect(tagAtHead(work)).toEqual(UNKNOWN)
+    })
+
+    it.each([
+      ['missing', undefined],
+      ['not zlib', Buffer.from('not zlib')],
+      ['over its inflate cap', zlib.deflateSync(Buffer.alloc(3 * 1024 * 1024))],
+    ])('is unknown when its object is %s', (_label, bytes) => {
+      const { work, head } = createClone('https://github.com/o/r.git')
+      fs.writeFileSync(
+        packedRefs(work),
+        `# pack-refs with: sorted \n${head} refs/tags/v1\n${FAKE_ID} refs/tags/odd\n`,
+      )
+      if (bytes !== undefined) {
+        fs.mkdirSync(path.dirname(looseObjectFile(work, FAKE_ID)), {
+          recursive: true,
+        })
+        fs.writeFileSync(looseObjectFile(work, FAKE_ID), bytes)
+      }
+      expect(readTagAtHead(work, head)).toEqual(UNKNOWN)
+    })
+
+    it('still names the other tag when the unpeeled tag object resolves to another commit', () => {
+      const { work } = createClonePastAnnotatedTag()
+      git(work, ['tag', 'v2'])
+      git(work, ['pack-refs', '--all', '--prune'])
+      stripPeeling(work)
+      expect(fs.readFileSync(packedRefs(work), 'utf8')).toContain(
+        'refs/tags/old',
+      )
+      expect(tagAtHead(work)).toEqual(tag('v2'))
+    })
+
+    it('trusts a peeled line without reading the object, even when the file is not fully peeled', () => {
+      const { work } = createClonePastAnnotatedTag()
+      git(work, ['tag', 'v2'])
+      git(work, ['pack-refs', '--all', '--prune'])
+      git(work, ['repack', '-a', '-d', '-q'])
+      stripPeeling(work, true)
+      const text = fs.readFileSync(packedRefs(work), 'utf8')
+      expect(text).toMatch(/^\^[0-9a-f]{40}$/m)
+      expect(text).not.toContain('fully-peeled')
+      const inflate = spyOn(zlib, 'inflateSync')
+      try {
+        expect(tagAtHead(work)).toEqual(tag('v2'))
+        expect(inflate).not.toHaveBeenCalled()
+      } finally {
+        inflate.mockRestore()
+      }
+    })
+
+    it('reads the fully-peeled trait from the first line only', () => {
+      const { work, head } = createClone('https://github.com/o/r.git')
+      fs.writeFileSync(
+        packedRefs(work),
+        `# pack-refs with: sorted \n${head} refs/tags/v1\n${FAKE_ID} refs/tags/odd\n# pack-refs with: peeled fully-peeled sorted \n`,
+      )
+      expect(readTagAtHead(work, head)).toEqual(UNKNOWN)
+    })
+
+    it('names the unpeeled annotated tag itself when it is the only tag at HEAD', () => {
+      const { work } = createClone('https://github.com/o/r.git')
+      git(work, ['tag', '-a', 'noted', '-m', 'm'])
+      git(work, ['pack-refs', '--all', '--prune'])
+      stripPeeling(work)
+      expect(tagAtHead(work)).toEqual(tag('noted'))
+    })
+
+    it.each([
+      [16, 0, true],
+      [17, 0, false],
+      [6, 10, true],
+      [7, 10, false],
+    ])(
+      'shares the 16-object budget with loose refs: %i packed beside %i loose (readable: %p)',
+      (packed, loose, readable) => {
+        const { work, head } = createClone('https://github.com/o/r.git')
+        git(work, ['tag', 'v1'])
+        const lines = ['# pack-refs with: sorted ']
+        for (let i = 0; i < packed; i += 1) {
+          const id = fakeId(i)
+          fs.mkdirSync(path.dirname(looseObjectFile(work, id)), {
+            recursive: true,
+          })
+          fs.writeFileSync(looseObjectFile(work, id), tagObjectElsewhere)
+          lines.push(`${id} refs/tags/p${i}`)
+        }
+        fs.writeFileSync(packedRefs(work), `${lines.join('\n')}\n`)
+        for (let i = 0; i < loose; i += 1) {
+          plantTag(work, `l${i}`, fakeId(100 + i), tagObjectElsewhere)
+        }
+        const inflate = spyOn(zlib, 'inflateSync')
+        try {
+          expect(readTagAtHead(work, head)).toEqual(
+            readable ? tag('v1') : UNKNOWN,
+          )
+          expect(inflate.mock.calls.length).toBeLessThanOrEqual(16)
+        } finally {
+          inflate.mockRestore()
+        }
+      },
+    )
+
+    it('does not read an entry that a loose ref of the same name shadows', () => {
+      const { work, head } = createClone('https://github.com/o/r.git')
+      git(work, ['tag', 'v1'])
+      fs.writeFileSync(
+        packedRefs(work),
+        `# pack-refs with: sorted \n${FAKE_ID} refs/tags/v1\n`,
+      )
+      const inflate = spyOn(zlib, 'inflateSync')
+      try {
+        expect(readTagAtHead(work, head)).toEqual(tag('v1'))
+        expect(inflate).not.toHaveBeenCalled()
+      } finally {
+        inflate.mockRestore()
+      }
+    })
   })
 
   it.each([

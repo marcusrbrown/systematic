@@ -1100,6 +1100,26 @@ describe('resolveAllowList', () => {
     expect(result.unmatched).toEqual([])
   })
 
+  it('carries each later spelling of a project as an alias of the kept entry, once', () => {
+    const home = makeDir('connect-home-')
+    const repo = path.join(home, 'app')
+    fs.mkdirSync(repo)
+    git(repo, ['init', '-q', '-b', 'main'])
+    const other = createRepo()
+    const result = resolveAllowList(
+      ['~/app', repo, '~/app', other.work, `${home}/./app`],
+      { homeDir: home },
+    )
+    expect(result.resolved).toEqual([
+      {
+        entry: '~/app',
+        mainRoot: fs.realpathSync(repo),
+        aliases: [repo, `${home}/./app`],
+      },
+      { entry: other.work, mainRoot: other.work },
+    ])
+  })
+
   it('returns two empty lists for an empty allow list', () => {
     expect(resolveAllowList([], {})).toEqual({ resolved: [], unmatched: [] })
   })

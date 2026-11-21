@@ -586,6 +586,46 @@ describe('resolvePins: the selection boundary', () => {
     }
   })
 
+  it('matches a pin project written as any allow-list spelling of a selected project, and no other', () => {
+    const aliased = proj(AGENT, {
+      repo: 'fro-bot/agent',
+      entry: AGENT,
+      aliases: ['~/src/agent', '/work/alias/agent'],
+    })
+    const { readers } = spy()
+    for (const spelling of [AGENT, '~/src/agent', '/work/alias/agent']) {
+      const result = resolvePins(
+        [{ ...PIN, project: spelling }],
+        [aliased, v1],
+        readers,
+      )
+      expect(result.hints[aliased.key]).toHaveLength(1)
+    }
+    for (const other of ['~/src/agent/', '/work/alias//agent', '~/src/other']) {
+      const miss = spy()
+      expect(
+        resolvePins([{ ...PIN, project: other }], [aliased, v1], miss.readers),
+      ).toEqual({ hints: {}, notes: [] })
+      expect([miss.pinReads, miss.tagReads]).toEqual([[], []])
+    }
+  })
+
+  it('does not let a spelling of one project match another, and never names an alias', () => {
+    const other = proj('/work/other', {
+      repo: 'fro-bot/other',
+      aliases: ['~/src/other'],
+    })
+    const { readers, pinReads } = spy()
+    const result = resolvePins(
+      [{ ...PIN, project: '~/src/other' }],
+      [agent, other, v1],
+      readers,
+    )
+    expect(pinReads).toEqual(['/work/other'])
+    expect(Object.keys(result.hints)).toEqual([other.key])
+    expect(JSON.stringify(result)).not.toContain('~/src/other')
+  })
+
   it('does not read a pin that matched a project but whose matching checkout is not selected', () => {
     const { readers, pinReads } = spy()
     resolvePins([PIN], [agent], readers)
@@ -849,6 +889,168 @@ describe('resolvePins: caps', () => {
       lines.map((line) => /allowed checkout (\S+) is/.exec(line)?.[1]),
     ).toEqual(expected)
     expect(result.notes).toEqual([{ code: 'hints-truncated' }])
+  })
+
+  describe('bounded reads', () => {
+    const LATE = 'late/upstream'
+    const byKey = (a: PinProject, b: PinProject): number =>
+      a.key < b.key ? -1 : 1
+    const checkoutsOf = (count: number): PinProject[] =>
+      Array.from({ length: count }, (_, i) =>
+        proj(`/work/c${i}`, { repo: UPSTREAM }),
+      )
+    /** Three pinning projects in the order the run sorts them, and the one late checkout. */
+    function pinners(): {
+      first: PinProject
+      second: PinProject
+      third: PinProject
+      late: PinProject
+    } {
+      const [first, second, third] = [
+        proj('/work/p0', { repo: 'own/p0' }),
+        proj('/work/p1', { repo: 'own/p1' }),
+        proj('/work/p2', { repo: 'own/p2' }),
+      ].sort(byKey)
+      if (first === undefined || second === undefined || third === undefined) {
+        throw new Error('three projects')
+      }
+      return { first, second, third, late: proj('/work/late', { repo: LATE }) }
+    }
+
+    it('reads one checkout tag once however many pins name that checkout', () => {
+      const agent2 = proj('/work/agent2', { repo: 'fro-bot/agent2' })
+      const { readers, tagReads } = spy()
+      const result = resolvePins(
+        [
+          PIN,
+          { ...PIN, key: 'opencode.other' },
+          { ...PIN, project: agent2.root },
+        ],
+        [agent, agent2, v1, v3],
+        readers,
+      )
+      expect([...tagReads].sort()).toEqual([V1, V3])
+      const lines = Object.values(result.hints).flat()
+      expect(lines).toHaveLength(6)
+      expect(result.notes).toEqual([])
+    })
+
+    it('reads each pin value once per group and no checkout tag more than once', () => {
+      const many = checkoutsOf(3)
+      const { readers, pinReads, tagReads } = spy()
+      resolvePins(
+        [PIN, { ...PIN, key: 'a.b' }, { ...PIN, key: 'c.d' }],
+        [agent, ...many],
+        readers,
+      )
+      expect(pinReads).toHaveLength(3)
+      expect(new Set(tagReads).size).toBe(tagReads.length)
+      expect(tagReads).toHaveLength(3)
+    })
+
+    it('reads no group once the cap is passed, tags or pin values', () => {
+      const { first, second, third, late } = pinners()
+      const checkouts = checkoutsOf(MAX_PIN_HINTS + 1)
+      const { readers, pinReads, tagReads } = spy()
+      const result = resolvePins(
+        [
+          { ...PIN, project: first.root },
+          { ...PIN, project: second.root, upstream: LATE },
+          { ...PIN, project: third.root, upstream: LATE },
+        ],
+        [first, second, third, late, ...checkouts],
+        readers,
+      )
+      expect(pinReads).toEqual([first.root])
+      expect(tagReads).toHaveLength(MAX_PIN_HINTS + 1)
+      expect(tagReads).not.toContain(late.root)
+      expect(result.hints[first.key]).toHaveLength(MAX_PIN_HINTS)
+      expect(Object.keys(result.hints)).toEqual([first.key])
+      expect(result.notes).toEqual([{ code: 'hints-truncated' }])
+    })
+
+    it('reads no tag of a group past a cap filled exactly, and still says it cut', () => {
+      const { first, second, third, late } = pinners()
+      const checkouts = checkoutsOf(MAX_PIN_HINTS)
+      const { readers, pinReads, tagReads } = spy()
+      const result = resolvePins(
+        [
+          { ...PIN, project: first.root },
+          { ...PIN, project: second.root, upstream: LATE },
+          { ...PIN, project: third.root, upstream: LATE },
+        ],
+        [first, second, third, late, ...checkouts],
+        readers,
+      )
+      // The second group is read for its pin value only, to learn it would add a
+      // line; the third is not touched.
+      expect(pinReads).toEqual([first.root, second.root])
+      expect(tagReads).not.toContain(late.root)
+      expect(Object.keys(result.hints)).toEqual([first.key])
+      expect(result.hints[first.key]).toHaveLength(MAX_PIN_HINTS)
+      expect(result.notes).toEqual([{ code: 'hints-truncated' }])
+    })
+
+    it('does not say it cut when the cap is filled exactly and nothing follows', () => {
+      const { first } = pinners()
+      const { readers } = spy()
+      const result = resolvePins(
+        [{ ...PIN, project: first.root }],
+        [first, ...checkoutsOf(MAX_PIN_HINTS)],
+        readers,
+      )
+      expect(result.hints[first.key]).toHaveLength(MAX_PIN_HINTS)
+      expect(result.notes).toEqual([])
+    })
+
+    it('keeps the note of a group past a cap filled exactly when that group adds no line', () => {
+      const { first, second, late } = pinners()
+      const { readers } = spy({
+        pin: (root) =>
+          root === second.root
+            ? { kind: 'failed', code: 'pin-key-absent' }
+            : { kind: 'ok', value: '2.3.2' },
+      })
+      const result = resolvePins(
+        [
+          { ...PIN, project: first.root },
+          { ...PIN, project: second.root, upstream: LATE },
+        ],
+        [first, second, late, ...checkoutsOf(MAX_PIN_HINTS)],
+        readers,
+      )
+      expect(result.hints[first.key]).toHaveLength(MAX_PIN_HINTS)
+      expect(result.notes).toEqual([
+        { code: 'pin-key-absent', project: second.key },
+      ])
+    })
+
+    it('keeps the lines of the first groups in order, whatever order the pins and projects come in', () => {
+      const { first, second, third, late } = pinners()
+      const checkouts = checkoutsOf(MAX_PIN_HINTS - 1)
+      const pins: ConnectPin[] = [
+        { ...PIN, project: third.root, upstream: LATE },
+        { ...PIN, project: second.root },
+        { ...PIN, project: first.root },
+      ]
+      const forward = resolvePins(
+        pins,
+        [first, second, third, late, ...checkouts],
+        spy().readers,
+      )
+      const backward = resolvePins(
+        [...pins].reverse(),
+        [...checkouts, late, third, second, first],
+        spy().readers,
+      )
+      expect(forward).toEqual(backward)
+      expect(Object.keys(forward.hints).sort()).toEqual(
+        [first.key, second.key].sort(),
+      )
+      expect(forward.hints[first.key]).toHaveLength(MAX_PIN_HINTS - 1)
+      expect(forward.hints[second.key]).toHaveLength(1)
+      expect(forward.notes).toEqual([{ code: 'hints-truncated' }])
+    })
   })
 
   it('caps the notes and says it cut them', () => {

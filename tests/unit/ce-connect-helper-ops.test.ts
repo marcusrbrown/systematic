@@ -5710,6 +5710,78 @@ describe('begin with dependency pins', () => {
       expect(body.pinHints).toEqual({})
     })
 
+    describe('a project allowed under two spellings', () => {
+      const LINK = '~/target-link'
+
+      /** The target is on the allow list as its path and as `~/target-link`, in the given order. */
+      function twoSpellings(
+        order: 'path-first' | 'link-first',
+        pinned: (target: string) => string[],
+        deps: Partial<HelperDeps> = {},
+      ): World {
+        const world = pinWorld({
+          deps,
+          allow: (source, target) =>
+            order === 'path-first'
+              ? [source, target, LINK]
+              : [source, LINK, target],
+          pins: (_source, target) =>
+            pinned(target).map((project) => pinOf(project)),
+        })
+        fs.symlinkSync(world.target, path.join(world.home, 'target-link'))
+        return world
+      }
+
+      it.each([
+        ['path-first', 'the path', (target: string) => target],
+        ['path-first', 'the second spelling', () => LINK],
+        ['link-first', 'the path', (target: string) => target],
+        ['link-first', 'the first spelling', () => LINK],
+      ] as const)(
+        'gives a hint when the allow list is %s and the pin names %s',
+        (order, _label, spelling) => {
+          const world = twoSpellings(order, (target) => [spelling(target)])
+          const body = start(world).body
+          expect(body.pinHints).toEqual({
+            [projectKey(world.target)]: [lineFor(world)],
+          })
+          expect(body.pinNotes).toEqual([])
+        },
+      )
+
+      it('collapses a pin written in both spellings into one line', () => {
+        const world = twoSpellings('path-first', (target) => [target, LINK])
+        const hints = start(world).body.pinHints as Record<string, string[]>
+        expect(hints[projectKey(world.target)]).toEqual([lineFor(world)])
+      })
+
+      it('reads nothing and names nothing for a spelling that is not on the allow list', () => {
+        const count = counted()
+        const world = twoSpellings(
+          'path-first',
+          () => ['~/not-a-link'],
+          count.deps,
+        )
+        fs.symlinkSync(world.target, path.join(world.home, 'not-a-link'))
+        const body = start(world).body
+        expect([count.pins, count.tags]).toEqual([[], []])
+        expect(body.pinHints).toEqual({})
+        expect(JSON.stringify(body)).not.toContain('not-a-link')
+      })
+
+      it('reads nothing and names nothing for a spelling of a project the run did not select', () => {
+        const count = counted()
+        const world = twoSpellings('path-first', () => [LINK], count.deps)
+        const body = start(world, {
+          selection: [`projects:${projectKey(world.source)}`],
+        }).body
+        expect([count.pins, count.tags]).toEqual([[], []])
+        expect(body.pinHints).toEqual({})
+        expect(JSON.stringify(body)).not.toContain('target-link')
+        expect(JSON.stringify(body)).not.toContain(world.target)
+      })
+    })
+
     it('lets a pin add nothing to the projects, the selection or the allow list', () => {
       const world = pinWorld({
         extraProjects: 1,

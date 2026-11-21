@@ -41,7 +41,7 @@ Two traps to avoid, not recorded attempts:
 
 ## Solution
 
-Normalize in the helper, on both sides of the comparison. `normalizeVersion` trims, drops one leading `v`, cuts everything from the first `+`, and returns `undefined` when nothing is left (`src/lib/connect-config.ts:927-939`). `checkHostSupport` normalizes the observed version and each table row's version before comparing (`src/lib/connect-config.ts:839-896`).
+Normalize in the helper, on both sides of the comparison. `normalizeVersion` trims, drops one leading `v`, cuts everything from the first `+`, and returns `undefined` when nothing is left (`src/lib/connect-config.ts:943-955`). `checkHostSupport` normalizes the observed version and each table row's version before comparing (`src/lib/connect-config.ts:839-896`).
 
 ```ts
 // Before (strict match on the printed string):

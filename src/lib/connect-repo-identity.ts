@@ -400,19 +400,41 @@ function scanPackedLine(scan: PackedScan, line: string): boolean {
   return true
 }
 
+interface PackedTags {
+  readonly tags: PackedTag[]
+  /** Git's own claim that a tag line with no `^` line is not an annotated tag. */
+  readonly fullyPeeled: boolean
+}
+
+const NO_PACKED_TAGS: PackedTags = { tags: [], fullyPeeled: false }
+
+/**
+ * Whether the first line of `packed-refs` is a `# pack-refs with:` header that
+ * lists `fully-peeled`. Git reads only the first line and splits its traits on
+ * spaces (refs/packed-backend.c, `create_snapshot`): a header like that makes
+ * a ref with no `^` line "not peelable", so a tag with none is not an
+ * annotated tag. A file with no such header makes no claim.
+ */
+function isFullyPeeled(text: string): boolean {
+  const [header = ''] = text.split('\n', 1)
+  const traits = /^# pack-refs with: (.*)$/.exec(header)?.[1]
+  return traits?.split(' ').includes('fully-peeled') ?? false
+}
+
 /** The tag lines of `packed-refs`, or undefined when the file or a tag line is unusable. A missing file has none. */
-function packedTags(mainRoot: string): PackedTag[] | undefined {
+function packedTags(mainRoot: string): PackedTags | undefined {
   const read = readContainedFile(mainRoot, '.git/packed-refs', {
     maxBytes: MAX_PACKED_REFS_BYTES,
   })
   if (read.kind === 'refused') {
-    return read.reason === 'missing' ? [] : undefined
+    return read.reason === 'missing' ? NO_PACKED_TAGS : undefined
   }
+  const text = read.bytes.toString('utf8')
   const scan: PackedScan = { tags: [], last: undefined }
-  for (const raw of read.bytes.toString('utf8').split('\n')) {
+  for (const raw of text.split('\n')) {
     if (!scanPackedLine(scan, raw.trim())) return undefined
   }
-  return scan.tags
+  return { tags: scan.tags, fullyPeeled: isFullyPeeled(text) }
 }
 
 /** The loose tag names whose ref names HEAD directly or through a tag object, or undefined when any ref cannot be judged. */
@@ -420,8 +442,8 @@ function looseMatches(
   mainRoot: string,
   head: string,
   names: readonly string[],
+  budget: InflateBudget,
 ): Set<string> | undefined {
-  const budget: InflateBudget = { inflations: 0, bytes: 0 }
   const matched = new Set<string>()
   for (const name of names) {
     const text = readGitText(
@@ -440,21 +462,43 @@ function looseMatches(
   return matched
 }
 
+/**
+ * Whether a packed tag names `head`, directly or through a tag object.
+ * Undefined means it cannot be told. An entry with no `^` line whose id is not
+ * `head` may still be an annotated tag at `head` unless the file is fully
+ * peeled, so its object is read under the same budget as a loose ref's;
+ * when that read fails, the tag set is unresolved.
+ */
+function packedEntryNamesHead(
+  mainRoot: string,
+  head: string,
+  entry: PackedTag,
+  packed: PackedTags,
+  budget: InflateBudget,
+): boolean | undefined {
+  if (entry.id === head || entry.peeled === head) return true
+  if (entry.peeled !== undefined || packed.fullyPeeled) return false
+  return looseObjectNamesHead(mainRoot, entry.id, head, budget)
+}
+
 function resolveTagAtHead(mainRoot: string, head: string): TagAtHead {
   if (!OBJECT_ID.test(head)) return UNKNOWN_TAG
+  const budget: InflateBudget = { inflations: 0, bytes: 0 }
   const loose = looseTagNames(mainRoot)
-  const matched = loose && looseMatches(mainRoot, head, loose)
+  const matched = loose && looseMatches(mainRoot, head, loose, budget)
   const packed = packedTags(mainRoot)
   if (loose === undefined || matched === undefined || packed === undefined) {
     return UNKNOWN_TAG
   }
 
   const seen = new Set<string>(loose)
-  for (const entry of packed) {
+  for (const entry of packed.tags) {
     // A loose ref of the same name wins, as it does in git, and counts once.
     if (seen.has(entry.name)) continue
     seen.add(entry.name)
-    if (entry.id === head || entry.peeled === head) matched.add(entry.name)
+    const names = packedEntryNamesHead(mainRoot, head, entry, packed, budget)
+    if (names === undefined) return UNKNOWN_TAG
+    if (names) matched.add(entry.name)
   }
 
   const [name, ...others] = matched
@@ -465,7 +509,8 @@ function resolveTagAtHead(mainRoot: string, head: string): TagAtHead {
 /**
  * The one tag whose commit is `head`, for the main checkout at `mainRoot`, or
  * `unknown`. Unknown is the answer for no tag, several tags, a tag object that
- * is not a readable loose object (in a pack, oversize, malformed, nested), a
+ * is not a readable loose object (in a pack, oversize, malformed, nested; a
+ * packed tag with no `^` line counts when `packed-refs` is not fully peeled), a
  * walk or inflate past its cap, a symlink, an unsafe name or id and a name
  * that cannot be rendered. Reads `.git` files only and never throws.
  */

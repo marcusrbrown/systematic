@@ -789,6 +789,12 @@ export interface ResolvedAllowList {
   readonly resolved: ReadonlyArray<{
     readonly entry: string
     readonly mainRoot: string
+    /**
+     * The later spellings of the same project that collapsed into this entry,
+     * as written, in order. Absent when there are none. A pin may name its
+     * project by any of them.
+     */
+    readonly aliases?: readonly string[]
   }>
   readonly unmatched: ReadonlyArray<{
     readonly entry: string
@@ -798,24 +804,34 @@ export interface ResolvedAllowList {
 
 /**
  * Resolve every entry. Two entries that name one project collapse into the
- * first; a later duplicate is neither resolved nor unmatched.
+ * first; a later duplicate is neither resolved nor unmatched, but its spelling
+ * is kept as an alias of the first.
  */
 export function resolveAllowList(
   entries: readonly string[],
   options: AllowEntryOptions = {},
 ): ResolvedAllowList {
-  const resolved: Array<{ entry: string; mainRoot: string }> = []
+  const resolved: Array<{
+    entry: string
+    mainRoot: string
+    aliases?: string[]
+  }> = []
   const missed: Array<{ entry: string; reason: AllowEntryMissReason }> = []
-  const seen = new Set<string>()
+  const kept = new Map<string, (typeof resolved)[number]>()
   for (const entry of entries) {
     const resolution = resolveAllowEntry(entry, options)
     if (resolution.status === 'unmatched') {
       missed.push({ entry, reason: resolution.reason })
       continue
     }
-    if (seen.has(resolution.mainRoot)) continue
-    seen.add(resolution.mainRoot)
-    resolved.push({ entry, mainRoot: resolution.mainRoot })
+    const first = kept.get(resolution.mainRoot)
+    if (first === undefined) {
+      const item = { entry, mainRoot: resolution.mainRoot }
+      kept.set(resolution.mainRoot, item)
+      resolved.push(item)
+    } else if (entry !== first.entry && !first.aliases?.includes(entry)) {
+      first.aliases = [...(first.aliases ?? []), entry]
+    }
   }
   return { resolved, unmatched: missed }
 }

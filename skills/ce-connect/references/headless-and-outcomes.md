@@ -92,7 +92,7 @@ Coverage is kept in the ledger, and only for a committed run: an aborted or cras
 
 ## Pin hints and notes
 
-A user may declare dependency pins in config (`connect.pins`). At `begin` the helper turns each pin that matches a selected project and a selected checkout of the upstream into one line, and returns the lines as `pinHints`, keyed by project key. The skill copies them into the dispatch of the families that hold rules of the pinning project (Step 5 of the skill). A run with no pins has empty `pinHints` and `pinNotes`.
+A user may declare dependency pins in config (`connect.pins`). At `begin` the helper turns each pin that matches a selected project and a selected checkout of the upstream into one line, and returns the lines as `pinHints`, keyed by project key. The skill copies them into the dispatch of the families that hold rules of the pinning project (Step 5 of the skill). A run with no pins has empty `pinHints` and `pinNotes`. For setting up `connect.pins`, see the [guide](https://fro.bot/systematic/guides/cross-project-connections/#declare-dependency-pins).
 
 `pinNotes` is a separate channel from `degradeReasons`. A note explains why a declared pin gave no line, or what the helper cut, and it is not a degrade reason: it never degrades the run. The summary prints notes as one `Pins:` line. A note is a fixed code, with the 12-character key of the pinning project when it belongs to one:
 
