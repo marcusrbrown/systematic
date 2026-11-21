@@ -257,7 +257,7 @@ The dispatch block gains an optional `pin hints:` section after `rule ids:`, pre
 
 ## Implementation Units
 
-- [ ] U1. **The `connect.pins` config field**
+- [x] U1. **The `connect.pins` config field**
 
 **Goal:** Declare, validate, merge and document `connect.pins` on both config paths, failing closed, with the two validators agreeing.
 
@@ -300,7 +300,7 @@ The dispatch block gains an optional `pin hints:` section after `rule ids:`, pre
 - Both validators agree on every parity row, and a failing layer never yields a partial pin list.
 - The schema and config-reference surfaces are regenerated and drift-clean; `pins` appears in the reference.
 
-- [ ] U2. **Tag-at-HEAD reader**
+- [x] U2. **Tag-at-HEAD reader**
 
 **Goal:** Give the identity module a way to name the single tag at a checkout's HEAD from `.git` files alone, bounded, never throwing, with unknown as the honest fallback.
 
@@ -351,7 +351,7 @@ The dispatch block gains an optional `pin hints:` section after `rule ids:`, pre
 
 ---
 
-- [ ] U3. **Pin value reader and the new `connect-pins` module**
+- [x] U3. **Pin value reader and the new `connect-pins` module**
 
 **Goal:** Read one pin value from a project's working tree, contained and bounded, by dotted key path, returning a safe string or a fixed failure reason.
 
@@ -390,7 +390,7 @@ The dispatch block gains an optional `pin hints:` section after `rule ids:`, pre
 **Verification:**
 - Every failure code has a test, no failure result carries file content, and the registration surfaces are present.
 
-- [ ] U4. **`begin` resolves pins and returns `pinHints` and `pinNotes`**
+- [x] U4. **`begin` resolves pins and returns `pinHints` and `pinNotes`**
 
 **Goal:** At `begin`, turn declared pins into rendered hint lines keyed by project key, plus non-degrading notes, honouring the selection before any read.
 
@@ -454,7 +454,7 @@ The dispatch block gains an optional `pin hints:` section after `rule ids:`, pre
 
 ---
 
-- [ ] U5. **Skill Step 5 copies helper lines; docs and codemap**
+- [x] U5. **Skill Step 5 copies helper lines; docs and codemap**
 
 **Goal:** Make the skill carry the helper's lines into the right dispatches as data, show `pinNotes` in the summaries, and document the field and its limits. The researcher agent prompt stays unchanged.
 
