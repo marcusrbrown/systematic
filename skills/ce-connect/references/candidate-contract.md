@@ -19,7 +19,7 @@ max candidates: <bounds.maxCandidatesPerBatch>
 
 A family holds at most `bounds.maxRulesPerFamily` rule ids, all of them rules the helper offered this run. The researcher reads the rule entries from the rules file and finds fingerprints in the files index. Both files are line-oriented so a read tool can page through them.
 
-The rule overview (`rules.tsv`) has one tab-separated line per indexed rule: id, project name, path, title, `applies_when` items and a mark. The mark is `offered` for the rules this run covers, and `later` for the rest. The offered lines come first, so the skill reads the first `offeredCount` lines. The researcher still searches every allowed project, whether or not a rule in it is offered.
+The rule overview (`rules.tsv`) has one tab-separated line per indexed rule: id, project name, path, title, `applies_when` items, a mark and the project key. The mark is `offered` for the rules this run covers, and `later` for the rest. The last column is the key of the rule's project (the same key `begin` lists for it and uses for `pinHints`), because a project name can collide and the key cannot. The offered lines come first, so the skill reads the first `offeredCount` lines. The researcher still searches every allowed project, whether or not a rule in it is offered.
 
 ## What the researcher returns: the batch
 

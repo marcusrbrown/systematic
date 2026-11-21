@@ -329,7 +329,7 @@ describe('the offered slice', () => {
       .map((line) => line.split('\t'))
 
     expect(lines).toHaveLength(8)
-    for (const cells of lines) expect(cells).toHaveLength(6)
+    for (const cells of lines) expect(cells).toHaveLength(7)
     expect(lines.slice(0, 4).map((cells) => cells[0])).toEqual(run.offered)
     expect(lines.slice(0, 4).map((cells) => cells[5])).toEqual([
       'offered',

@@ -31,6 +31,7 @@ import {
   readContainedFile,
   UNSAFE_PATH_CHARACTER,
 } from './connect-evidence.js'
+import { type PinNote, renderPinsLine } from './connect-pins.js'
 import type {
   CandidateRecord,
   CoverageRecord,
@@ -1633,6 +1634,8 @@ export interface DigestModel {
     readonly path: string
     readonly cites: number
   }>
+  /** Why a declared dependency pin gave no hint line. Shown in the summary; never a reason to degrade. */
+  readonly pinNotes?: readonly PinNote[]
 }
 
 /** Strip control and format characters. Line breaks stay; tabs become a space. */
@@ -2180,6 +2183,8 @@ export function renderSummary(
       `Degraded because: ${model.degradeReasons.join(', ')}. This is not proof of absence.`,
     )
   }
+  const pins = renderPinsLine(model.pinNotes ?? [])
+  if (pins !== '') out.push(pins)
   if (model.candidates.length === 0 && model.recorded.length === 0) {
     out.push('No candidate in searched scope.')
   }

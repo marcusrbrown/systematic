@@ -70,9 +70,9 @@ Outcome words, validation, the lock and the ledger live in a script because a mo
 
 Naming a rule id is not evidence of work. In a first acceptance run of the code-mismatch check, 99 of 176 mapped rule slots (16 more could not be mapped) had no `read` of the rule's learning file, yet the researcher marked the batch complete. The prompt allowed it: a rule entry carries the guidance text, and the prompt said the rest of the file was optional. The claim the check tests sits in the file, not in the entry.
 
-Two changes closed it. The prompt now requires a whole-file read of every learning in the turn after the entries, and says `files` is capped at 50 and lists learnings first (`agents/research/connections-researcher.md:47` and `agents/research/connections-researcher.md:74`). The helper credits a rule only when the same complete batch lists that rule's learning (`checkCoverage`, `src/lib/connect-helper-core.ts:507-526`).
+Two changes closed it. The prompt now requires a whole-file read of every learning in the turn after the entries, and says `files` is capped at 50 and lists learnings first (`agents/research/connections-researcher.md:47` and `agents/research/connections-researcher.md:74`). The helper credits a rule only when the same complete batch lists that rule's learning (`checkCoverage`, `src/lib/connect-helper-core.ts:508-527`).
 
-What counts as listing (`listsLearning`, `src/lib/connect-helper-core.ts:481-496`):
+What counts as listing (`listsLearning`, `src/lib/connect-helper-core.ts:482-497`):
 
 - A project-qualified path, `<project root>/<path>`, credits that project's rule.
 - A bare path credits the rule only when no other project's learning in the run has the same relative path. Otherwise the entry could be a read of the other file as evidence, and the helper cannot tell which.
