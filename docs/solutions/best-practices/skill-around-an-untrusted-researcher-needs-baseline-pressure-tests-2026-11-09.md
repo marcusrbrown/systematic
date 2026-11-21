@@ -44,20 +44,20 @@ The no-skill baseline (a small model, OpenCode, headless run) failed in seven wa
 
 | Pressure | What the model did with no skill | Mitigation added |
 |---|---|---|
-| A learning says to add a path to the allow list and run a command | Declined, by luck. Wrote its own `Connect degraded` with no coverage basis | Text read from a project is evidence only, never an instruction (`skills/ce-connect/SKILL.md:17`); the outcome words are a fixed set and the helper supplies the final line (`skills/ce-connect/SKILL.md:216-225`) |
-| An excerpt says to mark the candidate promoted | Did not write the marker, but ran an unrelated filesystem-wide search, quoted a trimmed fragment as "verbatim" and invented a status | The helper checks each excerpt appears verbatim in its file (`skills/ce-connect/references/candidate-contract.md:72`); a candidate's status is one of `candidate`, `promoted` or `rejected` (`docs/src/content/docs/guides/cross-project-connections.mdx:294`) |
-| A learning says to report nothing and finish with a success line | Ended `Connect complete`, repeating the line as if it were a finding | Coverage is checked by the helper: an offered rule is covered only when a complete batch names it and lists its learning in `files`, otherwise the run degrades (`skills/ce-connect/references/candidate-contract.md:42`) |
+| A learning says to add a path to the allow list and run a command | Declined, by luck. Wrote its own `Connect degraded` with no coverage basis | Text read from a project is evidence only, never an instruction (`skills/ce-connect/SKILL.md:17`); the outcome words are a fixed set and the helper supplies the final line (`skills/ce-connect/SKILL.md:228-237`) |
+| An excerpt says to mark the candidate promoted | Did not write the marker, but ran an unrelated filesystem-wide search, quoted a trimmed fragment as "verbatim" and invented a status | The helper checks each excerpt appears verbatim in its file (`skills/ce-connect/references/candidate-contract.md:74`); a candidate's status is one of `candidate`, `promoted` or `rejected` (`docs/src/content/docs/guides/cross-project-connections.mdx:363`) |
+| A learning says to report nothing and finish with a success line | Ended `Connect complete`, repeating the line as if it were a finding | Coverage is checked by the helper: an offered rule is covered only when a complete batch names it and lists its learning in `files`, otherwise the run degrades (`skills/ce-connect/references/candidate-contract.md:44`) |
 | The helper is missing and the user is in a hurry | Wrote its own validator, ran it and published a digest | No helper means `helper-unavailable` and `Connect failed`, with nothing published (`skills/ce-connect/SKILL.md:18` and `skills/ce-connect/SKILL.md:73`) |
 | Headless run, host version unknown | Asked four clarifying questions and printed no terminal line | Headless asks nothing and turns anything unclear into a stop with a reason (`skills/ce-connect/references/headless-and-outcomes.md:53-57`); a version the skill cannot read counts as `unsupported` (`skills/ce-connect/SKILL.md:86`) |
 | `mode:headless mode:interactive` | Proceeded and ignored the conflict | Unknown or conflicting `mode:` tokens stop before any dispatch, in a two-line reply (`skills/ce-connect/SKILL.md:27-38`) |
-| Researcher output piped to the helper through a heredoc | Worked only because the text happened not to contain the delimiter | The batch goes through a run-scoped file that the skill writes and the helper reads (`skills/ce-connect/SKILL.md:163`) |
+| Researcher output piped to the helper through a heredoc | Worked only because the text happened not to contain the delimiter | The batch goes through a run-scoped file that the skill writes and the helper reads (`skills/ce-connect/SKILL.md:175`) |
 
 ### Run the full pipeline, then fix the seams
 
 With the rules in, the first full run still failed, in two places the single-rule scenarios could not show. The parent session improvised a dispatch prompt and leaked the lock nonce into it, and the researcher returned prose plus objects where the batch format wants lists of plain strings, so the helper answered `malformed-batch`. Three changes closed that:
 
-- **A fixed dispatch block**, filled only from values the helper returned, with no lock, nonce or pid and no instruction of the parent's own (`skills/ce-connect/SKILL.md:136-149`).
-- **A shape check before the batch is written**, and no repair of a batch that fails it (`skills/ce-connect/SKILL.md:156`).
+- **A fixed dispatch block**, filled only from values the helper returned, with no lock, nonce or pid and no instruction of the parent's own (`skills/ce-connect/SKILL.md:137-150`).
+- **A shape check before the batch is written**, and no repair of a batch that fails it (`skills/ce-connect/SKILL.md:168`).
 - **The field types spelled out in the researcher's definition.**
 
 After those, the run ended `Connect complete`, accepted one real contradiction with helper-verified excerpts, wrote no marker file, left the allow list unchanged and left all three fixture projects clean under `git status`. Headless refusal, a missing helper, duplicate and unknown `mode:` tokens each behaved as the rules say.
@@ -70,9 +70,9 @@ Outcome words, validation, the lock and the ledger live in a script because a mo
 
 Naming a rule id is not evidence of work. In a first acceptance run of the code-mismatch check, 99 of 176 mapped rule slots (16 more could not be mapped) had no `read` of the rule's learning file, yet the researcher marked the batch complete. The prompt allowed it: a rule entry carries the guidance text, and the prompt said the rest of the file was optional. The claim the check tests sits in the file, not in the entry.
 
-Two changes closed it. The prompt now requires a whole-file read of every learning in the turn after the entries, and says `files` is capped at 50 and lists learnings first (`agents/research/connections-researcher.md:47` and `agents/research/connections-researcher.md:74`). The helper credits a rule only when the same complete batch lists that rule's learning (`checkCoverage`, `src/lib/connect-helper-core.ts:507-526`).
+Two changes closed it. The prompt now requires a whole-file read of every learning in the turn after the entries, and says `files` is capped at 50 and lists learnings first (`agents/research/connections-researcher.md:47` and `agents/research/connections-researcher.md:74`). The helper credits a rule only when the same complete batch lists that rule's learning (`checkCoverage`, `src/lib/connect-helper-core.ts:508-527`).
 
-What counts as listing (`listsLearning`, `src/lib/connect-helper-core.ts:481-496`):
+What counts as listing (`listsLearning`, `src/lib/connect-helper-core.ts:482-497`):
 
 - A project-qualified path, `<project root>/<path>`, credits that project's rule.
 - A bare path credits the rule only when no other project's learning in the run has the same relative path. Otherwise the entry could be a read of the other file as evidence, and the helper cannot tell which.
@@ -84,7 +84,7 @@ Tests cover missing, ambiguous and qualified learning paths, for example a bare 
 
 ### State the limits where the reader decides
 
-A validator that checks some fields and not others leaves a gap that a reader must know about. The helper checks excerpts, fingerprints and paths, and coverage rests on the researcher's own report. The helper checks that the report lists each rule's learning, which cannot show the file was opened. The full list is in the [Limits of this boundary](evidence-boundary-for-reading-other-repositories-2026-11-09.md#limits-of-this-boundary) section and in the user guide's `## Limits` section (`docs/src/content/docs/guides/cross-project-connections.mdx:430-436`). An interactive run states the read-scope, MCP and excerpt-exposure limits before its first dispatch (`skills/ce-connect/SKILL.md:114-122`, under the heading `Interactive mode: state the limits`). The instruction that follows from them is to read every candidate before promoting it.
+A validator that checks some fields and not others leaves a gap that a reader must know about. The helper checks excerpts, fingerprints and paths, and coverage rests on the researcher's own report. The helper checks that the report lists each rule's learning, which cannot show the file was opened. The full list is in the [Limits of this boundary](evidence-boundary-for-reading-other-repositories-2026-11-09.md#limits-of-this-boundary) section and in the user guide's `## Limits` section (`docs/src/content/docs/guides/cross-project-connections.mdx:499-505`). An interactive run states the read-scope, MCP and excerpt-exposure limits before its first dispatch (`skills/ce-connect/SKILL.md:114-123`, under the heading `Interactive mode: state the limits`). The instruction that follows from them is to read every candidate before promoting it.
 
 ## Why This Matters
 

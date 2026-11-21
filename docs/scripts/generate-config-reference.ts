@@ -128,7 +128,10 @@ const SEARCH_SUB_FIELDS = [
 ] as const
 
 /** `connect` sub-fields, in display order. */
-const CONNECT_SUB_FIELDS = ['allow_projects', 'groups'] as const
+const CONNECT_SUB_FIELDS = ['allow_projects', 'groups', 'pins'] as const
+
+/** Fields of one `connect.pins[]` entry, in display order. */
+const CONNECT_PIN_ENTRY_FIELDS = ['project', 'upstream', 'file', 'key'] as const
 
 /** Fields of one `search.sources[]` entry, in display order. */
 const SEARCH_SOURCE_ENTRY_FIELDS = [
@@ -309,7 +312,10 @@ function renderSearchSubFields(searchSchema: Record<string, unknown>): string {
   return `\n\n${renderSearchSubSections(props)}`
 }
 
-/** Render the `connect` sub-field sections under `###`. */
+/**
+ * Render the `connect` sub-field sections under `###`, and the entry fields of
+ * `pins[]` under `####` with a `pins[].` prefix.
+ */
 function renderConnectSubFields(
   connectSchema: Record<string, unknown>,
 ): string {
@@ -317,7 +323,22 @@ function renderConnectSubFields(
   if (!props) return ''
   return `\n\n${CONNECT_SUB_FIELDS.map((subKey) => {
     const subSchema = props[subKey] as Record<string, unknown> | undefined
-    return subSchema ? renderFieldSection(`### ${subKey}`, subSchema) : null
+    if (!subSchema) return null
+    const own = renderFieldSection(`### ${subKey}`, subSchema)
+    const items = subSchema.items as Record<string, unknown> | undefined
+    const entryProps = items?.properties as Record<string, unknown> | undefined
+    if (subKey !== 'pins' || !entryProps) return own
+    const entries = CONNECT_PIN_ENTRY_FIELDS.map((entryKey) => {
+      const entrySchema = entryProps[entryKey] as
+        | Record<string, unknown>
+        | undefined
+      return entrySchema
+        ? renderFieldSection(`#### pins[].${entryKey}`, entrySchema)
+        : null
+    })
+      .filter(Boolean)
+      .join('\n\n')
+    return `${own}\n${entries}`
   })
     .filter(Boolean)
     .join('\n\n')}`

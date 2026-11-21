@@ -12,6 +12,7 @@ import {
 import {
   type AllowEntryMissReason,
   type ConnectConfigOptions,
+  type ConnectPin,
   checkHostSupport,
   HOST_SUPPORT_TABLE,
   type HostSupportRow,
@@ -94,6 +95,13 @@ import {
   type Verification,
   verifyRecord,
 } from './lib/connect-import.js'
+import {
+  type PinNote,
+  type PinReaders,
+  type PinResolution,
+  readPinNotes,
+  resolvePins,
+} from './lib/connect-pins.js'
 import { verifyProvenance } from './lib/connect-provenance.js'
 import {
   isGithubOwnerRepo,
@@ -181,6 +189,8 @@ export interface HelperDeps {
   readonly publishHooks?: NonNullable<PublishOptions['hooks']>
   /** Seams in the write of the invocation record, for tests of a failed write. */
   readonly invocationHooks?: InvocationWriteOptions
+  /** Replaces the pin value and tag readers, for tests that count what `begin` opens. */
+  readonly pinReaders?: Partial<PinReaders>
 }
 
 export interface HelperResult {
@@ -346,6 +356,8 @@ interface Environment {
   readonly resolved: ReturnType<typeof resolveAllowList>
   /** The merged `connect.groups` of the user config. */
   readonly groups: Readonly<Record<string, readonly string[]>>
+  /** The declared pins of the readable user-level layers. Shape-checked only. */
+  readonly pins: readonly ConnectPin[]
   readonly warnings: readonly string[]
   readonly configUnreadable: boolean
 }
@@ -364,6 +376,7 @@ function describeEnvironment(deps: HelperDeps): Environment {
     allowedRoots: resolved.resolved.map((item) => item.mainRoot),
     resolved,
     groups: load.groups,
+    pins: load.pins,
     warnings: load.warnings,
     configUnreadable: load.unreadable,
   }
@@ -416,10 +429,12 @@ function oneCell(text: string): string {
 
 /**
  * One tab-separated line per rule: id, project name, path, title, the
- * `applies_when` items and whether this run is offered the rule (`offered`) or
- * leaves it to a later run (`later`). The offered rules come first, in the
- * order they were offered. The skill groups the offered rules into families
- * from this, so it never has to read every rule's sections.
+ * `applies_when` items, whether this run is offered the rule (`offered`) or
+ * leaves it to a later run (`later`), and the key of the rule's project. The
+ * offered rules come first, in the order they were offered. The skill groups
+ * the offered rules into families from this, so it never has to read every
+ * rule's sections, and matches a family to the `pinHints` of its projects by
+ * the last column (a project name can collide; the key cannot).
  */
 function rulesOverview(rules: readonly RuleEntry[], offer: Offer): string {
   const byId = new Map(rules.map((rule) => [rule.id, rule]))
@@ -436,6 +451,7 @@ function rulesOverview(rules: readonly RuleEntry[], offer: Offer): string {
         oneCell(rule.title ?? ''),
         oneCell(rule.appliesWhen.map(oneCell).join(' | ')),
         offered.has(id) ? 'offered' : 'later',
+        projectKey(rule.project),
       ].join('\t'),
     )
   }
@@ -552,6 +568,11 @@ interface Snapshot {
   readonly unmatched: ReadonlyArray<{ entry: string; reason: string }>
   readonly degradeReasons: readonly string[]
   readonly unread: readonly string[]
+  /**
+   * Why a declared pin gave no hint line. Absent in a run begun by a bundle
+   * that predates pins. Never a reason to degrade.
+   */
+  readonly pinNotes?: readonly PinNote[]
   /** Every indexed rule id. A candidate may cite any of them. */
   readonly ruleIds: readonly string[]
   /** The hash of each indexed rule's learning, kept as coverage when a run commits. */
@@ -596,7 +617,8 @@ function isSnapshot(value: unknown): value is Snapshot {
     Array.isArray(value.offer.fresh) &&
     Array.isArray(value.provenance) &&
     Array.isArray(value.degradeReasons) &&
-    Array.isArray(value.unread)
+    Array.isArray(value.unread) &&
+    (value.pinNotes === undefined || Array.isArray(value.pinNotes))
   )
 }
 
@@ -1254,6 +1276,7 @@ function beginResponse(
   scans: readonly ScannedProject[],
   workDir: string,
   limits: ConnectBounds,
+  pins: PinResolution,
 ): HelperResult {
   return success('begin', {
     status: 'begun',
@@ -1293,6 +1316,8 @@ function beginResponse(
     undecidedProvenance: snapshot.undecidedProvenance,
     degradeReasons: snapshot.degradeReasons,
     unread: snapshot.unread,
+    pinHints: pins.hints,
+    pinNotes: pins.notes,
     configWarnings: setup.environment.warnings,
     pruned: snapshot.pruned,
     bounds: {
@@ -1335,6 +1360,25 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
   try {
     const rules = scans.flatMap((scan) => scan.rules)
     const provenance = scans.flatMap((scan) => scan.provenance)
+    // Pins match only the projects this run scanned: the ones `begin` lists.
+    // A project allowed under several spellings answers to each of them.
+    const aliasesByRoot = new Map(
+      setup.projects.map((item) => [item.mainRoot, item.aliases ?? []]),
+    )
+    const pins = resolvePins(
+      setup.environment.pins,
+      scans.map((scan) => ({
+        entry: scan.digest.entry,
+        aliases: aliasesByRoot.get(scan.digest.root) ?? [],
+        root: scan.digest.root,
+        key: scan.digest.key,
+        ...(scan.digest.repo === undefined ? {} : { repo: scan.digest.repo }),
+        ...(scan.digest.commit === undefined
+          ? {}
+          : { commit: scan.digest.commit }),
+      })),
+      deps.pinReaders,
+    )
     const offer = planOffer({
       rules,
       coverage: ledger.ledger.coverage ?? [],
@@ -1362,6 +1406,7 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
       unmatched: setup.unmatched,
       degradeReasons,
       unread,
+      pinNotes: pins.notes,
       selection: setup.selection,
       ruleIds: rules.map((rule) => rule.id),
       ruleVersions: rules.map((rule) => ({
@@ -1412,7 +1457,7 @@ function indexRun(setup: RunSetup, deps: HelperDeps): HelperResult {
         )
       }
     }
-    return beginResponse(setup, snapshot, scans, workDir, limits)
+    return beginResponse(setup, snapshot, scans, workDir, limits, pins)
   } catch {
     return releaseAndFail('begin', lock, root, runId, 'internal-error')
   }
@@ -2269,6 +2314,7 @@ function digestModel(
     suppressed: state.suppressed,
     staleCitations: snapshot.staleCitations,
     undecidedProvenance: snapshot.undecidedProvenance,
+    pinNotes: readPinNotes(snapshot.pinNotes),
   }
 }
 

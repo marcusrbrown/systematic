@@ -931,6 +931,14 @@ describe('affected selection in a temp repo', () => {
     }
   })
 
+  test('the pin reader module triggers the connect helper surface', () => {
+    const found = GENERATED_SURFACES.find((s) => s.name === 'connect-helper')
+    if (found === undefined) {
+      throw new Error('connect-helper surface missing')
+    }
+    expect(found.triggers).toContain('src/lib/connect-pins.ts')
+  })
+
   test('a hand edit to a generated output selects the surface that writes it', () => {
     const repo = seededRepo()
     write(

@@ -190,6 +190,23 @@ describe('generateConfigReference', () => {
     expect(groups).toContain('**Examples:**')
   })
 
+  test('the connect section documents pins and each of its entry fields, with an example', () => {
+    const content = generateFn('2.11.0')
+    const start = content.indexOf('## connect')
+    expect(start).toBeGreaterThan(-1)
+    const rest = content.slice(start + 1)
+    const nextH2 = rest.search(/\n## /)
+    const section = nextH2 === -1 ? rest : rest.slice(0, nextH2)
+    const pinsStart = section.indexOf('### pins')
+    expect(pinsStart).toBeGreaterThan(-1)
+    const pins = section.slice(pinsStart)
+    for (const field of ['project', 'upstream', 'file', 'key']) {
+      expect(pins).toContain(`#### pins[].${field}`)
+    }
+    expect(pins).toContain('**Examples:**')
+    expect(pins).toContain('64')
+  })
+
   test('every described field has a non-empty description', () => {
     const content = generateFn('2.11.0')
     expect(checkAllSectionsHaveDescriptions(content)).toBe(true)

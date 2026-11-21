@@ -169,6 +169,7 @@ export const GENERATED_SURFACES: readonly GeneratedSurface[] = [
       'src/lib/connect-evidence.ts',
       'src/lib/connect-helper-core.ts',
       'src/lib/connect-import.ts',
+      'src/lib/connect-pins.ts',
       'src/lib/connect-repo-identity.ts',
       'src/lib/connect-state.ts',
       'src/lib/frontmatter.ts',

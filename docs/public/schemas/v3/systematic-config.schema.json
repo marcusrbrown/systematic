@@ -27,25 +27,25 @@
       "$ref": "#/definitions/__schema86"
     },
     "disabled_skills": {
-      "$ref": "#/definitions/__schema95"
+      "$ref": "#/definitions/__schema98"
     },
     "disabled_agents": {
-      "$ref": "#/definitions/__schema97"
+      "$ref": "#/definitions/__schema100"
     },
     "disabled_commands": {
-      "$ref": "#/definitions/__schema99"
+      "$ref": "#/definitions/__schema102"
     },
     "bootstrap": {
-      "$ref": "#/definitions/__schema101"
+      "$ref": "#/definitions/__schema104"
     },
     "workflow_guard": {
-      "$ref": "#/definitions/__schema107"
+      "$ref": "#/definitions/__schema110"
     },
     "pi_subagents": {
-      "$ref": "#/definitions/__schema109"
+      "$ref": "#/definitions/__schema112"
     },
     "skills_as_commands": {
-      "$ref": "#/definitions/__schema120"
+      "$ref": "#/definitions/__schema123"
     }
   },
   "additionalProperties": false,
@@ -2110,6 +2110,9 @@
         },
         "groups": {
           "$ref": "#/definitions/__schema90"
+        },
+        "pins": {
+          "$ref": "#/definitions/__schema95"
         }
       },
       "additionalProperties": false,
@@ -2198,9 +2201,17 @@
       "maxLength": 4096
     },
     "__schema95": {
-      "default": [],
-      "description": "Array of bundled skill names to disable globally. Unknown skill names are rejected at parse time.",
-      "examples": [["ce:plan", "ce:review"]],
+      "description": "Dependency pins that `ce:connect` shows the researcher, so a claim that is true at one version of an upstream and false at another can be checked. Each entry says that `project` pins `upstream` at the value found under `key` in `file`. At `begin` the helper reads that value from the project's working tree and finds every selected allowed checkout whose git `origin` is the upstream. It reads each one's version from the git tag at its HEAD, or reports it as unknown, and gives the researcher one fixed line per pair. A pin never widens the allow list or the selection, and is dropped silently when its project is not selected or no selected checkout matches. At most 64 pins per file. The lists in user, user.local, custom and custom.local config are merged as a union, with an identical pin kept once; entries that name different files for the same project, upstream and key are dropped at run time with a note. The helper states the versions and the researcher judges them: a pin is a hint, not evidence.",
+      "examples": [
+        [
+          {
+            "project": "~/src/github.com/me/app",
+            "upstream": "anomalyco/opencode",
+            "file": "package.json",
+            "key": "dependencies.opencode"
+          }
+        ]
+      ],
       "allOf": [
         {
           "$ref": "#/definitions/__schema96"
@@ -2208,6 +2219,56 @@
       ]
     },
     "__schema96": {
+      "maxItems": 64,
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/__schema97"
+      }
+    },
+    "__schema97": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "The project that pins the upstream, written as an `allow_projects` entry: an absolute or `~`-prefixed path. It must match, exactly as written or by its resolved root, an allow-list entry that the run has selected; any other pin is dropped without a read. A pin never adds a project to the allow list.",
+          "examples": ["~/src/github.com/me/app"]
+        },
+        "upstream": {
+          "type": "string",
+          "description": "The GitHub `owner/repo` of the upstream that the project pins. It matches an allowed checkout whose git `origin` is this repository, ignoring case.",
+          "examples": ["anomalyco/opencode"]
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(?!\\/)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[A-Za-z0-9._/-]+$",
+          "description": "The JSON or JSONC file in the project's working tree that holds the pin, as a repo-relative path. Letters, digits, `.`, `_`, `-` and `/` only, at most 256 characters, with no leading slash and no `..` segment (`^(?!\\/)(?!(?:.*\\/)?\\.\\.(?:\\/|$))[A-Za-z0-9._/-]+$`).",
+          "examples": ["package.json"]
+        },
+        "key": {
+          "type": "string",
+          "description": "A dotted path to a string value in the file, such as `dependencies.opencode`. One or more non-empty segments joined by single dots, at most 256 characters, with no control character. An array index is not supported.",
+          "maxLength": 256,
+          "examples": ["dependencies.opencode"]
+        }
+      },
+      "required": ["project", "upstream", "file", "key"],
+      "additionalProperties": false
+    },
+    "__schema98": {
+      "default": [],
+      "description": "Array of bundled skill names to disable globally. Unknown skill names are rejected at parse time.",
+      "examples": [["ce:plan", "ce:review"]],
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema99"
+        }
+      ]
+    },
+    "__schema99": {
       "type": "array",
       "items": {
         "type": "string",
@@ -2267,7 +2328,7 @@
         ]
       }
     },
-    "__schema97": {
+    "__schema100": {
       "default": [],
       "description": "Array of bundled agent names (bare or qualified category/name) to disable globally. Unknown agent names are rejected at parse time.",
       "examples": [
@@ -2276,11 +2337,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema98"
+          "$ref": "#/definitions/__schema101"
         }
       ]
     },
-    "__schema98": {
+    "__schema101": {
       "type": "array",
       "items": {
         "type": "string",
@@ -2392,23 +2453,23 @@
         ]
       }
     },
-    "__schema99": {
+    "__schema102": {
       "default": [],
       "description": "Array of command names to disable globally",
       "examples": [["deprecated-migration-helper"]],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema100"
+          "$ref": "#/definitions/__schema103"
         }
       ]
     },
-    "__schema100": {
+    "__schema103": {
       "type": "array",
       "items": {
         "type": "string"
       }
     },
-    "__schema101": {
+    "__schema104": {
       "default": {
         "enabled": true
       },
@@ -2423,18 +2484,18 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema102"
+          "$ref": "#/definitions/__schema105"
         }
       ]
     },
-    "__schema102": {
+    "__schema105": {
       "type": "object",
       "properties": {
         "enabled": {
-          "$ref": "#/definitions/__schema103"
+          "$ref": "#/definitions/__schema106"
         },
         "file": {
-          "$ref": "#/definitions/__schema105"
+          "$ref": "#/definitions/__schema108"
         }
       },
       "additionalProperties": false,
@@ -2448,42 +2509,42 @@
         }
       ]
     },
-    "__schema103": {
+    "__schema106": {
       "default": true,
       "description": "Enable bootstrap prompt injection into every conversation",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema104"
+          "$ref": "#/definitions/__schema107"
         }
       ]
     },
-    "__schema104": {
+    "__schema107": {
       "type": "boolean"
     },
-    "__schema105": {
+    "__schema108": {
       "description": "Path to a custom bootstrap prompt file",
       "examples": ["~/.config/opencode/bootstrap.md"],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema106"
+          "$ref": "#/definitions/__schema109"
         }
       ]
     },
-    "__schema106": {
+    "__schema109": {
       "type": "string"
     },
-    "__schema107": {
+    "__schema110": {
       "description": "Removed. The workflow guard no longer exists, so this setting has no effect and is ignored. Delete it from your config to silence the warning it triggers.",
       "deprecated": true,
       "allOf": [
         {
-          "$ref": "#/definitions/__schema108"
+          "$ref": "#/definitions/__schema111"
         }
       ]
     },
-    "__schema108": {},
-    "__schema109": {
+    "__schema111": {},
+    "__schema112": {
       "default": {
         "categories": {},
         "agents": {}
@@ -2505,11 +2566,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema110"
+          "$ref": "#/definitions/__schema113"
         }
       ]
     },
-    "__schema110": {
+    "__schema113": {
       "type": "object",
       "properties": {
         "categories": {
@@ -2525,7 +2586,7 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema111"
+              "$ref": "#/definitions/__schema114"
             }
           ]
         },
@@ -2542,14 +2603,14 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema119"
+              "$ref": "#/definitions/__schema122"
             }
           ]
         }
       },
       "additionalProperties": false
     },
-    "__schema111": {
+    "__schema114": {
       "type": "object",
       "propertyNames": {
         "type": "string"
@@ -2563,12 +2624,12 @@
         ],
         "allOf": [
           {
-            "$ref": "#/definitions/__schema118"
+            "$ref": "#/definitions/__schema121"
           }
         ]
       }
     },
-    "__schema112": {
+    "__schema115": {
       "trust": "project-or-higher",
       "allOf": [
         {
@@ -2576,7 +2637,7 @@
         }
       ]
     },
-    "__schema113": {
+    "__schema116": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991,
@@ -2584,48 +2645,48 @@
       "examples": [0, 10, 25],
       "trust": "any"
     },
-    "__schema114": {
+    "__schema117": {
       "type": "string",
       "minLength": 1,
       "description": "pi-subagents comma-selector tool string (built-ins, */all/none, or extension selectors)",
       "examples": ["*", "read,grep,glob", "none"],
       "trust": "project-or-higher"
     },
-    "__schema115": {
+    "__schema118": {
       "anyOf": [
         {
-          "$ref": "#/definitions/__schema116"
+          "$ref": "#/definitions/__schema119"
         },
         {
-          "$ref": "#/definitions/__schema117"
+          "$ref": "#/definitions/__schema120"
         }
       ],
       "description": "pi-subagents skills selector: true (all) or a comma-separated list of skill names",
       "examples": [true, "ce:plan,ce:review"],
       "trust": "project-or-higher"
     },
-    "__schema116": {
+    "__schema119": {
       "type": "boolean",
       "const": true
     },
-    "__schema117": {
+    "__schema120": {
       "type": "string",
       "minLength": 1
     },
-    "__schema118": {
+    "__schema121": {
       "type": "object",
       "properties": {
         "thinking": {
-          "$ref": "#/definitions/__schema112"
+          "$ref": "#/definitions/__schema115"
         },
         "max_turns": {
-          "$ref": "#/definitions/__schema113"
+          "$ref": "#/definitions/__schema116"
         },
         "tools": {
-          "$ref": "#/definitions/__schema114"
+          "$ref": "#/definitions/__schema117"
         },
         "skills": {
-          "$ref": "#/definitions/__schema115"
+          "$ref": "#/definitions/__schema118"
         }
       },
       "additionalProperties": false,
@@ -2637,26 +2698,26 @@
         }
       ]
     },
-    "__schema119": {
+    "__schema122": {
       "type": "object",
       "propertyNames": {
         "type": "string"
       },
       "additionalProperties": {
-        "$ref": "#/definitions/__schema118"
+        "$ref": "#/definitions/__schema121"
       }
     },
-    "__schema120": {
+    "__schema123": {
       "default": true,
       "description": "Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema121"
+          "$ref": "#/definitions/__schema124"
         }
       ]
     },
-    "__schema121": {
+    "__schema124": {
       "type": "boolean"
     }
   }

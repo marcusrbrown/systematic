@@ -23,9 +23,15 @@ import {
 } from './bundled-names.js'
 import {
   CONNECT_GROUP_NAME_PATTERN,
+  isGithubOwnerRepo,
+  isPinKey,
   MAX_ALLOW_PROJECT_LENGTH,
   MAX_ALLOW_PROJECTS,
   MAX_CONNECT_GROUPS,
+  MAX_CONNECT_PINS,
+  MAX_PIN_FILE_LENGTH,
+  MAX_PIN_KEY_LENGTH,
+  PIN_FILE_PATTERN,
 } from './connect-config.js'
 import {
   REMOVED_BUNDLED_AGENT_NAMES,
@@ -542,6 +548,61 @@ const ConnectSettingsSchema = trustProtected(
             },
           ],
           maxProperties: MAX_CONNECT_GROUPS,
+        }),
+      pins: z
+        .array(
+          z
+            .object({
+              project: z
+                .string()
+                .min(1)
+                .max(MAX_ALLOW_PROJECT_LENGTH)
+                .meta({
+                  description: `The project that pins the upstream, written as an \`allow_projects\` entry: an absolute or \`~\`-prefixed path. It must match, exactly as written or by its resolved root, an allow-list entry that the run has selected; any other pin is dropped without a read. A pin never adds a project to the allow list.`,
+                  examples: ['~/src/github.com/me/app'],
+                }),
+              upstream: z
+                .string()
+                .refine(isGithubOwnerRepo)
+                .meta({
+                  description:
+                    'The GitHub `owner/repo` of the upstream that the project pins. It matches an allowed checkout whose git `origin` is this repository, ignoring case.',
+                  examples: ['anomalyco/opencode'],
+                }),
+              file: z
+                .string()
+                .min(1)
+                .max(MAX_PIN_FILE_LENGTH)
+                .regex(PIN_FILE_PATTERN)
+                .meta({
+                  description: `The JSON or JSONC file in the project's working tree that holds the pin, as a repo-relative path. Letters, digits, \`.\`, \`_\`, \`-\` and \`/\` only, at most ${MAX_PIN_FILE_LENGTH} characters, with no leading slash and no \`..\` segment (\`${PIN_FILE_PATTERN.source}\`).`,
+                  examples: ['package.json'],
+                }),
+              key: z
+                .string()
+                .refine(isPinKey)
+                .meta({
+                  description: `A dotted path to a string value in the file, such as \`dependencies.opencode\`. One or more non-empty segments joined by single dots, at most ${MAX_PIN_KEY_LENGTH} characters, with no control character. An array index is not supported.`,
+                  maxLength: MAX_PIN_KEY_LENGTH,
+                  examples: ['dependencies.opencode'],
+                }),
+            })
+            .strict(),
+        )
+        .max(MAX_CONNECT_PINS)
+        .optional()
+        .meta({
+          description: `Dependency pins that \`ce:connect\` shows the researcher, so a claim that is true at one version of an upstream and false at another can be checked. Each entry says that \`project\` pins \`upstream\` at the value found under \`key\` in \`file\`. At \`begin\` the helper reads that value from the project's working tree and finds every selected allowed checkout whose git \`origin\` is the upstream. It reads each one's version from the git tag at its HEAD, or reports it as unknown, and gives the researcher one fixed line per pair. A pin never widens the allow list or the selection, and is dropped silently when its project is not selected or no selected checkout matches. At most ${MAX_CONNECT_PINS} pins per file. The lists in user, user.local, custom and custom.local config are merged as a union, with an identical pin kept once; entries that name different files for the same project, upstream and key are dropped at run time with a note. The helper states the versions and the researcher judges them: a pin is a hint, not evidence.`,
+          examples: [
+            [
+              {
+                project: '~/src/github.com/me/app',
+                upstream: 'anomalyco/opencode',
+                file: 'package.json',
+                key: 'dependencies.opencode',
+              },
+            ],
+          ],
         }),
     })
     .strict()

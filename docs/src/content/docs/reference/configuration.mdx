@@ -1255,6 +1255,77 @@ Named subsets of the allow list that `ce:connect` can be narrowed to with `group
 ```
 
 
+### pins
+
+Dependency pins that `ce:connect` shows the researcher, so a claim that is true at one version of an upstream and false at another can be checked. Each entry says that `project` pins `upstream` at the value found under `key` in `file`. At `begin` the helper reads that value from the project's working tree and finds every selected allowed checkout whose git `origin` is the upstream. It reads each one's version from the git tag at its HEAD, or reports it as unknown, and gives the researcher one fixed line per pair. A pin never widens the allow list or the selection, and is dropped silently when its project is not selected or no selected checkout matches. At most 64 pins per file. The lists in user, user.local, custom and custom.local config are merged as a union, with an identical pin kept once; entries that name different files for the same project, upstream and key are dropped at run time with a note. The helper states the versions and the researcher judges them: a pin is a hint, not evidence.
+
+**Type:** `object`[]
+
+**Examples:**
+
+```json
+[
+  {
+    "project": "~/src/github.com/me/app",
+    "upstream": "anomalyco/opencode",
+    "file": "package.json",
+    "key": "dependencies.opencode"
+  }
+]
+```
+
+#### pins[].project
+
+The project that pins the upstream, written as an `allow_projects` entry: an absolute or `~`-prefixed path. It must match, exactly as written or by its resolved root, an allow-list entry that the run has selected; any other pin is dropped without a read. A pin never adds a project to the allow list.
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+~/src/github.com/me/app
+```
+
+
+#### pins[].upstream
+
+The GitHub `owner/repo` of the upstream that the project pins. It matches an allowed checkout whose git `origin` is this repository, ignoring case.
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+anomalyco/opencode
+```
+
+
+#### pins[].file
+
+The JSON or JSONC file in the project's working tree that holds the pin, as a repo-relative path. Letters, digits, `.`, `_`, `-` and `/` only, at most 256 characters, with no leading slash and no `..` segment (`^(?!\/)(?!(?:.*\/)?\.\.(?:\/|$))[A-Za-z0-9._/-]+$`).
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+package.json
+```
+
+
+#### pins[].key
+
+A dotted path to a string value in the file, such as `dependencies.opencode`. One or more non-empty segments joined by single dots, at most 256 characters, with no control character. An array index is not supported.
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+dependencies.opencode
+```
+
+
 ## Profile Bundle Overlay Fields
 
 Each named bundle under `profiles` may set `agents.<name>` and `categories.<name>` entries using a routing-only subset of the [Agent/Category Overlay Fields](#agentcategory-overlay-fields): `model`, `variant`, `temperature`, `top_p`, and the harness routing blocks `opencode`/`pi`. Non-routing fields (`permission`, `skills`, `mode`, `hidden`, `disable`, `steps`, `color`) are rejected.

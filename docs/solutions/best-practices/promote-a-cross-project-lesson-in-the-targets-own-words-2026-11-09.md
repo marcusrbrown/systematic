@@ -37,7 +37,7 @@ tags:
 
 ### Route by kind, and give each consumer what it accepts
 
-`handoffLine` (`src/lib/connect-helper-core.ts:2016-2056`) builds the next step for each candidate from values the helper made, never from candidate text:
+`handoffLine` (`src/lib/connect-helper-core.ts:2019-2059`) builds the next step for each candidate from values the helper made, never from candidate text:
 
 - **A lesson** gets `candidate:<run record path> candidate-id:<id>` for `ce:compound`.
 - **A contradiction, and a `code-mismatch` candidate that is to be refreshed,** get `Review in <project>: /ce:compound-refresh path:<docs/solutions/...>`, naming the target project's own learning. A mismatch also gets one line beside it naming its evidence by project and span, for the person to recheck. `ce:compound` refuses a contradiction (`skills/ce-compound/references/candidate-input.md:18`, which says to use `ce:compound-refresh`), so a `candidate:` line for one is a dead end.
@@ -45,9 +45,9 @@ tags:
 
 Match the producer to the consumer's validation, not to its happy path:
 
-- The refresh scope accepts only letters, digits, `.`, `_`, `-` and `/` (`unsupported-characters`, `skills/ce-compound-refresh/SKILL.md:24`). The producer's pattern `REFRESH_PATH` (`src/lib/connect-helper-core.ts:2064-2065`) is the same set. The skill also refuses a `README.md` and the read-only `docs/solutions/_archived/` and `docs/solutions/patterns/` directories, which the pattern alone lets through, so `isRefreshable` (`src/lib/connect-helper-core.ts:2072-2079`) adds them. A target path outside either prints `Review by hand` instead of a line that will be refused; a refused path would otherwise reject the whole scope.
-- `ce:compound` rejects a path with a quote, a dollar sign or a backtick (`skills/ce-compound/references/candidate-input.md:44-48`). The inventory therefore skips such a file with the reason `unsafe-path-character` and names it in the digest (`UNSAFE_PATH_CHARACTER`, `src/lib/connect-evidence.ts:901`, applied at `src/lib/connect-evidence.ts:1099-1104`). A project root containing one fails its scan with the same reason (`src/ce-connect-helper.ts:843-844`).
-- A `candidate:` token must be one word (`skills/ce-compound/references/candidate-input.md:7`). When the run record path contains whitespace, `isPasteablePath` (`src/lib/connect-helper-core.ts:2031-2033`) fails and the summary prints only the candidate id and says the path cannot be pasted. This is documented, not fixed; keep the state directory free of whitespace (`docs/src/content/docs/guides/cross-project-connections.mdx:195`).
+- The refresh scope accepts only letters, digits, `.`, `_`, `-` and `/` (`unsupported-characters`, `skills/ce-compound-refresh/SKILL.md:24`). The producer's pattern `REFRESH_PATH` (`src/lib/connect-helper-core.ts:2067-2068`) is the same set. The skill also refuses a `README.md` and the read-only `docs/solutions/_archived/` and `docs/solutions/patterns/` directories, which the pattern alone lets through, so `isRefreshable` (`src/lib/connect-helper-core.ts:2075-2082`) adds them. A target path outside either prints `Review by hand` instead of a line that will be refused; a refused path would otherwise reject the whole scope.
+- `ce:compound` rejects a path with a quote, a dollar sign or a backtick (`skills/ce-compound/references/candidate-input.md:44-48`). The inventory therefore skips such a file with the reason `unsafe-path-character` and names it in the digest (`UNSAFE_PATH_CHARACTER`, `src/lib/connect-evidence.ts:901`, applied at `src/lib/connect-evidence.ts:1099-1104`). A project root containing one fails its scan with the same reason (`src/ce-connect-helper.ts:865-866`).
+- A `candidate:` token must be one word (`skills/ce-compound/references/candidate-input.md:7`). When the run record path contains whitespace, `isPasteablePath` (`src/lib/connect-helper-core.ts:2034-2036`) fails and the summary prints only the candidate id and says the path cannot be pasted. This is documented, not fixed; keep the state directory free of whitespace (`docs/src/content/docs/guides/cross-project-connections.mdx:264`).
 
 The rule: for every line a skill prints for another skill to consume, derive its allowed shape from the consumer's own checks, and test the printed line against them.
 

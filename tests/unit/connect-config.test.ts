@@ -569,6 +569,170 @@ describe('loadConnectAllowList: groups', () => {
   })
 })
 
+describe('loadConnectAllowList: pins', () => {
+  const pinsOf = (pins: unknown, allow: string[] = ['/work/app']) => ({
+    connect: { allow_projects: allow, pins },
+  })
+
+  it('reports no pins when none are written, with or without a block', () => {
+    const dirs = setupDirs()
+    expect(loadConnectAllowList(optionsFor(dirs)).pins).toEqual([])
+    writeConfig(dirs.userDir, 'systematic.json', {
+      connect: { allow_projects: ['/work/app'] },
+    })
+    expect(loadConnectAllowList(optionsFor(dirs)).pins).toEqual([])
+  })
+
+  it('reads the pins of the user file beside the allow list', () => {
+    const dirs = setupDirs()
+    writeConfig(dirs.userDir, 'systematic.json', pinsOf([pin()]))
+    const load = loadConnectAllowList(optionsFor(dirs))
+    expect(load.pins).toEqual([pin()])
+    expect(load.allowProjects).toEqual(['/work/app'])
+    expect(load.unreadable).toBe(false)
+    expect(load.warnings).toEqual([])
+  })
+
+  it('returns the pins of every readable layer in layer order', () => {
+    const dirs = setupDirs()
+    const customDir = path.join(dirs.home, 'custom')
+    writeConfig(
+      dirs.userDir,
+      'systematic.json',
+      pinsOf([pin({ key: 'k.user' })]),
+    )
+    writeConfig(
+      dirs.userDir,
+      'systematic.local.json',
+      pinsOf([pin({ key: 'k.local' })], []),
+    )
+    writeConfig(
+      customDir,
+      'systematic.json',
+      pinsOf([pin({ key: 'k.custom' })], []),
+    )
+    writeConfig(
+      customDir,
+      'systematic.local.json',
+      pinsOf([pin({ key: 'k.custom-local' })], []),
+    )
+    const load = loadConnectAllowList(optionsFor(dirs, customDir))
+    expect(load.pins.map((entry) => entry.key)).toEqual([
+      'k.user',
+      'k.local',
+      'k.custom',
+      'k.custom-local',
+    ])
+  })
+
+  it('collapses the same pin written twice in one layer and across layers', () => {
+    const dirs = setupDirs()
+    writeConfig(dirs.userDir, 'systematic.json', pinsOf([pin(), pin()]))
+    writeConfig(dirs.userDir, 'systematic.local.json', pinsOf([pin()], []))
+    expect(loadConnectAllowList(optionsFor(dirs)).pins).toEqual([pin()])
+  })
+
+  it('does not collapse pins that differ in any one of the four values', () => {
+    const dirs = setupDirs()
+    const variants = [
+      pin(),
+      pin({ project: '/work/other' }),
+      pin({ upstream: 'anomalyco/other' }),
+      pin({ file: 'deps.json' }),
+      pin({ key: 'other.key' }),
+    ]
+    writeConfig(dirs.userDir, 'systematic.json', pinsOf(variants))
+    expect(loadConnectAllowList(optionsFor(dirs)).pins).toEqual(variants)
+  })
+
+  it('keeps two pins that share project, upstream and key but name different files: conflicts are decided later', () => {
+    const dirs = setupDirs()
+    const first = pin({ file: 'a.json' })
+    const second = pin({ file: 'b.json' })
+    writeConfig(dirs.userDir, 'systematic.json', pinsOf([first]))
+    writeConfig(dirs.userDir, 'systematic.local.json', pinsOf([second], []))
+    expect(loadConnectAllowList(optionsFor(dirs)).pins).toEqual([first, second])
+  })
+
+  it('accepts a pin whose project is not on the allow list, and does not widen the list', () => {
+    const dirs = setupDirs()
+    writeConfig(
+      dirs.userDir,
+      'systematic.json',
+      pinsOf([pin({ project: '/not/allowed' })], ['/work/app']),
+    )
+    const load = loadConnectAllowList(optionsFor(dirs))
+    expect(load.pins).toEqual([pin({ project: '/not/allowed' })])
+    expect(load.allowProjects).toEqual(['/work/app'])
+    expect(load.groups).toEqual({})
+    expect(load.unreadable).toBe(false)
+  })
+
+  it('a layer with one bad pin among good ones contributes nothing of any kind, and the warning names the file but no pin', () => {
+    const dirs = setupDirs()
+    const secret = '/work/secret-client'
+    writeConfig(dirs.userDir, 'systematic.json', {
+      connect: {
+        allow_projects: [secret],
+        groups: { team: [secret] },
+        pins: [
+          pin({ project: secret, key: 'good.one' }),
+          pin({ project: secret, file: '../escape' }),
+        ],
+      },
+    })
+    const load = loadConnectAllowList(optionsFor(dirs))
+    expect(load.pins).toEqual([])
+    expect(load.allowProjects).toEqual([])
+    expect(load.groups).toEqual({})
+    expect(load.unreadable).toBe(true)
+    expect(load.warnings).toHaveLength(1)
+    const warning = load.warnings.join('\n')
+    expect(warning).toContain('systematic.json')
+    for (const leaked of [
+      secret,
+      'secret-client',
+      'escape',
+      'good.one',
+      'anomalyco',
+    ]) {
+      expect(warning).not.toContain(leaked)
+    }
+  })
+
+  it('a failing layer drops only its own pins; the other layers still contribute', () => {
+    const dirs = setupDirs()
+    writeConfig(dirs.userDir, 'systematic.json', pinsOf([pin({ key: 'kept' })]))
+    writeConfig(
+      dirs.userDir,
+      'systematic.local.json',
+      pinsOf([pin({ key: 'lost' }), { project: '/p' }], []),
+    )
+    const load = loadConnectAllowList(optionsFor(dirs))
+    expect(load.pins.map((entry) => entry.key)).toEqual(['kept'])
+    expect(load.unreadable).toBe(true)
+  })
+
+  it('a block with pins as an object is unreadable and yields no pins', () => {
+    const dirs = setupDirs()
+    writeConfig(dirs.userDir, 'systematic.json', pinsOf(pin()))
+    const load = loadConnectAllowList(optionsFor(dirs))
+    expect(load.pins).toEqual([])
+    expect(load.unreadable).toBe(true)
+  })
+
+  it('the pins of a refused custom directory are not read', () => {
+    const dirs = setupDirs()
+    const repo = createRepo()
+    const customDir = path.join(repo.work, '.config-here')
+    writeConfig(customDir, 'systematic.json', pinsOf([pin({ key: 'custom' })]))
+    writeConfig(dirs.userDir, 'systematic.json', pinsOf([pin({ key: 'user' })]))
+    const load = loadConnectAllowList(optionsFor(dirs, customDir))
+    expect(load.customDirRefused).toBe('checkout')
+    expect(load.pins.map((entry) => entry.key)).toEqual(['user'])
+  })
+})
+
 describe('validateConnectBlock: groups', () => {
   it('returns the validated groups beside the allow list', () => {
     const result = validateConnectBlock({
@@ -579,6 +743,7 @@ describe('validateConnectBlock: groups', () => {
       ok: true,
       allowProjects: ['/work/a'],
       groups: { team: ['/work/a'] },
+      pins: [],
     })
   })
 
@@ -587,6 +752,7 @@ describe('validateConnectBlock: groups', () => {
       ok: true,
       allowProjects: [],
       groups: {},
+      pins: [],
     })
   })
 })
@@ -934,6 +1100,26 @@ describe('resolveAllowList', () => {
     expect(result.unmatched).toEqual([])
   })
 
+  it('carries each later spelling of a project as an alias of the kept entry, once', () => {
+    const home = makeDir('connect-home-')
+    const repo = path.join(home, 'app')
+    fs.mkdirSync(repo)
+    git(repo, ['init', '-q', '-b', 'main'])
+    const other = createRepo()
+    const result = resolveAllowList(
+      ['~/app', repo, '~/app', other.work, `${home}/./app`],
+      { homeDir: home },
+    )
+    expect(result.resolved).toEqual([
+      {
+        entry: '~/app',
+        mainRoot: fs.realpathSync(repo),
+        aliases: [repo, `${home}/./app`],
+      },
+      { entry: other.work, mainRoot: other.work },
+    ])
+  })
+
   it('returns two empty lists for an empty allow list', () => {
     expect(resolveAllowList([], {})).toEqual({ resolved: [], unmatched: [] })
   })
@@ -1049,6 +1235,243 @@ describe('layer discovery parity with the search reader', () => {
   })
 })
 
+const pin = (overrides: Record<string, unknown> = {}) => ({
+  project: '/work/app',
+  upstream: 'anomalyco/opencode',
+  file: 'package.json',
+  key: 'dependencies.opencode',
+  ...overrides,
+})
+
+/** The limits are written out here so that a changed constant fails a test. */
+const pinCases: ReadonlyArray<readonly [string, unknown, boolean]> = [
+  ['one valid pin', { pins: [pin()] }, true],
+  ['an empty pins list', { pins: [] }, true],
+  [
+    'pins beside an allow list and groups',
+    {
+      allow_projects: ['/work/app'],
+      groups: { t: ['/work/app'] },
+      pins: [pin()],
+    },
+    true,
+  ],
+  [
+    'a project written as a home path',
+    { pins: [pin({ project: '~/src/app' })] },
+    true,
+  ],
+  [
+    'a project that is not on any allow list',
+    { pins: [pin({ project: '/elsewhere/x' })] },
+    true,
+  ],
+  [
+    'a project with a control character, as an allow-list entry may have',
+    { pins: [pin({ project: '/work/a\nb' })] },
+    true,
+  ],
+  [
+    'a mixed-case upstream',
+    { pins: [pin({ upstream: 'AnomalyCo/OpenCode' })] },
+    true,
+  ],
+  [
+    'a nested file path',
+    { pins: [pin({ file: 'packages/app/deps.jsonc' })] },
+    true,
+  ],
+  ['a dotfile', { pins: [pin({ file: '.opencode/version.json' })] }, true],
+  [
+    'a file segment that only starts with two dots',
+    { pins: [pin({ file: 'a/..b/c.json' })] },
+    true,
+  ],
+  ['a single-segment key', { pins: [pin({ key: 'version' })] }, true],
+  [
+    'a key with spaces inside a segment',
+    { pins: [pin({ key: 'a b.c' })] },
+    true,
+  ],
+  [
+    'the maximum pins',
+    { pins: Array.from({ length: 64 }, (_, i) => pin({ key: `k${i}` })) },
+    true,
+  ],
+  [
+    'one pin too many',
+    { pins: Array.from({ length: 65 }, (_, i) => pin({ key: `k${i}` })) },
+    false,
+  ],
+  [
+    'the longest project',
+    { pins: [pin({ project: `/${'x'.repeat(4095)}` })] },
+    true,
+  ],
+  [
+    'a project one too long',
+    { pins: [pin({ project: `/${'x'.repeat(4096)}` })] },
+    false,
+  ],
+  ['the longest file', { pins: [pin({ file: 'x'.repeat(256) })] }, true],
+  ['a file one too long', { pins: [pin({ file: 'x'.repeat(257) })] }, false],
+  ['the longest key', { pins: [pin({ key: 'x'.repeat(256) })] }, true],
+  ['a key one too long', { pins: [pin({ key: 'x'.repeat(257) })] }, false],
+  ['pins as an object', { pins: pin() }, false],
+  ['pins as null', { pins: null }, false],
+  ['pins as a string', { pins: 'x' }, false],
+  ['a null pin', { pins: [null] }, false],
+  ['a string pin', { pins: ['/work/app'] }, false],
+  ['an array pin', { pins: [[]] }, false],
+  ['a pin with an extra key', { pins: [pin({ extra: 1 })] }, false],
+  [
+    'a pin with no project',
+    { pins: [{ upstream: 'a/b', file: 'f.json', key: 'k' }] },
+    false,
+  ],
+  [
+    'a pin with no upstream',
+    { pins: [{ project: '/p', file: 'f.json', key: 'k' }] },
+    false,
+  ],
+  [
+    'a pin with no file',
+    { pins: [{ project: '/p', upstream: 'a/b', key: 'k' }] },
+    false,
+  ],
+  [
+    'a pin with no key',
+    { pins: [{ project: '/p', upstream: 'a/b', file: 'f.json' }] },
+    false,
+  ],
+  ['an empty project', { pins: [pin({ project: '' })] }, false],
+  ['an empty upstream', { pins: [pin({ upstream: '' })] }, false],
+  ['an empty file', { pins: [pin({ file: '' })] }, false],
+  ['an empty key', { pins: [pin({ key: '' })] }, false],
+  ['a non-string project', { pins: [pin({ project: 1 })] }, false],
+  ['a non-string upstream', { pins: [pin({ upstream: ['a/b'] })] }, false],
+  ['a non-string file', { pins: [pin({ file: 1 })] }, false],
+  ['a non-string key', { pins: [pin({ key: ['a'] })] }, false],
+  [
+    'an upstream with no slash',
+    { pins: [pin({ upstream: 'opencode' })] },
+    false,
+  ],
+  [
+    'an upstream with extra segments',
+    { pins: [pin({ upstream: 'a/b/c' })] },
+    false,
+  ],
+  [
+    'an upstream with an empty owner',
+    { pins: [pin({ upstream: '/b' })] },
+    false,
+  ],
+  [
+    'an upstream with an empty repo',
+    { pins: [pin({ upstream: 'a/' })] },
+    false,
+  ],
+  [
+    'an upstream that is a URL',
+    { pins: [pin({ upstream: 'https://github.com/a/b' })] },
+    false,
+  ],
+  ['an upstream with a space', { pins: [pin({ upstream: 'a/b c' })] }, false],
+  [
+    'an upstream with a control character',
+    { pins: [pin({ upstream: 'a/b\n' })] },
+    false,
+  ],
+  [
+    'an upstream repo of two dots',
+    { pins: [pin({ upstream: 'a/..' })] },
+    false,
+  ],
+  [
+    'a file with a dot-dot segment',
+    { pins: [pin({ file: '../x.json' })] },
+    false,
+  ],
+  [
+    'a file with a dot-dot segment in the middle',
+    { pins: [pin({ file: 'a/../x.json' })] },
+    false,
+  ],
+  [
+    'a file ending in a dot-dot segment',
+    { pins: [pin({ file: 'a/..' })] },
+    false,
+  ],
+  ['a file that is only dot-dot', { pins: [pin({ file: '..' })] }, false],
+  ['an absolute file', { pins: [pin({ file: '/etc/passwd' })] }, false],
+  ['a file with a space', { pins: [pin({ file: 'a b.json' })] }, false],
+  ['a file with a backslash', { pins: [pin({ file: 'a\\b.json' })] }, false],
+  [
+    'a file with a non-ASCII character',
+    { pins: [pin({ file: 'caf\u00e9.json' })] },
+    false,
+  ],
+  [
+    'a file with a control character',
+    { pins: [pin({ file: 'a\u0000.json' })] },
+    false,
+  ],
+  ['a file with a newline', { pins: [pin({ file: 'a\n.json' })] }, false],
+  ['a key with an empty first segment', { pins: [pin({ key: '.a' })] }, false],
+  [
+    'a key with an empty middle segment',
+    { pins: [pin({ key: 'a..b' })] },
+    false,
+  ],
+  ['a key with an empty last segment', { pins: [pin({ key: 'a.' })] }, false],
+  ['a key that is only a dot', { pins: [pin({ key: '.' })] }, false],
+  ['a key with a newline', { pins: [pin({ key: 'a\nb' })] }, false],
+  ['a key with a NUL', { pins: [pin({ key: 'a\u0000b' })] }, false],
+  ['a key with a tab', { pins: [pin({ key: 'a\tb' })] }, false],
+  ['a key with DEL', { pins: [pin({ key: 'a\u007fb' })] }, false],
+  ['a key with a C1 control', { pins: [pin({ key: 'a\u0085b' })] }, false],
+  [
+    'one bad pin among good ones',
+    { pins: [pin(), pin({ file: '../x' }), pin({ key: 'k2' })] },
+    false,
+  ],
+]
+
+const pinParityCases: ReadonlyArray<readonly [string, unknown]> = pinCases.map(
+  ([label, block]) => [`pins: ${label}`, block] as const,
+)
+
+describe('validateConnectBlock: pins', () => {
+  it.each(pinCases)('%s', (_label, block, accepted) => {
+    expect(validateConnectBlock(block).ok).toBe(accepted)
+  })
+
+  it('returns the validated pins beside the allow list and groups', () => {
+    const result = validateConnectBlock({
+      allow_projects: ['/work/app'],
+      pins: [pin()],
+    })
+    expect(result).toEqual({
+      ok: true,
+      allowProjects: ['/work/app'],
+      groups: {},
+      pins: [pin()],
+    })
+  })
+
+  it('returns an empty pin list when none is written', () => {
+    const result = validateConnectBlock({ allow_projects: ['/work/app'] })
+    expect(result.ok && result.pins).toEqual([])
+  })
+
+  it('does not alias the caller input', () => {
+    const block = { pins: [pin()] }
+    const result = validateConnectBlock(block)
+    expect(result.ok && result.pins[0]).not.toBe(block.pins[0])
+  })
+})
+
 describe('the zod schema and the reader agree on what a connect block is', () => {
   const cases: ReadonlyArray<readonly [string, unknown]> = [
     ['an empty block', {}],
@@ -1152,11 +1575,24 @@ describe('the zod schema and the reader agree on what a connect block is', () =>
     ['a leading hyphen name', { groups: { '-a': ['/a'] } }],
     ['an empty name', { groups: { '': ['/a'] } }],
     ['an unknown key beside groups', { groups: { a: ['/a'] }, extra: 1 }],
+    ...pinParityCases,
   ]
 
   it.each(cases)('%s', (_label, block) => {
     const zod = SystematicConfigSchema.safeParse({ connect: block })
     expect(validateConnectBlock(block).ok).toBe(zod.success)
+  })
+
+  it('hands back the same pins the zod schema parses', () => {
+    const block = {
+      pins: [pin(), pin({ file: 'deps/lock.jsonc', key: 'a.b' })],
+    }
+    const zod = SystematicConfigSchema.safeParse({ connect: block })
+    const plain = validateConnectBlock(block)
+    expect(zod.success && plain.ok).toBe(true)
+    if (zod.success && plain.ok) {
+      expect(plain.pins).toEqual(zod.data.connect?.pins ?? [])
+    }
   })
 })
 
