@@ -4,6 +4,31 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.38.0](https://github.com/marcusrbrown/systematic/compare/v3.37.0...v3.38.0) (2026-11-21)
+
+### Features
+
+* **connect:** tell the researcher when a project pins a dependency another checkout holds at a different version ([#1487](https://github.com/marcusrbrown/systematic/issues/1487)) ([3248d6c](https://github.com/marcusrbrown/systematic/commit/3248d6c1acb10e40a2a3d65f056842b566dde7f8))
+
+### Build System
+
+* **deps:** update OpenCode v2 to v2.3.1 ([#1480](https://github.com/marcusrbrown/systematic/issues/1480)) ([366d040](https://github.com/marcusrbrown/systematic/commit/366d0404ee3d26740e31193de7961d5c49264235))
+* **dev:** update OpenCode to v1.19.6 ([#1473](https://github.com/marcusrbrown/systematic/issues/1473)) ([06b878a](https://github.com/marcusrbrown/systematic/commit/06b878a1d88209e80fa5d81818e18b683121ddb4))
+
+### Tests
+
+* **connect:** stop checking the finished evaluation's host against the rolling pin ([#1484](https://github.com/marcusrbrown/systematic/issues/1484)) ([368a26b](https://github.com/marcusrbrown/systematic/commit/368a26be7d8fe832fd49800a8485fe9e9aa7188e))
+
+### Continuous Integration
+
+* **content-integrity:** stop failing the gate on docs/solutions line citations ([#1488](https://github.com/marcusrbrown/systematic/issues/1488)) ([1099960](https://github.com/marcusrbrown/systematic/commit/10999602946978e3272f1c7b00b0e7f2eda5ecd4))
+* **deps:** update Systematic to v3.37.0 ([#1479](https://github.com/marcusrbrown/systematic/issues/1479)) ([32047f3](https://github.com/marcusrbrown/systematic/commit/32047f3850ac959fa292d8e549f29fa7724404e3))
+* **renovate:** scope OpenCode v1 and v2 pin bumps as dev updates ([#1486](https://github.com/marcusrbrown/systematic/issues/1486)) ([6dded5d](https://github.com/marcusrbrown/systematic/commit/6dded5d5106c615d6a66e50e53e9ce51352f80cf))
+
+### Miscellaneous Chores
+
+* **deps:** update github/codeql-action action to v4.39.4 ([#1475](https://github.com/marcusrbrown/systematic/issues/1475)) ([8a5899e](https://github.com/marcusrbrown/systematic/commit/8a5899e9c161f32df82e6c120502f4e56fc91bbc))
+
 ## [3.37.0](https://github.com/marcusrbrown/systematic/compare/v3.36.0...v3.37.0) (2026-11-20)
 
 ### Features
