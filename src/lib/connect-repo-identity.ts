@@ -111,7 +111,9 @@ function originUrl(config: string): string | undefined {
 // ── HEAD ────────────────────────────────────────────────────────────────────
 
 const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
-const REF_NAME = /^refs\/[A-Za-z0-9._/-]+$/
+// `+` is a legal git ref character (a tag such as `v1.2.3+build`); it is not
+// a path separator or a traversal character, so `safeRefName` stays safe.
+const REF_NAME = /^refs\/[A-Za-z0-9._+/-]+$/
 
 function readGitText(
   mainRoot: string,

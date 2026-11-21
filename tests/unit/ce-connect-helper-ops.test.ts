@@ -5535,6 +5535,20 @@ describe('begin with dependency pins', () => {
       },
     )
 
+    it('notes pin-file-invalid for a deeply nested pin file under the byte cap and still begins', () => {
+      const depth = 100_000
+      const nested = `${'['.repeat(depth)}${']'.repeat(depth)}`
+      expect(nested.length).toBeLessThan(CONNECT_BOUNDS.maxFileBytes)
+      const world = pinWorld({ pinFile: nested })
+      const body = start(world).body
+      expect(body.status).toBe('begun')
+      expect(body.pinHints).toEqual({})
+      expect(body.pinNotes).toEqual([
+        { code: 'pin-file-invalid', project: projectKey(world.target) },
+      ])
+      expect(body.degradeReasons).toEqual([])
+    })
+
     it('notes pin-file-too-large', () => {
       const world = pinWorld({
         pinFile: `{"lib":{"version":"2.0.0"},"pad":"${'x'.repeat(CONNECT_BOUNDS.maxFileBytes + 1)}"}`,

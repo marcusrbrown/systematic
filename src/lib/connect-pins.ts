@@ -122,7 +122,14 @@ export function readPinValue(
     return failed('pin-file-invalid')
   }
   const errors: ParseError[] = []
-  const parsed: unknown = parseJsonc(text, errors, { allowTrailingComma: true })
+  let parsed: unknown
+  try {
+    parsed = parseJsonc(text, errors, { allowTrailingComma: true })
+  } catch {
+    // The parser recurses per nesting level, so a deeply nested file under the
+    // byte cap can overflow the stack.
+    return failed('pin-file-invalid')
+  }
   if (errors.length > 0 || parsed === undefined)
     return failed('pin-file-invalid')
   if (!isPinKey(key)) return failed('pin-key-absent')

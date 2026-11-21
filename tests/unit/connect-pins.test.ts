@@ -166,6 +166,13 @@ describe('readPinValue: file failures', () => {
     expect(failure(readValue('not json', 'v'))).toBe('pin-file-invalid')
   })
 
+  it('reports a deeply nested file under the byte cap as invalid and does not throw', () => {
+    const depth = 100_000
+    const nested = `${'['.repeat(depth)}${']'.repeat(depth)}`
+    expect(nested.length).toBeLessThan(CONNECT_BOUNDS.maxFileBytes)
+    expect(failure(readValue(nested, 'v'))).toBe('pin-file-invalid')
+  })
+
   it('reports an empty file', () => {
     expect(failure(readValue('', 'v'))).toBe('pin-file-invalid')
     expect(failure(readValue('   \n', 'v'))).toBe('pin-file-invalid')

@@ -462,6 +462,27 @@ describe('readTagAtHead', () => {
     expect(tagAtHead(work)).toEqual(UNKNOWN)
   })
 
+  it('names a tag whose name contains a plus, loose and then packed', () => {
+    const { work } = createClone('https://github.com/o/r.git')
+    git(work, ['tag', 'v1.2.3+build.5'])
+    expect(tagAtHead(work)).toEqual(tag('v1.2.3+build.5'))
+    git(work, ['pack-refs', '--all', '--prune'])
+    expect(
+      fs.existsSync(path.join(work, '.git/refs/tags/v1.2.3+build.5')),
+    ).toBe(false)
+    expect(tagAtHead(work)).toEqual(tag('v1.2.3+build.5'))
+  })
+
+  it('does not let an unrelated plus tag turn a matching tag into unknown', () => {
+    const { work, head } = createClone('https://github.com/o/r.git')
+    const other = commitFiles(work, { 'two.txt': 'two\n' }, 'two')
+    git(work, ['tag', 'v1+old', head])
+    git(work, ['tag', 'v2'])
+    expect(readTagAtHead(work, other)).toEqual(tag('v2'))
+    git(work, ['pack-refs', '--all', '--prune'])
+    expect(readTagAtHead(work, other)).toEqual(tag('v2'))
+  })
+
   it('is unknown with two tags at HEAD, one lightweight and one annotated, loose or packed', () => {
     const { work } = createClone('https://github.com/o/r.git')
     git(work, ['tag', 'light'])
