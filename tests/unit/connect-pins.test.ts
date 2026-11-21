@@ -1094,7 +1094,9 @@ describe('resolvePins: real readers', () => {
       [{ ...PIN, project: root }],
       [there, proj('/no/such/checkout', { repo: UPSTREAM })],
     )
-    expect(result.hints[there.key]?.[0]).toContain(`pins ${UPSTREAM} at 9999.3.2`)
+    expect(result.hints[there.key]?.[0]).toContain(
+      `pins ${UPSTREAM} at 9999.3.2`,
+    )
     expect(result.hints[there.key]?.[0]).toContain(
       'is anomalyco/opencode at unknown.',
     )
