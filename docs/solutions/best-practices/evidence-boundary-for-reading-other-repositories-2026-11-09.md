@@ -46,7 +46,7 @@ A file-and-line check alone passes when the cited text has moved, which is exact
 - **A pass does not show the span supports the sentence.** It shows the symbol is there. A citation shifted to a new line range can land on different code that names the same symbol and still pass. In #1459, shifted citations to test files passed `scripts/content-integrity.ts` while pointing at the wrong tests, and only a review that read the cited lines caught it.
 - **The check is bounded.** It stops at a per-project cap (`maxCitationsPerProject`, 500, `src/lib/connect-evidence.ts:51-68`). In an evaluation over a real project set every project reached the cap, so "cap reached" is a fact to report and not a failure of the run.
 
-The same shape is in `scripts/content-integrity.ts`, which checks the `path:line` citations in `docs/solutions/` for the symbol their sentence names.
+The repository's own CI gate no longer checks `path:line` citations in `docs/solutions/`, because an ordinary edit to a cited file broke it. The `ce:connect` check above is separate and remains.
 
 ### 3. The helper inventories and validates only what the user named
 
