@@ -46,7 +46,7 @@ Actors: the operator declares pins in user-owned config; the helper resolves and
 
 **Invariants**
 - R10. A hint is not evidence. Candidate kinds, validation, verdict semantics, the candidate and prompt caps, the 20-turn limit and the 8-rules-per-family limit are unchanged, and the researcher agent prompt is unchanged. (U4, U5)
-- R11. Reads stay local, bounded and project-contained. Pin, tag and path values are untrusted data. (U2, U3, U4)
+- R11. Reads stay local, bounded and project-contained. Pin, tag and path values are untrusted data. The `refs/tags` directory listing assumes no concurrent writer: it checks each directory with `lstat` and then opens it by path, and file contents are read only through the contained reader. (U2, U3, U4)
 
 **Surfaces and acceptance**
 - R12. The schema, config reference, connect helper bundle, registry and docs reflect the change, and each generated surface is regenerated. (U1, U3, U4, U5)

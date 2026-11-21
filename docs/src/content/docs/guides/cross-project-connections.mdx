@@ -146,6 +146,8 @@ A checkout's version is the one git tag at its HEAD. The helper reads it from th
 
 The tag is context, not attestation. The working tree can differ from the tag, which is why a line says the checkout is at a tag rather than that it is that version.
 
+The helper assumes nothing else changes the checkout while a run reads it. A directory swapped for a symlink during the tag walk could make the listing see names outside the checkout. File contents are still read only through the contained reader.
+
 ### What the researcher sees
 
 For each pin and each selected checkout of the upstream (other than the pinning project itself), the helper renders one fixed line from values that passed strict charsets. A value that fails is rejected, never cleaned up:
