@@ -1935,7 +1935,7 @@ describe('the guide documents connect.pins', () => {
       ],
       [project, checkout],
       {
-        readPin: () => ({ kind: 'ok', value: '2.3.2' }),
+        readPin: () => ({ kind: 'ok', value: '3.1.0' }),
         readTag: () => ({ kind: 'tag', name: '1.4.0' }),
       },
     )

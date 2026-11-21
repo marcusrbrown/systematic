@@ -137,7 +137,7 @@ This says: `app` pins `upstream-org/host-lib` at the value under `host.version` 
 - **`project`.** An `allow_projects` entry written exactly as it is on the allow list, or that entry's resolved root, an absolute path. Another spelling of the same path does not match, and the pin is dropped without a read. A pin never adds a project to the allow list or to a selection.
 - **`upstream`.** A GitHub `owner/repo`. Case is ignored when it is compared with a checkout's `origin`.
 - **`file`.** A path inside the project, written with `[A-Za-z0-9._/-]`, at most 256 characters, with no leading `/` and no `..` segment. It is JSON or JSONC, read from the working tree as it is on disk, so an untracked file works. A symlink is refused.
-- **`key`.** Dotted segments that walk nested objects: `host.version` reads `{ "host": { "version": "2.3.2" } }`. There is no array index, and a key that contains a dot itself cannot be addressed. The value must be a string that starts with a letter or digit, then holds letters, digits, `.`, `_`, `+` and `-`, 64 characters at most. A tag may contain a `/`, a pinned value may not.
+- **`key`.** Dotted segments that walk nested objects: `host.version` reads `{ "host": { "version": "3.1.0" } }`. There is no array index, and a key that contains a dot itself cannot be addressed. The value must be a string that starts with a letter or digit, then holds letters, digits, `.`, `_`, `+` and `-`, 64 characters at most. A tag may contain a `/`, a pinned value may not.
 - **Limits.** At most 64 pins per file. The four config layers merge as a union, and an identical pin written twice counts once. Entries that give the same project, upstream and key but different files are dropped at run time with a `pin-conflict` note, never resolved by picking one.
 
 ### The version of a checkout
@@ -151,7 +151,7 @@ The tag is context, not attestation. The working tree can differ from the tag, w
 For each pin and each selected checkout of the upstream (other than the pinning project itself), the helper renders one fixed line from values that passed strict charsets. A value that fails is rejected, never cleaned up:
 
 ```text
-pin: /home/me/src/github.com/me/app pins upstream-org/host-lib at 2.3.2 (config/pins.json); allowed checkout /home/me/src/github.com/upstream-org/host-lib-old is upstream-org/host-lib at 1.4.0. Check claims about upstream-org/host-lib at both versions; if a claim holds at one and not the other, report a `code-mismatch` with reason `unscoped` and cite the evidence from the other checkout.
+pin: /home/me/src/github.com/me/app pins upstream-org/host-lib at 3.1.0 (config/pins.json); allowed checkout /home/me/src/github.com/upstream-org/host-lib-old is upstream-org/host-lib at 1.4.0. Check claims about upstream-org/host-lib at both versions; if a claim holds at one and not the other, report a `code-mismatch` with reason `unscoped` and cite the evidence from the other checkout.
 ```
 
 Both roots are the ones the run lists under its projects. The skill copies a line, unchanged, into the dispatch of each family that holds a rule of the pinning project, and writes none of its own. A run keeps at most 8 lines, in a fixed order that does not depend on layer or filesystem order. Equal versions still produce a line: the helper states the versions and the researcher judges them. A line is a hint, not evidence. A candidate it leads to still has to quote evidence that validation checks, and the helper never reports a mismatch from a line.

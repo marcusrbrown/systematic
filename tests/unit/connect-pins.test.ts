@@ -54,8 +54,8 @@ function readValue(content: string, key: string) {
 describe('readPinValue: reading', () => {
   it('reads a nested key', () => {
     expect(
-      readValue('{"opencode":{"version":"2.3.2"}}', 'opencode.version'),
-    ).toEqual({ kind: 'ok', value: '2.3.2' })
+      readValue('{"opencode":{"version":"9999.3.2"}}', 'opencode.version'),
+    ).toEqual({ kind: 'ok', value: '9999.3.2' })
   })
 
   it('reads a top-level key', () => {
@@ -68,11 +68,11 @@ describe('readPinValue: reading', () => {
   it('reads JSONC with comments and trailing commas', () => {
     const jsonc = `{
       // the host we track
-      "opencode": { "version": "v2.3.2-rc.1+build", /* pinned */ },
+      "opencode": { "version": "v9999.3.2-rc.1+build", /* pinned */ },
     }`
     expect(readValue(jsonc, 'opencode.version')).toEqual({
       kind: 'ok',
-      value: 'v2.3.2-rc.1+build',
+      value: 'v9999.3.2-rc.1+build',
     })
   })
 
@@ -321,7 +321,7 @@ describe('readPinValue: value checks', () => {
   it('accepts the version shapes real pin files use', () => {
     for (const value of [
       '1',
-      '2.3.2',
+      '9999.3.2',
       'v4.7.1',
       '1.0.0-rc.1',
       '1.0.0+build.5',
@@ -414,7 +414,7 @@ function spy(
     readers: {
       readPin: (root, file, key) => {
         pinReads.push(root)
-        return over.pin?.(root, file, key) ?? { kind: 'ok', value: '2.3.2' }
+        return over.pin?.(root, file, key) ?? { kind: 'ok', value: '9999.3.2' }
       },
       readTag: (root) => {
         tagReads.push(root)
@@ -431,7 +431,7 @@ function instruction(upstream: string): string {
   return `Check claims about ${upstream} at both versions; if a claim holds at one and not the other, report a \`code-mismatch\` with reason \`unscoped\` and cite the evidence from the other checkout.`
 }
 
-const LINE_V1 = `pin: ${AGENT} pins ${UPSTREAM} at 2.3.2 (pin.json); allowed checkout ${V1} is ${UPSTREAM} at v1.4.2. ${instruction(UPSTREAM)}`
+const LINE_V1 = `pin: ${AGENT} pins ${UPSTREAM} at 9999.3.2 (pin.json); allowed checkout ${V1} is ${UPSTREAM} at v1.4.2. ${instruction(UPSTREAM)}`
 
 describe('resolvePins: the line', () => {
   it('ends with the fixed instruction: what to check and what to report, with the evidence rule', () => {
@@ -452,11 +452,11 @@ describe('resolvePins: the line', () => {
   })
 
   it('still renders when the pinned value equals the tag, and infers nothing', () => {
-    const { readers } = spy({ tag: () => ({ kind: 'tag', name: '2.3.2' }) })
+    const { readers } = spy({ tag: () => ({ kind: 'tag', name: '9999.3.2' }) })
     const [line] =
       resolvePins([PIN], [agent, v1], readers).hints[agent.key] ?? []
-    expect(line).toContain('pins anomalyco/opencode at 2.3.2')
-    expect(line).toContain('at 2.3.2. Check claims')
+    expect(line).toContain('pins anomalyco/opencode at 9999.3.2')
+    expect(line).toContain('at 9999.3.2. Check claims')
     expect(line).toContain(instruction(UPSTREAM))
     // The facts say nothing about a mismatch; only the fixed instruction does.
     expect(line?.replace(instruction(UPSTREAM), '')).not.toMatch(
@@ -1009,7 +1009,7 @@ describe('resolvePins: caps', () => {
         pin: (root) =>
           root === second.root
             ? { kind: 'failed', code: 'pin-key-absent' }
-            : { kind: 'ok', value: '2.3.2' },
+            : { kind: 'ok', value: '9999.3.2' },
       })
       const result = resolvePins(
         [
@@ -1088,13 +1088,13 @@ describe('resolvePins: caps', () => {
 
 describe('resolvePins: real readers', () => {
   it('reads the pin value from the pinning checkout and never throws on missing roots', () => {
-    const root = project({ 'pin.json': '{"opencode":{"version":"2.3.2"}}' })
+    const root = project({ 'pin.json': '{"opencode":{"version":"9999.3.2"}}' })
     const there = proj(root, { repo: 'fro-bot/agent' })
     const result = resolvePins(
       [{ ...PIN, project: root }],
       [there, proj('/no/such/checkout', { repo: UPSTREAM })],
     )
-    expect(result.hints[there.key]?.[0]).toContain(`pins ${UPSTREAM} at 2.3.2`)
+    expect(result.hints[there.key]?.[0]).toContain(`pins ${UPSTREAM} at 9999.3.2`)
     expect(result.hints[there.key]?.[0]).toContain(
       'is anomalyco/opencode at unknown.',
     )
