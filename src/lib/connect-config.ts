@@ -12,6 +12,12 @@
  * imports the limits from here and tags the same block `trust:
  * 'project-or-higher'`; the dependency runs one way.
  *
+ * The block also holds `pins`: declared dependency pins, each saying that a
+ * project pins an upstream at the value under a key in a file. The reader only
+ * validates their shape and returns them; whether a pin matches a selected
+ * project, and what it resolves to, is decided at `begin`, never here. A pin
+ * never adds a project to the allow list.
+ *
  * The block also holds named `groups` of allow-list-form entries. A group
  * narrows a run to part of the allow list and never adds a project: nothing
  * here checks that a member is on the allow list; the selection step does,
@@ -27,11 +33,12 @@
  * unreadable block contributes no entries. A missing, unparseable, oversize
  * or non-regular file contributes none either. No failure can add an entry
  * the user did not write. The four layers merge, the allow lists by union and
- * the groups by name (a later layer replaces a same-named group whole), so a
- * layer that fails drops only its own entries and groups.
+ * the groups by name (a later layer replaces a same-named group whole) and
+ * the pins as a union deduplicated as written, so a layer that fails drops only
+ * its own entries, groups and pins.
  *
- * Warnings name config files and reasons, never an allow-list entry: an entry
- * is a project the user chose to expose, and a warning can reach logs and
+ * Warnings name config files and reasons, never an allow-list entry or a pin:
+ * an entry is a project the user chose to expose, and a warning can reach logs and
  * replies that the project is not allowed to see.
  */
 
@@ -66,18 +73,102 @@ export const MAX_CONNECT_GROUPS = 32
 /** A group name: lowercase letters, digits and hyphens, one to 64 characters, led by a letter or digit. */
 export const CONNECT_GROUP_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
 
+/** One config layer holds at most this many pins. */
+export const MAX_CONNECT_PINS = 64
+
+/** A pin's `file` is at most this many characters. */
+export const MAX_PIN_FILE_LENGTH = 256
+
+/** A pin's `key` is at most this many characters. */
+export const MAX_PIN_KEY_LENGTH = 256
+
+/**
+ * A pin's `file`: a repo-relative path in a narrow charset (letters, digits,
+ * `.`, `_`, `-` and `/`), with no leading slash and no `..` segment. It
+ * says nothing about whether the file exists or is safe to open; the pin reader
+ * contains the read.
+ */
+export const PIN_FILE_PATTERN =
+  /^(?!\/)(?!(?:.*\/)?\.\.(?:\/|$))[A-Za-z0-9._/-]+$/
+
 /** The `connect` block's keys. */
 const ALLOW_PROJECTS_KEY = 'allow_projects'
 const GROUPS_KEY = 'groups'
+const PINS_KEY = 'pins'
+
+// ── Shape rules shared with the zod schema and the identity reader ──────────
+
+/** A GitHub owner: 1 to 39 letters, digits and hyphens, with no hyphen at either end. */
+const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
+/** A GitHub repository name: 1 to 100 letters, digits, `.`, `_` and `-`. */
+const REPO = /^[A-Za-z0-9._-]{1,100}$/
+
+/**
+ * `owner/repo`, shaped as GitHub allows and nothing else. The one rule for a
+ * repository that is printed into a command, put in an API path or recorded as
+ * provenance, so every `connect-*` module and the helper agree on it. It checks
+ * the shape only and keeps the case; it says nothing about whether the
+ * repository exists. It lives here, below `connect-repo-identity.ts` which
+ * re-exports it, so the pin guard can use it without an import cycle.
+ */
+export function isGithubOwnerRepo(value: string): boolean {
+  const parts = value.split('/')
+  const [owner, name] = parts
+  return (
+    parts.length === 2 &&
+    owner !== undefined &&
+    name !== undefined &&
+    OWNER.test(owner) &&
+    REPO.test(name) &&
+    name !== '.' &&
+    name !== '..'
+  )
+}
+
+/** A C0 control character, DEL or a C1 control character. */
+function hasControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return true
+  }
+  return false
+}
+
+/**
+ * A pin's `key`: one or more non-empty segments joined by single dots, at most
+ * `MAX_PIN_KEY_LENGTH` characters, no control character. Shape only: whether
+ * the key names anything in the file is the pin reader's question.
+ */
+export function isPinKey(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= MAX_PIN_KEY_LENGTH &&
+    !hasControlCharacter(value) &&
+    value.split('.').every((segment) => segment.length > 0)
+  )
+}
 
 // ── The block ───────────────────────────────────────────────────────────────
 
 /** Group name to member list. A member has the form of an allow-list entry. */
 export type ConnectGroups = Record<string, string[]>
 
+/**
+ * A declared dependency pin: `project` pins `upstream` at the value found
+ * under `key` in `file`. `project` has the form of an allow-list entry and is
+ * matched, not resolved, at `begin`.
+ */
+export interface ConnectPin {
+  readonly project: string
+  readonly upstream: string
+  readonly file: string
+  readonly key: string
+}
+
 export interface ConnectSettings {
   allow_projects: string[]
   groups?: ConnectGroups
+  pins?: ConnectPin[]
 }
 
 export type ConnectBlockValidation =
@@ -85,6 +176,7 @@ export type ConnectBlockValidation =
       readonly ok: true
       readonly allowProjects: string[]
       readonly groups: ConnectGroups
+      readonly pins: ConnectPin[]
     }
   | { readonly ok: false }
 
@@ -136,18 +228,92 @@ function readGroups(value: unknown): ConnectGroups | undefined {
 }
 
 /**
+ * The union of pin lists in the order given, deduplicated as written: two
+ * entries are one only when all four values are equal, and the first one
+ * seen keeps its place. It decides nothing about conflicts; two entries that
+ * share a project, upstream and key but name different files both survive.
+ */
+export function unionPins(
+  lists: readonly (readonly ConnectPin[] | undefined)[],
+): ConnectPin[] {
+  const seen = new Map<string, ConnectPin>()
+  for (const list of lists) {
+    for (const pin of list ?? []) {
+      const identity = JSON.stringify([
+        pin.project,
+        pin.upstream,
+        pin.file,
+        pin.key,
+      ])
+      if (!seen.has(identity)) seen.set(identity, pin)
+    }
+  }
+  return [...seen.values()]
+}
+
+const PIN_FIELDS = ['project', 'upstream', 'file', 'key'] as const
+
+/**
+ * Read one pin: an object with exactly the four string fields. `project` has
+ * the form of an allow-list entry; `upstream`, `file` and `key` follow
+ * `isGithubOwnerRepo`, `PIN_FILE_PATTERN` and `isPinKey`.
+ */
+function readPin(value: unknown): ConnectPin | undefined {
+  if (!isRecord(value)) return undefined
+  const keys = Object.keys(value)
+  if (
+    keys.length !== PIN_FIELDS.length ||
+    !PIN_FIELDS.every((field) => Object.hasOwn(value, field))
+  ) {
+    return undefined
+  }
+  const { project, upstream, file, key } = value
+  if (
+    typeof project !== 'string' ||
+    project.length === 0 ||
+    project.length > MAX_ALLOW_PROJECT_LENGTH ||
+    typeof upstream !== 'string' ||
+    !isGithubOwnerRepo(upstream) ||
+    typeof file !== 'string' ||
+    file.length === 0 ||
+    file.length > MAX_PIN_FILE_LENGTH ||
+    !PIN_FILE_PATTERN.test(file) ||
+    typeof key !== 'string' ||
+    !isPinKey(key)
+  ) {
+    return undefined
+  }
+  return { project, upstream, file, key }
+}
+
+/** Read `pins`: at most `MAX_CONNECT_PINS` entries, each valid per `readPin`. Shape only. */
+function readPins(value: unknown): ConnectPin[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_CONNECT_PINS) return undefined
+  const pins: ConnectPin[] = []
+  for (const entry of value as unknown[]) {
+    const pin = readPin(entry)
+    if (pin === undefined) return undefined
+    pins.push(pin)
+  }
+  return pins
+}
+
+/**
  * Validate a `connect` block with plain guards. The block is valid when it is
- * an object whose only keys, if any, are `allow_projects` and `groups`.
+ * an object whose only keys, if any, are `allow_projects`, `groups` and
+ * `pins`.
  * `allow_projects` holds at most `MAX_ALLOW_PROJECTS` non-empty strings of at
  * most `MAX_ALLOW_PROJECT_LENGTH` characters. `groups` maps names to member
- * lists as `readGroups` describes. The zod schema in `config-schema.ts`
+ * lists as `readGroups` describes. `pins` holds at most `MAX_CONNECT_PINS`
+ * entries as `readPin` describes. The zod schema in `config-schema.ts`
  * accepts and rejects the same values; a test pins the two together.
  */
 export function validateConnectBlock(value: unknown): ConnectBlockValidation {
   if (!isRecord(value)) return { ok: false }
   if (
     Object.keys(value).some(
-      (key) => key !== ALLOW_PROJECTS_KEY && key !== GROUPS_KEY,
+      (key) =>
+        key !== ALLOW_PROJECTS_KEY && key !== GROUPS_KEY && key !== PINS_KEY,
     )
   ) {
     return { ok: false }
@@ -162,7 +328,9 @@ export function validateConnectBlock(value: unknown): ConnectBlockValidation {
     Object.hasOwn(value, GROUPS_KEY) ? value[GROUPS_KEY] : {},
   )
   if (groups === undefined) return { ok: false }
-  return { ok: true, allowProjects, groups }
+  const pins = readPins(Object.hasOwn(value, PINS_KEY) ? value[PINS_KEY] : [])
+  if (pins === undefined) return { ok: false }
+  return { ok: true, allowProjects, groups, pins }
 }
 
 // ── Layer discovery ─────────────────────────────────────────────────────────
@@ -343,6 +511,14 @@ export interface ConnectAllowListLoad {
    * group whole. A member is not checked against the allow list here.
    */
   readonly groups: Readonly<Record<string, readonly string[]>>
+  /**
+   * The readable layers' pins in layer order, deduplicated as written: two
+   * entries are one only when all four values are equal. No grouping and no
+   * conflict logic here; the helper decides both after it has resolved each
+   * pin's project. A pin is shape-checked only: its project is not checked
+   * against the allow list and a pin never adds a project to it.
+   */
+  readonly pins: readonly ConnectPin[]
   /** Some layer's file or block could not be read and contributed nothing. */
   readonly unreadable: boolean
   /** One line per problem. They name files and reasons, never an allow-list entry. */
@@ -358,6 +534,7 @@ type BlockRead =
       readonly kind: 'read'
       readonly allowProjects: readonly string[]
       readonly groups: ConnectGroups
+      readonly pins: readonly ConnectPin[]
     }
 
 /** Make `text` fit on one line of a warning: no control characters, bounded. */
@@ -407,7 +584,7 @@ function readConnectBlock(filePath: string): BlockRead {
     return { kind: 'failed', reason: 'root must be an object' }
   }
   if (!Object.hasOwn(parsed, 'connect')) {
-    return { kind: 'read', allowProjects: [], groups: {} }
+    return { kind: 'read', allowProjects: [], groups: {}, pins: [] }
   }
   const validation = validateConnectBlock(parsed.connect)
   return validation.ok
@@ -415,6 +592,7 @@ function readConnectBlock(filePath: string): BlockRead {
         kind: 'read',
         allowProjects: validation.allowProjects,
         groups: validation.groups,
+        pins: validation.pins,
       }
     : { kind: 'failed', reason: 'the connect block is not valid' }
 }
@@ -464,6 +642,7 @@ export function loadConnectAllowList(
   const warnings: string[] = []
   const entries = new Set<string>()
   const groups: ConnectGroups = {}
+  const layerPins: (readonly ConnectPin[])[] = []
   let unreadable = false
 
   const readLayer = (file: ConnectConfigFile): void => {
@@ -472,7 +651,7 @@ export function loadConnectAllowList(
     if (read.kind === 'failed') {
       unreadable = true
       warnings.push(
-        `[systematic] connect settings in ${displaySafe(file.path)} could not be read (${read.reason}); the allow list and groups from that file were ignored.`,
+        `[systematic] connect settings in ${displaySafe(file.path)} could not be read (${read.reason}); the allow list, groups and pins from that file were ignored.`,
       )
       return
     }
@@ -480,6 +659,7 @@ export function loadConnectAllowList(
     for (const [name, members] of Object.entries(read.groups)) {
       groups[name] = [...members]
     }
+    layerPins.push(read.pins)
   }
 
   const isUserLayer = (file: ConnectConfigFile): boolean =>
@@ -505,6 +685,7 @@ export function loadConnectAllowList(
   return {
     allowProjects: [...entries],
     groups,
+    pins: unionPins(layerPins),
     unreadable,
     warnings,
     ...(customDirRefused !== undefined && { customDirRefused }),

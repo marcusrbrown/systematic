@@ -344,6 +344,62 @@ describe('SystematicConfigSchema', () => {
       ).toBe(false)
     })
 
+    describe('pins', () => {
+      const pin = (overrides: Record<string, unknown> = {}) => ({
+        project: '~/src/app',
+        upstream: 'anomalyco/opencode',
+        file: 'package.json',
+        key: 'dependencies.opencode',
+        ...overrides,
+      })
+
+      test('accepts a list of pins and keeps every field', () => {
+        const result = SystematicConfigSchema.safeParse({
+          connect: { pins: [pin(), pin({ key: 'other' })] },
+        })
+        expect(result.success).toBe(true)
+        if (result.success) {
+          expect(result.data.connect?.pins).toEqual([
+            pin(),
+            pin({ key: 'other' }),
+          ])
+        }
+      })
+
+      test('is optional: a block without pins leaves no pins key', () => {
+        const result = SystematicConfigSchema.safeParse({
+          connect: { allow_projects: ['/a'] },
+        })
+        expect(result.success).toBe(true)
+        if (result.success)
+          expect(result.data.connect).not.toHaveProperty('pins')
+      })
+
+      test.each([
+        ['an extra key', pin({ extra: true })],
+        ['an upstream without a slash', pin({ upstream: 'opencode' })],
+        ['a file with a dot-dot segment', pin({ file: 'a/../b.json' })],
+        ['an absolute file', pin({ file: '/etc/passwd' })],
+        ['a key with an empty segment', pin({ key: 'a..b' })],
+        ['a key with a control character', pin({ key: 'a\u0000b' })],
+      ])('rejects a pin with %s at the connect path', (_label, entry) => {
+        const result = SystematicConfigSchema.safeParse({
+          connect: { pins: [entry] },
+        })
+        expect(result.success).toBe(false)
+        if (!result.success) {
+          expect(firstIssue(result.error.issues).path[0]).toBe('connect')
+        }
+      })
+
+      test('rejects 65 pins', () => {
+        const pins = Array.from({ length: 65 }, (_, i) => pin({ key: `k${i}` }))
+        expect(
+          SystematicConfigSchema.safeParse({ connect: { pins } }).success,
+        ).toBe(false)
+      })
+    })
+
     test('the whole block is tagged project-or-higher', () => {
       const connectSchema = unwrapForMeta(SystematicConfigSchema.shape.connect)
       expect(z.globalRegistry.get(connectSchema)?.trust).toBe(

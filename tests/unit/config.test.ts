@@ -6691,6 +6691,159 @@ describe('connect config field', () => {
     })
   })
 
+  describe('pins', () => {
+    const pin = (overrides: Record<string, unknown> = {}) => ({
+      project: '/work/app',
+      upstream: 'anomalyco/opencode',
+      file: 'package.json',
+      key: 'dependencies.opencode',
+      ...overrides,
+    })
+    const helperRead = (t: ReturnType<typeof setup>, custom = false) =>
+      loadConnectAllowList({
+        homeDir: t.paths.homeDir,
+        userConfigDir: t.paths.userDir,
+        customConfigDir: custom ? t.paths.customDir : null,
+      })
+
+    test('a connect block without pins leaves no pins key', () => {
+      const t = setup()
+      t.user({ connect: { allow_projects: ['/work/a'] } })
+      expect(t.load().config.connect).toEqual({ allow_projects: ['/work/a'] })
+    })
+
+    test('the pins of user, user.local and custom merge as a plain union in layer order', () => {
+      const t = setup()
+      t.user({ connect: { pins: [pin({ key: 'a' }), pin({ key: 'b' })] } })
+      t.userLocal({ connect: { pins: [pin({ key: 'c' })] } })
+      t.custom({ connect: { pins: [pin({ key: 'd' })] } })
+      expect(t.load(true).config.connect).toEqual({
+        allow_projects: [],
+        pins: [
+          pin({ key: 'a' }),
+          pin({ key: 'b' }),
+          pin({ key: 'c' }),
+          pin({ key: 'd' }),
+        ],
+      })
+      expect(t.warnings).toEqual([])
+    })
+
+    test('the same pin in two layers, and twice in one layer, is one pin', () => {
+      const t = setup()
+      t.user({ connect: { pins: [pin(), pin()] } })
+      t.userLocal({ connect: { pins: [pin()] } })
+      t.custom({ connect: { pins: [pin(), pin({ key: 'other' })] } })
+      expect(t.load(true).config.connect?.pins).toEqual([
+        pin(),
+        pin({ key: 'other' }),
+      ])
+    })
+
+    test('two pins with the same project, upstream and key but different files are both kept', () => {
+      const t = setup()
+      t.user({ connect: { pins: [pin({ file: 'a.json' })] } })
+      t.userLocal({ connect: { pins: [pin({ file: 'b.json' })] } })
+      t.custom({ connect: { pins: [pin({ file: 'a.json' })] } })
+      expect(t.load(true).config.connect?.pins).toEqual([
+        pin({ file: 'a.json' }),
+        pin({ file: 'b.json' }),
+      ])
+    })
+
+    test('a pin for a project that is not on the allow list neither widens nor changes the allow list', () => {
+      const t = setup()
+      t.user({
+        connect: {
+          allow_projects: ['/work/app'],
+          pins: [pin({ project: '/work/not-allowed' })],
+        },
+      })
+      const connect = t.load().config.connect
+      expect(connect?.allow_projects).toEqual(['/work/app'])
+      expect(connect?.pins).toEqual([pin({ project: '/work/not-allowed' })])
+    })
+
+    test('the full loader and the helper reader agree on the pins', () => {
+      const t = setup()
+      t.user({ connect: { pins: [pin({ key: 'a' }), pin({ key: 'b' })] } })
+      t.userLocal({ connect: { pins: [pin({ key: 'b' })] } })
+      t.custom({
+        connect: { pins: [pin({ key: 'c' }), pin({ file: 'x.json' })] },
+      })
+      const loaded = t.load(true).config.connect?.pins
+      expect(helperRead(t, true).pins).toEqual(loaded ?? [])
+      expect(loaded).toHaveLength(4)
+    })
+
+    test('a user layer with a bad pin is refused by the full loader like any invalid block, and the helper reader drops the layer whole', () => {
+      const t = setup()
+      t.user({
+        connect: {
+          allow_projects: ['/work/secret-client'],
+          pins: [pin({ project: '/work/secret-client', file: '../escape' })],
+        },
+      })
+      let message = ''
+      try {
+        t.load()
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error)
+      }
+      expect(message).toContain('Invalid Systematic config')
+      expect(message).not.toContain('secret-client')
+      expect(t.warnings.join('\n')).not.toContain('secret-client')
+      const read = helperRead(t)
+      expect(read.pins).toEqual([])
+      expect(read.allowProjects).toEqual([])
+    })
+
+    test('a project connect.pins is stripped with the named warning and contributes nothing', () => {
+      const t = setup()
+      t.user({ connect: { pins: [pin({ key: 'from.user' })] } })
+      t.project({
+        connect: {
+          allow_projects: ['/work/evil'],
+          pins: [pin({ project: '/work/evil', key: 'from.project' })],
+        },
+      })
+      const { config, metadata } = t.load()
+      expect(config.connect).toEqual({
+        allow_projects: [],
+        pins: [pin({ key: 'from.user' })],
+      })
+      expect(JSON.stringify(config)).not.toContain('from.project')
+      expect(JSON.stringify(config)).not.toContain('/work/evil')
+      expect(t.warnings).toHaveLength(1)
+      expect(t.warnings[0]).toContain('`connect`')
+      expect(t.warnings.join('\n')).not.toContain('evil')
+      expect(metadata.protectedFields).toContainEqual({
+        fieldPath: 'connect',
+        outcome: 'blocked',
+        sourceKind: 'project',
+      })
+    })
+
+    test('a project connect.pins adds nothing when the user sets none', () => {
+      const t = setup()
+      t.project({ connect: { pins: [pin({ key: 'from.project' })] } })
+      expect(t.load().config).not.toHaveProperty('connect')
+    })
+
+    test('the helper reader ignores pins in the project file', () => {
+      const t = setup()
+      t.user({ connect: { pins: [pin({ key: 'from.user' })] } })
+      t.project({ connect: { pins: [pin({ key: 'from.project' })] } })
+      const previous = process.cwd()
+      process.chdir(t.paths.projectDir)
+      try {
+        expect(helperRead(t).pins).toEqual([pin({ key: 'from.user' })])
+      } finally {
+        process.chdir(previous)
+      }
+    })
+  })
+
   test('CONFIG_PROTECTED_FIELD_PATHS lists connect', () => {
     expect(CONFIG_PROTECTED_FIELD_PATHS).toContain('connect')
   })

@@ -421,6 +421,51 @@ describe('generateSchemaContent', () => {
     expect(JSON.stringify(definitions)).toContain('"maxLength":4096')
   })
 
+  test('the connect field lists pins with its four required entry fields and no extra keys', () => {
+    const parsed = parseSchema(generateSchemaContentFn('3.0.0'))
+    const definitions = parsed.definitions as Record<
+      string,
+      Record<string, unknown>
+    >
+    const resolve = (node: Record<string, unknown> | undefined) => {
+      const ref = node?.$ref
+      if (typeof ref !== 'string') return node
+      return definitions[ref.replace('#/definitions/', '')]
+    }
+    const props = parsed.properties as Record<string, Record<string, unknown>>
+    const connect = resolve(props.connect)
+    const fields = connect?.properties as Record<
+      string,
+      Record<string, unknown>
+    >
+    // A described field is a wrapper: `allOf` points at the shared shape.
+    const flatten = (
+      node: Record<string, unknown> | undefined,
+    ): Record<string, unknown> => {
+      const base = resolve(node) ?? {}
+      const inner = (base.allOf as Record<string, unknown>[] | undefined)?.[0]
+      return inner === undefined ? base : { ...flatten(inner), ...base }
+    }
+    const pins = flatten(fields.pins)
+    expect(pins.type).toBe('array')
+    expect(pins.maxItems).toBe(64)
+    expect(pins.examples).toBeDefined()
+    const entry = flatten(pins.items as Record<string, unknown>)
+    expect(Object.keys(entry.properties as Record<string, unknown>)).toEqual([
+      'project',
+      'upstream',
+      'file',
+      'key',
+    ])
+    expect([...(entry.required as string[])].sort()).toEqual([
+      'file',
+      'key',
+      'project',
+      'upstream',
+    ])
+    expect(entry.additionalProperties).toBe(false)
+  })
+
   test('the removed workflow_guard key stays a property, marked deprecated, with a description and no suggested value', () => {
     const parsed = parseSchema(generateSchemaContentFn('3.0.0'))
     const props = parsed.properties as Record<string, Record<string, unknown>>

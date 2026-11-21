@@ -21,7 +21,11 @@ import {
   SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
 } from './config-schema.js'
-import type { ConnectGroups, ConnectSettings } from './connect-config.js'
+import {
+  type ConnectGroups,
+  type ConnectSettings,
+  unionPins,
+} from './connect-config.js'
 import {
   REMOVED_BUNDLED_AGENT_CATEGORIES,
   REMOVED_CONFIG_KEYS,
@@ -2212,10 +2216,11 @@ function unionDisabledList(
 }
 
 /**
- * The `connect` block of the chain: the allow lists as one union and the
- * groups merged by name, a later file replacing a same-named group whole.
- * Nothing when no file sets the block, and no `groups` key when no file sets
- * one. The project's block was stripped before this point.
+ * The `connect` block of the chain: the allow lists as one union, the groups
+ * merged by name (a later file replacing a same-named group whole) and the
+ * pins as a plain union deduplicated as written, with no conflict logic.
+ * Nothing when no file sets the block, and no `groups` or `pins` key when no
+ * file sets one. The project's block was stripped before this point.
  */
 function mergeConnect(
   sources: readonly FileConfigSource[],
@@ -2233,6 +2238,10 @@ function mergeConnect(
       groups[name] = [...members]
     }
   }
+  // Pins are a plain union, deduplicated as written. Conflicts between entries
+  // that name different files are decided at `begin`, after each entry's
+  // project has been resolved, so nothing here picks between them.
+  const pins = unionPins(blocks.map((block) => block.pins))
   return {
     connect: {
       allow_projects: blocks.reduce<string[]>(
@@ -2240,6 +2249,7 @@ function mergeConnect(
         [],
       ),
       ...(hasGroups && { groups }),
+      ...(pins.length > 0 && { pins }),
     },
   }
 }

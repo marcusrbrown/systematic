@@ -7,11 +7,12 @@
  * Reads files under `.git/` only, through the contained reader (no symlink is
  * followed, every read is bounded). No git process and no network is used, and
  * nothing in a remote URL except the validated `owner/repo` is ever returned,
- * so credentials in a URL cannot reach a record. Import rule: node builtins
- * and `connect-evidence.ts` only, because the `ce:connect` helper bundles it.
- * Never throws: anything unreadable, unexpected or not GitHub is absent.
+ * so credentials in a URL cannot reach a record. Import rule: node builtins,
+ * `connect-evidence.ts` and `connect-config.ts` only, because the `ce:connect`
+ * helper bundles it. Never throws: anything unreadable, unexpected or not GitHub is absent.
  */
 
+import { isGithubOwnerRepo } from './connect-config.js'
 import { readContainedFile } from './connect-evidence.js'
 
 const MAX_CONFIG_BYTES = 1024 * 1024
@@ -28,31 +29,10 @@ export interface RepoIdentity {
 
 // ── The remote ──────────────────────────────────────────────────────────────
 
-/** A GitHub owner: 1 to 39 letters, digits and hyphens, with no hyphen at either end. */
-const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/
-/** A GitHub repository name: 1 to 100 letters, digits, `.`, `_` and `-`. */
-const REPO = /^[A-Za-z0-9._-]{1,100}$/
-
-/**
- * `owner/repo`, shaped as GitHub allows and nothing else. The one rule for a
- * repository that is printed into a command, put in an API path or recorded as
- * provenance, so every `connect-*` module and the helper agree on it. It checks
- * the shape only and keeps the case; it says nothing about whether the
- * repository exists.
- */
-export function isGithubOwnerRepo(value: string): boolean {
-  const parts = value.split('/')
-  const [owner, name] = parts
-  return (
-    parts.length === 2 &&
-    owner !== undefined &&
-    name !== undefined &&
-    OWNER.test(owner) &&
-    REPO.test(name) &&
-    name !== '.' &&
-    name !== '..'
-  )
-}
+// `isGithubOwnerRepo` is defined in `connect-config.ts`, which the `connect.pins`
+// guard needs and which this module's own imports already depend on, so the
+// shape rule lives below both. It is re-exported so every caller keeps one name.
+export { isGithubOwnerRepo }
 
 const HTTPS_FORM = /^https:\/\/(?:[^/@\s]*@)?github\.com\/(\S+)$/i
 const SSH_URL_FORM = /^ssh:\/\/(?:[A-Za-z0-9._-]+@)?github\.com\/(\S+)$/i
