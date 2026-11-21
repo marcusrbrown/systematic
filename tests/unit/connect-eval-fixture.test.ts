@@ -399,13 +399,8 @@ describe('pre-registration', () => {
   test('names the frozen models and the host version', () => {
     expect(text).toContain('claude-sonnet-5-5')
     expect(text).toContain('gpt-5.6-luna')
-    const pins = JSON.parse(
-      fs.readFileSync(
-        path.join(ROOT, 'scripts/opencode-host-pins.json'),
-        'utf8',
-      ),
-    ) as { v1: string }
-    expect(text).toContain(`OpenCode v1 ${pins.v1}`)
+    // The evaluation used the pin at registration, not the rolling CI pin.
+    expect(text).toMatch(/^- Host: OpenCode v1 1\.19\.5,/m)
   })
 
   test('names the fresh project only as one chosen by Marcus', () => {
