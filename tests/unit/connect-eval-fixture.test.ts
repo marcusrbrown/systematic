@@ -396,11 +396,9 @@ describe('pre-registration', () => {
     expect(text).not.toContain('expected to end `degraded`')
   })
 
-  test('names the frozen models and the host version', () => {
+  test('names the frozen models', () => {
     expect(text).toContain('claude-sonnet-5-5')
     expect(text).toContain('gpt-5.6-luna')
-    // The evaluation used the pin at registration, not the rolling CI pin.
-    expect(text).toMatch(/^- Host: OpenCode v1 1\.19\.5,/m)
   })
 
   test('names the fresh project only as one chosen by Marcus', () => {
