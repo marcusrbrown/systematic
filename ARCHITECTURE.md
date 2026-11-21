@@ -492,10 +492,8 @@ still requires a matching validator change. `checkSolutionLifecycle` additionall
 `status: superseded` doc to carry a `superseded_by` repo-root path naming an existing doc under
 `docs/solutions/` (not `README.md`) that parses and is not itself superseded; that one rule rules out
 chains, cycles and self-reference, and `superseded_by` on any other doc is ignored.
-`checkSolutionCitations` verifies every `path:line` citation in `docs/solutions/**`: the cited
-file exists as a regular file outside `dist/`, `node_modules/`, `.slim/`, `.context/` and `.worktrees/`, the
-line or range is inside it, the span is not only blank or comment lines, and a compound identifier
-named in the citing sentence is inside the span. Must pass before any release.
+The gate does not verify `path:line` citations in `docs/solutions/**`: a plain edit to a cited file
+cannot fail it. Must pass before any release.
 
 **Generated-surface drift detection** (`scripts/lib/generated-surfaces.ts`, CLI
 `scripts/generated-surfaces.ts`) — one ordered list declares every committed generated surface:
