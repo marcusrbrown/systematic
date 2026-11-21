@@ -464,7 +464,8 @@ function looseMatches(
 
 /**
  * Whether a packed tag names `head`, directly or through a tag object.
- * Undefined means it cannot be told. An entry with no `^` line whose id is not
+ * Undefined means it cannot be told, as it is for an entry whose id is `head`
+ * but whose `^` line names another object. An entry with no `^` line whose id is not
  * `head` may still be an annotated tag at `head` unless the file is fully
  * peeled, so its object is read under the same budget as a loose ref's;
  * when that read fails, the tag set is unresolved.
@@ -476,6 +477,15 @@ function packedEntryNamesHead(
   packed: PackedTags,
   budget: InflateBudget,
 ): boolean | undefined {
+  // An id of HEAD with a peeled line that differs fits no tag: a tag object
+  // peels to HEAD, and a lightweight tag at HEAD has no peeled line.
+  if (
+    entry.id === head &&
+    entry.peeled !== undefined &&
+    entry.peeled !== head
+  ) {
+    return undefined
+  }
   if (entry.id === head || entry.peeled === head) return true
   if (entry.peeled !== undefined || packed.fullyPeeled) return false
   return looseObjectNamesHead(mainRoot, entry.id, head, budget)

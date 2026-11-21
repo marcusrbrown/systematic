@@ -428,7 +428,7 @@ type PinValueResultLike = ReturnType<PinReaders['readPin']>
 
 /** The fixed closing sentence, written out here so a wording change is a deliberate test edit. */
 function instruction(upstream: string): string {
-  return `Check claims about ${upstream} at both versions; if a claim holds at one and not the other, report a \`code-mismatch\` with reason \`unscoped\` and cite the evidence from the other checkout.`
+  return `Check claims about ${upstream} at both versions; a claim that holds at the pinned version, fails at the other checkout and names no version is \`unscoped\`: report a \`code-mismatch\` with reason \`unscoped\` and cite the evidence from the other checkout; a claim that fails at the pinned version is \`stale\`.`
 }
 
 const LINE_V1 = `pin: ${AGENT} pins ${UPSTREAM} at 9999.3.2 (pin.json); allowed checkout ${V1} is ${UPSTREAM} at v1.4.2. ${instruction(UPSTREAM)}`
@@ -442,6 +442,22 @@ describe('resolvePins: the line', () => {
     expect(line).toContain('report a `code-mismatch` with reason `unscoped`')
     expect(line).toContain('cite the evidence from the other checkout')
     expect(line).not.toContain('\n')
+  })
+
+  it('names unscoped for the other checkout first and stale for the pin second, as the researcher contract does', () => {
+    const { readers } = spy()
+    const [line = ''] =
+      resolvePins([PIN], [agent, v1], readers).hints[agent.key] ?? []
+    const unscoped = line.indexOf(
+      'holds at the pinned version, fails at the other checkout and names no version is `unscoped`',
+    )
+    const stale = line.indexOf(
+      'a claim that fails at the pinned version is `stale`',
+    )
+    expect(unscoped).toBeGreaterThan(-1)
+    expect(stale).toBeGreaterThan(unscoped)
+    // A claim failing at the pin is stale: `unscoped` never follows that clause.
+    expect(line.slice(stale)).not.toContain('unscoped')
   })
 
   it('renders one fixed line under the pinning project key', () => {
@@ -663,6 +679,23 @@ describe('resolvePins: identity, collapse and conflict', () => {
     expect(result.hints).toEqual({})
     expect(result.notes).toEqual([{ code: 'pin-conflict' }])
     expect(pinReads).toEqual([])
+  })
+
+  it('gives no note for a conflicting pair whose upstream has no selected checkout', () => {
+    const { readers, pinReads, tagReads } = spy()
+    const conflicting = [PIN, { ...PIN, file: 'other.json' }]
+    // No project of the upstream is selected at all.
+    expect(resolvePins(conflicting, [agent], readers)).toEqual({
+      hints: {},
+      notes: [],
+    })
+    // The pinning project is the only checkout of the upstream: not the other version.
+    const own = proj(AGENT, { repo: UPSTREAM })
+    expect(resolvePins(conflicting, [own], readers).notes).toEqual([])
+    // The pinning project is not selected, so the pins match nothing.
+    expect(resolvePins(conflicting, [v1], readers).notes).toEqual([])
+    expect(pinReads).toEqual([])
+    expect(tagReads).toEqual([])
   })
 
   it('drops a group of files A, B, A across three layers, not a majority pick', () => {

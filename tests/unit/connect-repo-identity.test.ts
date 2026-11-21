@@ -730,9 +730,27 @@ describe('readTagAtHead', () => {
     const { work, head } = createClone('https://github.com/o/r.git')
     fs.writeFileSync(
       path.join(work, '.git/packed-refs'),
-      `${FULLY_PEELED}${'b'.repeat(40)} refs/tags/other\n${head} refs/tags/at-head\n^${'c'.repeat(40)}\n`,
+      `${FULLY_PEELED}${'b'.repeat(40)} refs/tags/other\n${'a'.repeat(40)} refs/tags/at-head\n^${head}\n`,
     )
     expect(readTagAtHead(work, head)).toEqual(tag('at-head'))
+  })
+
+  it('is unknown for a packed tag whose id is HEAD but whose peeled line names another object', () => {
+    const { work, head } = createClone('https://github.com/o/r.git')
+    const packed = path.join(work, '.git/packed-refs')
+    // A tag object at HEAD peels to HEAD, and a lightweight tag at HEAD has no
+    // peeled line. An id of HEAD with a different peeled id is neither.
+    fs.writeFileSync(
+      packed,
+      `${FULLY_PEELED}${head} refs/tags/odd\n^${'c'.repeat(40)}\n`,
+    )
+    expect(readTagAtHead(work, head)).toEqual(UNKNOWN)
+    // The same contradiction beside a consistent tag leaves the set unresolved.
+    fs.writeFileSync(
+      packed,
+      `${FULLY_PEELED}${head} refs/tags/odd\n^${'c'.repeat(40)}\n${'a'.repeat(40)} refs/tags/real\n^${head}\n`,
+    )
+    expect(readTagAtHead(work, head)).toEqual(UNKNOWN)
   })
 
   describe('an unpeeled packed tag', () => {

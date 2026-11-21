@@ -244,7 +244,7 @@ function renderLine(parts: {
   readonly tag: string
 }): string {
   const { projectRoot, upstream, value, file, checkoutRoot, tag } = parts
-  return `pin: ${projectRoot} pins ${upstream} at ${value} (${file}); allowed checkout ${checkoutRoot} is ${upstream} at ${tag}. Check claims about ${upstream} at both versions; if a claim holds at one and not the other, report a \`code-mismatch\` with reason \`unscoped\` and cite the evidence from the other checkout.`
+  return `pin: ${projectRoot} pins ${upstream} at ${value} (${file}); allowed checkout ${checkoutRoot} is ${upstream} at ${tag}. Check claims about ${upstream} at both versions; a claim that holds at the pinned version, fails at the other checkout and names no version is \`unscoped\`: report a \`code-mismatch\` with reason \`unscoped\` and cite the evidence from the other checkout; a claim that fails at the pinned version is \`stale\`.`
 }
 
 function tagLabel(tag: TagAtHead): string {
@@ -353,8 +353,8 @@ interface ReadyGroup {
 
 /**
  * The group with its pin value read, or undefined when it gives no line. A
- * group with two files is a conflict. A group with no selected checkout of the
- * upstream gives nothing and reads nothing. Roots that cannot be rendered cost
+ * group with no selected checkout of the upstream gives nothing, no note and
+ * no read, whatever its files. A group with two files is then a conflict. Roots that cannot be rendered cost
  * their pair a line and add one `pin-value-invalid` note; only then is the pin
  * value read, once. No checkout's tag is read here.
  */
@@ -365,15 +365,16 @@ function readyGroup(
   addNote: (note: PinNote) => void,
 ): ReadyGroup | undefined {
   const { pinning, upstream } = group
+  const checkouts = projects.filter(
+    (item) => item.root !== pinning.root && item.repo === upstream,
+  )
+  // A pin with no selected checkout of its upstream is silent, a conflict too.
+  if (checkouts.length === 0) return undefined
   const [file] = group.files
   if (group.files.size > 1 || file === undefined) {
     addNote({ code: 'pin-conflict' })
     return undefined
   }
-  const checkouts = projects.filter(
-    (item) => item.root !== pinning.root && item.repo === upstream,
-  )
-  if (checkouts.length === 0) return undefined
   const invalid = (): void =>
     addNote({ code: 'pin-value-invalid', project: pinning.key })
   if (!usableDeclaration(file, pinning)) {
@@ -453,9 +454,10 @@ function compareGroups(a: PinGroup, b: PinGroup): number {
  * nothing a selected project does not own.
  *
  * Order: match each pin to a selected project, group by (resolved root,
- * upstream, key), drop a group whose entries name different files (one
- * `pin-conflict` note, never a pick), find the selected checkouts of the
- * upstream other than the pinning project, and only then read the pin value
+ * upstream, key), find the selected checkouts of the upstream other than the
+ * pinning project, drop a group with none, drop a group whose entries name
+ * different files (one `pin-conflict` note, never a pick), and only then read
+ * the pin value
  * and each checkout's tag, a checkout's tag once however many pins name it.
  * Groups are resolved in sorted order and resolution stops once the hint cap
  * is passed, so work is bounded by what can be returned. A pin with no

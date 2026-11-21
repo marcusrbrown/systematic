@@ -5438,7 +5438,7 @@ describe('begin with dependency pins', () => {
   }
 
   function lineFor(world: World, tag = 'v1.2.0', value = '2.0.0'): string {
-    return `pin: ${world.target} pins ${UPSTREAM} at ${value} (${PIN_PATH}); allowed checkout ${world.source} is ${UPSTREAM} at ${tag}. Check claims about ${UPSTREAM} at both versions; if a claim holds at one and not the other, report a \`code-mismatch\` with reason \`unscoped\` and cite the evidence from the other checkout.`
+    return `pin: ${world.target} pins ${UPSTREAM} at ${value} (${PIN_PATH}); allowed checkout ${world.source} is ${UPSTREAM} at ${tag}. Check claims about ${UPSTREAM} at both versions; a claim that holds at the pinned version, fails at the other checkout and names no version is \`unscoped\`: report a \`code-mismatch\` with reason \`unscoped\` and cite the evidence from the other checkout; a claim that fails at the pinned version is \`stale\`.`
   }
 
   it('returns the helper-rendered line under the pinning project key, with no note and a begun run', () => {

@@ -151,7 +151,7 @@ The tag is context, not attestation. The working tree can differ from the tag, w
 For each pin and each selected checkout of the upstream (other than the pinning project itself), the helper renders one fixed line from values that passed strict charsets. A value that fails is rejected, never cleaned up:
 
 ```text
-pin: /home/me/src/github.com/me/app pins upstream-org/host-lib at 3.1.0 (config/pins.json); allowed checkout /home/me/src/github.com/upstream-org/host-lib-old is upstream-org/host-lib at 1.4.0. Check claims about upstream-org/host-lib at both versions; if a claim holds at one and not the other, report a `code-mismatch` with reason `unscoped` and cite the evidence from the other checkout.
+pin: /home/me/src/github.com/me/app pins upstream-org/host-lib at 3.1.0 (config/pins.json); allowed checkout /home/me/src/github.com/upstream-org/host-lib-old is upstream-org/host-lib at 1.4.0. Check claims about upstream-org/host-lib at both versions; a claim that holds at the pinned version, fails at the other checkout and names no version is `unscoped`: report a `code-mismatch` with reason `unscoped` and cite the evidence from the other checkout; a claim that fails at the pinned version is `stale`.
 ```
 
 Both roots are the ones the run lists under its projects. The skill copies a line, unchanged, into the dispatch of each family that holds a rule of the pinning project, and writes none of its own. A run keeps at most 8 lines, in a fixed order that does not depend on layer or filesystem order. Equal versions still produce a line: the helper states the versions and the researcher judges them. A line is a hint, not evidence. A candidate it leads to still has to quote evidence that validation checks, and the helper never reports a mismatch from a line.
