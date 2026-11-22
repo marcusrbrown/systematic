@@ -201,7 +201,7 @@ Durable-output search
   src/lib/search-tool.ts           — host adapters for `systematic_search`: OpenCode v1 (zod), OpenCode v2 (JSON Schema installer, `codemode:false`) and Pi (typebox, also handed to delegates as a custom tool); host I/O only, the core does the rest
   src/lib/search-cli.ts            — `systematic search` and the `systematic-search` bin's shared runner: flag parsing, an injected settings loader, exit codes, the core's text unchanged (imports only `search-core.ts`)
   src/lib/main-module.ts           — the realpath entry guard that replaces `import.meta.main` (Node gained it only in 24.2); used by `cli.ts`, `claude-code-validator-bin.ts` and `claude-code-search.ts`
-  src/lib/opencode-config-dir.ts   — `opencodeUserConfigDir(homeDir, env)`: the OpenCode user config directory by the host's own rule (`$XDG_CONFIG_HOME/opencode`, else `<home>/.config/opencode`; empty counts as unset, relative passes through); the one default every loader, the CLI and the helper bundles share (node builtins only)
+  src/lib/opencode-config-dir.ts   — `opencodeUserConfigDir(homeDir, env)`: the OpenCode user config directory by the host's own rule (`$XDG_CONFIG_HOME/opencode`, else `<home>/.config/opencode`; an empty or non-absolute value counts as unset, which departs from the host only for a value the XDG spec calls invalid and keeps a checkout from planting a user config); the one default every loader, the CLI and the helper bundles share (node builtins only)
 
 Review artifact contract
   src/lib/review-artifact-schema.ts      — Zod source of truth for the ce:review run-level artifact

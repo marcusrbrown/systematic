@@ -51,13 +51,10 @@ command -v jq >/dev/null || { echo "ERROR: jq is required (model extraction, CLI
 mkdir -p "$OUT_DIR"
 CONFIG_DIR="$(mktemp -d)"
 PROJECT_DIR="$(mktemp -d)"     # fresh empty workspace, same shape for both arms
-# Both arms run under a private temp HOME. Redirecting only XDG_CONFIG_HOME is
-# not enough: Systematic reads its user config from <os.homedir()>/.config/opencode
-# (plus OPENCODE_CONFIG_DIR), so the real ~/.config/opencode/systematic.jsonc
-# would still reach the treatment arm and re-route subagents to other models.
-# A private HOME makes homedir() point at an empty .config/opencode. It also
-# hides the user's global opencode.json (MCP servers) and ~/.agents, ~/.claude
-# skill dirs from both arms.
+# Both arms run under a private temp HOME with XDG_CONFIG_HOME inside it, so
+# Systematic and OpenCode both find an empty .config/opencode and the real
+# systematic.jsonc never re-routes the treatment arm's subagents. The private
+# HOME also hides the user's ~/.agents and ~/.claude skill dirs from both arms.
 # The data and cache dirs are pinned to the user's real ones, because they hold
 # auth.json (authenticates the paid model) and the models.dev catalog (resolves
 # the model id); redirecting them gives ProviderModelNotFoundError. auth.json is

@@ -5,8 +5,11 @@ import { opencodeUserConfigDir } from '../../src/lib/opencode-config-dir.js'
 // The host rule (OpenCode v1 `packages/core/src/global.ts` via `xdg-basedir`
 // 5.1.0, v2 `packages/util/src/global-roots.ts`):
 //   config = path.join(env.XDG_CONFIG_HOME || path.join(home, '.config'), 'opencode')
-// An empty value is falsy and falls back to home; a relative value is used
-// verbatim and never resolved against the current directory.
+// An empty value is falsy and falls back to home. The one deliberate
+// difference: the XDG Base Directory spec calls a non-absolute value invalid
+// and says to ignore it, and the host would resolve it against the working
+// directory, so a checkout could plant a trusted user config. Here a
+// non-absolute value counts as unset.
 describe('opencodeUserConfigDir', () => {
   const home = path.join(path.sep, 'home', 'someone')
 
@@ -32,16 +35,12 @@ describe('opencodeUserConfigDir', () => {
     )
   })
 
-  test('passes a relative XDG_CONFIG_HOME through unresolved, as the host does', () => {
-    expect(opencodeUserConfigDir(home, { XDG_CONFIG_HOME: 'rel/cfg' })).toBe(
-      path.join('rel/cfg', 'opencode'),
-    )
-  })
-
-  test('does not trim a whitespace-only value, as the host does not', () => {
-    expect(opencodeUserConfigDir(home, { XDG_CONFIG_HOME: ' ' })).toBe(
-      path.join(' ', 'opencode'),
-    )
+  test('ignores a relative XDG_CONFIG_HOME, which the XDG spec calls invalid', () => {
+    for (const relative of ['rel/cfg', 'rel', '.', './cfg', '../cfg', ' ']) {
+      expect(opencodeUserConfigDir(home, { XDG_CONFIG_HOME: relative })).toBe(
+        path.join(home, '.config', 'opencode'),
+      )
+    }
   })
 
   test('reads process.env when no environment is injected', () => {
