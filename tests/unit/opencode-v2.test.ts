@@ -336,6 +336,29 @@ describe('setupOpenCodeV2', () => {
     expect(captured?.config.skills_as_commands).toBe(true)
   })
 
+  test('OPENCODE_CONFIG_DIR with surrounding whitespace: discovers skills in the trimmed directory and still in the user directory', async () => {
+    const custom = path.join(tempRoot, 'custom-config')
+    const writeSkill = (root: string, name: string): void => {
+      fs.mkdirSync(path.join(root, 'skills', name), { recursive: true })
+      fs.writeFileSync(
+        path.join(root, 'skills', name, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: ${name} skill\n---\n# ${name}\n`,
+      )
+    }
+    writeSkill(custom, 'fromcustom')
+    writeSkill(path.join(homeDir, '.config/opencode'), 'fromuser')
+    const previous = process.env.OPENCODE_CONFIG_DIR
+    process.env.OPENCODE_CONFIG_DIR = `  ${custom}  `
+    try {
+      const captured = await captureWithXdg(path.join(homeDir, '.config'))
+      expect(captured?.plan.commands).toHaveProperty('fromcustom')
+      expect(captured?.plan.commands).toHaveProperty('fromuser')
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
+      else process.env.OPENCODE_CONFIG_DIR = previous
+    }
+  })
+
   test('no project directory loads user-level config only and reports one diagnostic', async () => {
     // Project configs that must not be read: the project's own, and the one
     // under the home directory that discovery is rooted at without a project.

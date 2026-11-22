@@ -2482,9 +2482,13 @@ Discovered body for ${name}.`,
         expect(config.command?.fromxdg).toBeUndefined()
       })
 
-      test('OPENCODE_CONFIG_DIR with surrounding whitespace: discovers skills in the trimmed directory', async () => {
+      test('OPENCODE_CONFIG_DIR with surrounding whitespace: discovers skills in the trimmed directory and still in the user directory', async () => {
         const custom = path.join(testDir, 'custom-config')
         writeDiscoveredSkill(path.join(custom, 'skills'), 'fromcustom')
+        writeDiscoveredSkill(
+          path.join(injectedHome(), '.config/opencode/skills'),
+          'fromuser',
+        )
         const previous = process.env.OPENCODE_CONFIG_DIR
         process.env.OPENCODE_CONFIG_DIR = `  ${custom}  `
         try {
@@ -2492,6 +2496,7 @@ Discovered body for ${name}.`,
             homeDir: injectedHome(),
           })
           expect(config.command?.fromcustom).toBeDefined()
+          expect(config.command?.fromuser).toBeDefined()
         } finally {
           if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
           else process.env.OPENCODE_CONFIG_DIR = previous
