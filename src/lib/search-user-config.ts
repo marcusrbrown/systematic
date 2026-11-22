@@ -3,7 +3,7 @@
  * user-level file selection, and a reader that never touches project config.
  *
  * Import rule: this module may import only zod, jsonc-parser, node builtins,
- * `search-bounded-read.ts` (node builtins only) and TYPES from `search-core.ts`. It must never import `config.ts` or
+ * `opencode-config-dir.ts` and `search-bounded-read.ts` (each node builtins only) and TYPES from `search-core.ts`. It must never import `config.ts` or
  * `config-schema.ts`; both of those import this module, never the reverse.
  * The `systematic-search` bin bundles it, and pulling in `config.ts` would
  * drag the whole config loader (and its jsonc build) into that bundle.
@@ -36,6 +36,7 @@ import {
   printParseErrorCode,
 } from 'jsonc-parser'
 import { z } from 'zod'
+import { opencodeUserConfigDir } from './opencode-config-dir.js'
 import { readBytesBounded } from './search-bounded-read.js'
 import {
   type ExcludeIssue,
@@ -865,16 +866,17 @@ export interface UserLevelConfigDirs {
 }
 
 /**
- * The user-level config directories: `<home>/.config/opencode`, and the
- * `OPENCODE_CONFIG_DIR` directory when it is set. The variable is trimmed and
+ * The user-level config directories: `$XDG_CONFIG_HOME/opencode` when that is
+ * set, else `<home>/.config/opencode` (OpenCode's own rule, see
+ * `opencode-config-dir.ts`), and the `OPENCODE_CONFIG_DIR` directory when it
+ * is set. The variable is trimmed and
  * a blank value counts as unset. `config.ts` and the reader both call this.
  */
 export function resolveUserLevelConfigDirs(
   options?: UserLevelConfigDirOptions,
 ): UserLevelConfigDirs {
   const homeDir = options?.homeDir ?? os.homedir()
-  const userConfigDir =
-    options?.userConfigDir ?? path.join(homeDir, '.config/opencode')
+  const userConfigDir = options?.userConfigDir ?? opencodeUserConfigDir(homeDir)
   const rawCustom =
     options !== undefined && Object.hasOwn(options, 'customConfigDir')
       ? options.customConfigDir?.trim()

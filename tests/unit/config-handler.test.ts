@@ -2407,6 +2407,81 @@ Discovered body for ${name}.`,
         )
       }
 
+      // `os.homedir()` is mocked to `<testDir>/home` for the whole suite, so the
+      // injected home below is a different directory: a handler that ignored
+      // `homeDir` would look in the mocked one and miss the skill planted here.
+      function injectedHome(): string {
+        return path.join(testDir, 'injected-home')
+      }
+
+      async function runHandler(
+        xdg: string | undefined,
+        overrides: { opencodeConfigDir?: string; homeDir?: string } = {},
+      ): Promise<Config> {
+        const config: Config = {}
+        const previous = process.env.XDG_CONFIG_HOME
+        if (xdg === undefined) delete process.env.XDG_CONFIG_HOME
+        else process.env.XDG_CONFIG_HOME = xdg
+        try {
+          await createConfigHandler({
+            directory: projectDir,
+            bundledSkillsDir: path.join(bundledDir, 'skills'),
+            bundledAgentsDir: path.join(bundledDir, 'agents'),
+            bundledCommandsDir: path.join(bundledDir, 'commands'),
+            ...overrides,
+          })(config)
+        } finally {
+          if (previous === undefined) delete process.env.XDG_CONFIG_HOME
+          else process.env.XDG_CONFIG_HOME = previous
+        }
+        return config
+      }
+
+      test('XDG_CONFIG_HOME: discovers skills in $XDG_CONFIG_HOME/opencode/skills, not under the injected home', async () => {
+        const xdg = path.join(testDir, 'xdg')
+        writeDiscoveredSkill(path.join(xdg, 'opencode/skills'), 'fromxdg')
+        writeDiscoveredSkill(
+          path.join(injectedHome(), '.config/opencode/skills'),
+          'fromhome',
+        )
+
+        const config = await runHandler(xdg, { homeDir: injectedHome() })
+
+        expect(config.command?.fromxdg).toBeDefined()
+        expect(config.command?.fromhome).toBeUndefined()
+      })
+
+      test('no XDG_CONFIG_HOME: discovers skills under the injected home, not the process home', async () => {
+        writeDiscoveredSkill(
+          path.join(injectedHome(), '.config/opencode/skills'),
+          'fromhome',
+        )
+        writeDiscoveredSkill(
+          path.join(testDir, 'home/.config/opencode/skills'),
+          'fromprocesshome',
+        )
+
+        const config = await runHandler(undefined, { homeDir: injectedHome() })
+
+        expect(config.command?.fromhome).toBeDefined()
+        expect(config.command?.fromprocesshome).toBeUndefined()
+      })
+
+      test('XDG_CONFIG_HOME: an explicit opencodeConfigDir still wins', async () => {
+        const xdg = path.join(testDir, 'xdg')
+        const explicit = path.join(testDir, 'explicit-config')
+        writeDiscoveredSkill(path.join(xdg, 'opencode/skills'), 'fromxdg')
+        writeDiscoveredSkill(path.join(explicit, 'skills'), 'fromexplicit')
+
+        const config = await runHandler(xdg, {
+          homeDir: injectedHome(),
+          opencodeConfigDir: explicit,
+        })
+
+        expect(config.command?.fromexplicit).toBeDefined()
+        expect(config.command?.fromxdg).toBeUndefined()
+      })
+
       test('model-invocable discovered skill inlines its full body', async () => {
         writeDiscoveredSkill(path.join(projectDir, '.opencode/skills'), 'foo', {
           description: 'A discovered skill',

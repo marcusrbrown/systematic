@@ -37,6 +37,7 @@ import {
 } from '../../src/lib/routing-resolver.js'
 import { loadProjectSearchSources } from '../../src/lib/search-user-config.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
+import { withXdgConfigHome } from '../helpers/xdg-env.js'
 
 const OBSERVED_AT = '2026-08-13T12:34:56.000Z'
 
@@ -89,6 +90,47 @@ describe('config', () => {
   }
 
   describe('loadConfig', () => {
+    describe('XDG_CONFIG_HOME', () => {
+      test('reads the user config from $XDG_CONFIG_HOME/opencode, not <home>/.config/opencode', () => {
+        const xdg = path.join(testDir, 'xdg')
+        writeUserConfig({ bootstrap: { enabled: false } })
+        fs.mkdirSync(path.join(xdg, 'opencode'), { recursive: true })
+        fs.writeFileSync(
+          path.join(xdg, 'opencode', 'systematic.json'),
+          JSON.stringify({ skills_as_commands: false }),
+        )
+
+        const result = withXdgConfigHome(xdg, () =>
+          loadConfig(testDir, hermeticLoad()),
+        )
+
+        expect(result.skills_as_commands).toBe(false)
+        expect(result.bootstrap.enabled).toBe(true)
+      })
+
+      test('an explicit userConfigDir still wins', () => {
+        const xdg = path.join(testDir, 'xdg')
+        const userConfigDir = path.join(testDir, 'explicit')
+        fs.mkdirSync(path.join(xdg, 'opencode'), { recursive: true })
+        fs.writeFileSync(
+          path.join(xdg, 'opencode', 'systematic.json'),
+          JSON.stringify({ skills_as_commands: false }),
+        )
+        fs.mkdirSync(userConfigDir, { recursive: true })
+        fs.writeFileSync(
+          path.join(userConfigDir, 'systematic.json'),
+          JSON.stringify({ bootstrap: { enabled: false } }),
+        )
+
+        const result = withXdgConfigHome(xdg, () =>
+          loadConfig(testDir, { ...hermeticLoad(), userConfigDir }),
+        )
+
+        expect(result.bootstrap.enabled).toBe(false)
+        expect(result.skills_as_commands).toBe(true)
+      })
+    })
+
     describe('no config files', () => {
       test('returns DEFAULT_CONFIG when no config files exist', () => {
         const result = loadConfig(testDir)
@@ -2160,6 +2202,30 @@ describe('config', () => {
       expect(result.userDir).toBe(
         path.join(os.homedir(), '.config/opencode/systematic'),
       )
+    })
+
+    test('XDG_CONFIG_HOME moves the user config file and user dir to $XDG_CONFIG_HOME/opencode', () => {
+      const xdg = path.join(testDir, 'xdg')
+      const result = withXdgConfigHome(xdg, () => getConfigPaths(testDir))
+      expect(result.userConfig).toBe(
+        path.join(xdg, 'opencode', 'systematic.json'),
+      )
+      expect(result.userLocalConfig).toBe(
+        path.join(xdg, 'opencode', 'systematic.local.json'),
+      )
+      expect(result.userDir).toBe(path.join(xdg, 'opencode', 'systematic'))
+    })
+
+    test('an explicit userConfigDir wins over XDG_CONFIG_HOME for the file and the dir', () => {
+      const xdg = path.join(testDir, 'xdg')
+      const userConfigDir = path.join(testDir, 'explicit')
+      const result = withXdgConfigHome(xdg, () =>
+        getConfigPaths(testDir, { userConfigDir }),
+      )
+      expect(result.userConfig).toBe(
+        path.join(userConfigDir, 'systematic.json'),
+      )
+      expect(result.userDir).toBe(path.join(userConfigDir, 'systematic'))
     })
 
     test('returns project dir path in <projectDir>/.opencode/systematic/', () => {

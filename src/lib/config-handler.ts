@@ -1,5 +1,4 @@
 import os from 'node:os'
-import path from 'node:path'
 import type { Config } from '@opencode-ai/plugin'
 import type { AgentConfig } from '@opencode-ai/sdk'
 import {
@@ -9,6 +8,7 @@ import {
   type PlannedAgent,
 } from './asset-plan.js'
 import { loadConfigWithSources } from './config.js'
+import { opencodeUserConfigDir } from './opencode-config-dir.js'
 import { READ_ONLY_AGENT_NAMES } from './opencode-v2-tool-guard.js'
 import { formatSkillCommandName } from './skill-loader.js'
 import { isRecord, type PermissionSetting } from './validation.js'
@@ -24,7 +24,7 @@ export interface ConfigHandlerDeps {
   bundledCommandsDir: string
   /** Home directory for discovered-skill lookups. Defaults to `os.homedir()`; inject a temp dir in tests. */
   homeDir?: string
-  /** OpenCode global config directory override for discovered-skill lookups. Defaults to `<homeDir>/.config/opencode`. */
+  /** OpenCode global config directory override for discovered-skill lookups. Defaults to `$XDG_CONFIG_HOME/opencode` when set, else `<homeDir>/.config/opencode`. */
   opencodeConfigDir?: string
 }
 
@@ -422,7 +422,7 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
     deps
   const homeDir = deps.homeDir ?? os.homedir()
   const opencodeConfigDir =
-    deps.opencodeConfigDir ?? path.join(homeDir, '.config/opencode')
+    deps.opencodeConfigDir ?? opencodeUserConfigDir(homeDir)
   const opencodeConfigDirOverride = process.env.OPENCODE_CONFIG_DIR?.trim()
     ? process.env.OPENCODE_CONFIG_DIR
     : undefined

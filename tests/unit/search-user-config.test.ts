@@ -28,6 +28,7 @@ import {
   writeUserSearch,
 } from '../helpers/search-external-env.js'
 import { createTempDirTracker } from '../helpers/temp-dirs.js'
+import { withXdgConfigHome } from '../helpers/xdg-env.js'
 
 const temp = createTempDirTracker()
 
@@ -798,6 +799,39 @@ describe('resolveUserLevelConfigDirs', () => {
     expect(dirs.homeDir).toBe(os.homedir())
     expect(dirs.userConfigDir).toBe(path.join(os.homedir(), '.config/opencode'))
     expect(dirs.customConfigDir).toBeUndefined()
+  })
+
+  test('follows XDG_CONFIG_HOME for the user directory, as OpenCode does', () => {
+    // A fresh temp root holds no JSONC files, and `customConfigDir: null`
+    // keeps the machine's OPENCODE_CONFIG_DIR out of the selection.
+    const xdg = temp.track(
+      fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'search-xdg-'))),
+    )
+    const home = path.join(xdg, 'home')
+    withXdgConfigHome(xdg, () => {
+      const dirs = resolveUserLevelConfigDirs({
+        homeDir: home,
+        customConfigDir: null,
+      })
+      expect(dirs.userConfigDir).toBe(path.join(xdg, 'opencode'))
+      expect(dirs.homeDir).toBe(home)
+      expect(dirs.customConfigDir).toBeUndefined()
+      expect(
+        selectUserLevelConfigFiles(dirs).files.map((file) => file.path),
+      ).toEqual([
+        path.join(xdg, 'opencode', 'systematic.json'),
+        path.join(xdg, 'opencode', 'systematic.local.json'),
+      ])
+    })
+  })
+
+  test('an explicit userConfigDir wins over XDG_CONFIG_HOME', () => {
+    withXdgConfigHome('/xdg/cfg', () => {
+      expect(
+        resolveUserLevelConfigDirs({ homeDir: '/h', userConfigDir: '/u' })
+          .userConfigDir,
+      ).toBe('/u')
+    })
   })
 
   test('trims OPENCODE_CONFIG_DIR and treats blank as unset', () => {

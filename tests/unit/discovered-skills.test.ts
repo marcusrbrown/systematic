@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { discoverSkills } from '../../src/lib/discovered-skills.ts'
+import { withXdgConfigHome } from '../helpers/xdg-env.ts'
 
 function writeSkill(
   dir: string,
@@ -243,6 +244,35 @@ describe('discoverSkills', () => {
 
     expect(result.map((s) => s.name)).toEqual(['customcfg'])
     expect(result[0]?.root).toBe('global-opencode-config')
+  })
+
+  test('XDG_CONFIG_HOME: the default global config dir is $XDG_CONFIG_HOME/opencode, not <home>/.config/opencode', () => {
+    const xdg = path.join(root, 'xdg')
+    writeSkill(path.join(xdg, 'opencode/skills/fromxdg'), 'fromxdg')
+    writeSkill(
+      path.join(homeDir, '.config/opencode/skills/fromhome'),
+      'fromhome',
+    )
+
+    const result = withXdgConfigHome(xdg, () =>
+      discoverSkills({ startDir: projectDir, homeDir }),
+    )
+
+    expect(result.map((s) => s.name)).toEqual(['fromxdg'])
+    expect(result[0]?.root).toBe('global-opencode-config')
+  })
+
+  test('XDG_CONFIG_HOME: an explicit configDir still wins', () => {
+    const xdg = path.join(root, 'xdg')
+    const configDir = path.join(root, 'custom-config')
+    writeSkill(path.join(xdg, 'opencode/skills/fromxdg'), 'fromxdg')
+    writeSkill(path.join(configDir, 'skills/explicit'), 'explicit')
+
+    const result = withXdgConfigHome(xdg, () =>
+      discoverSkills({ startDir: projectDir, homeDir, configDir }),
+    )
+
+    expect(result.map((s) => s.name)).toEqual(['explicit'])
   })
 
   test('no git worktree root: discovers a skill at startDir itself but does not climb to ancestors', () => {

@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { parseFrontmatter } from './frontmatter.js'
+import { opencodeUserConfigDir } from './opencode-config-dir.js'
 import {
   extractFrontmatterFromContent,
   type SkillFrontmatter,
@@ -45,9 +46,9 @@ export interface DiscoverSkillsOptions {
   /** Home directory, injected so tests can use a temp dir instead of the real one. */
   homeDir: string
   /**
-   * Override for OpenCode's global config directory (mirrors
-   * `$XDG_CONFIG_HOME` resolution). Defaults to `<homeDir>/.config/opencode`
-   * when omitted.
+   * Override for OpenCode's global config directory. Defaults to
+   * `$XDG_CONFIG_HOME/opencode` when that is set, else
+   * `<homeDir>/.config/opencode` (the host's own rule), when omitted.
    */
   configDir?: string
   /**
@@ -254,7 +255,7 @@ export function discoverSkills(
 ): DiscoveredSkill[] {
   const { startDir, homeDir, configDir, onIssue, opencodeConfigDirOverride } =
     options
-  const globalConfigDir = configDir ?? path.join(homeDir, '.config/opencode')
+  const globalConfigDir = configDir ?? opencodeUserConfigDir(homeDir)
   const gitRoot = findGitWorktreeRoot(startDir)
 
   const byName = new Map<string, DiscoveredSkill>()

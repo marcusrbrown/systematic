@@ -374,7 +374,7 @@ These are accepted trade-offs. Read them before you allow a project.
 
 - **Every worktree of an allowed project contributes.** A worktree reads its own copy of the project file (`.systematic.jsonc` or `.opencode/systematic.jsonc`) and its own Markdown. That includes a worktree you made to review someone else's pull request. Allowing a project covers whatever any of its branches proposes. Roots still pass the rules above, so a branch cannot reach outside its checkout, but it can point at any folder inside it.
 - **A stale allow entry trusts whatever repository is cloned to that path later.** The entry is an exact path. Remove entries for paths you no longer use.
-- **Plugin hosts read the standard config directories.** On OpenCode v1, OpenCode v2 and Pi, external search reads `~/.config/opencode` and `OPENCODE_CONFIG_DIR`. The OpenCode v2 plugin has no config-directory override for this read.
+- **Plugin hosts read the standard config directories.** On OpenCode v1, OpenCode v2 and Pi, external search reads `~/.config/opencode` (or `$XDG_CONFIG_HOME/opencode` when that is set) and `OPENCODE_CONFIG_DIR`. The OpenCode v2 plugin has no config-directory override for this read.
 - **No redaction.** An external source is text you chose to expose. Text in a hit can contain instructions, and Systematic does not strip anything from it. Point it only at stores you trust.
 
 ### Privacy
@@ -385,7 +385,7 @@ External sources read local files and send nothing anywhere. Search opens no net
 
 Search reads its settings from your **user-level** config. Systematic reads them from these files, in this order, and merges them:
 
-1. `~/.config/opencode/systematic.jsonc`, or `systematic.json` if there is no `.jsonc`.
+1. `~/.config/opencode/systematic.jsonc` (or `$XDG_CONFIG_HOME/opencode/systematic.jsonc` when that is set), or `systematic.json` if there is no `.jsonc`.
 2. `systematic.local.jsonc` (or `.json`) in the same directory. This is the local overlay: a file for the settings that belong to this machine, so the main file can live in your dotfiles. It needs no main file beside it.
 3. The same file name as 1 inside the directory named by `OPENCODE_CONFIG_DIR`, if that variable is set and not blank.
 4. `systematic.local.jsonc` (or `.json`) in that directory.

@@ -163,20 +163,16 @@ function withRemovedKeyConfig(
   const custom = path.join(root, 'custom')
   const project = path.join(root, 'project')
   try {
-    for (const dir of [
-      path.join(home, '.config/opencode'),
-      path.join(xdg, 'opencode'),
-      custom,
-      project,
-    ]) {
+    for (const dir of [home, path.join(xdg, 'opencode'), custom, project]) {
       fs.mkdirSync(dir, { recursive: true })
     }
-    const configFile = path.join(home, '.config/opencode/systematic.json')
-    const content = JSON.stringify({ workflow_guard: { mode: 'protected' } })
-    fs.writeFileSync(configFile, content)
-    // `capabilities` reads the user config from XDG_CONFIG_HOME, `config show`
-    // from the home directory; both hold the same file.
-    fs.writeFileSync(path.join(xdg, 'opencode/systematic.json'), content)
+    // Both `capabilities` and `config show` read the user config from
+    // XDG_CONFIG_HOME when it is set, so the file lives only there.
+    const configFile = path.join(xdg, 'opencode/systematic.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({ workflow_guard: { mode: 'protected' } }),
+    )
     run({ configFile, custom, home, project, xdg })
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
@@ -492,6 +488,89 @@ describe('cli capabilities', () => {
         sourceKind: 'user',
       })
       expect(result.stdout).not.toContain('workflow_guard')
+    })
+  })
+
+  describe('user config location', () => {
+    function userSource(
+      env: (root: string) => Record<string, string>,
+      writeAt: (root: string) => string,
+      plant?: (project: string) => void,
+    ): unknown {
+      const root = mkTempCwd()
+      try {
+        const project = path.join(root, 'project')
+        const custom = path.join(root, 'custom')
+        fs.mkdirSync(project, { recursive: true })
+        fs.mkdirSync(custom, { recursive: true })
+        plant?.(project)
+        const dir = writeAt(root)
+        fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(
+          path.join(dir, 'systematic.json'),
+          JSON.stringify({ bootstrap: { enabled: false } }),
+        )
+        const result = runCli(['capabilities'], project, {
+          OPENCODE_CONFIG_DIR: custom,
+          ...env(root),
+        })
+        expect(result.exitCode).toBe(0)
+        const parsed = JSON.parse(result.stdout) as {
+          sources: Array<Record<string, unknown>>
+        }
+        return parsed.sources.find((s) => s.sourceId === 'config:user')
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    }
+
+    it('reads the user config from $XDG_CONFIG_HOME/opencode when it is set', () => {
+      const source = userSource(
+        (root) => ({
+          HOME: path.join(root, 'home'),
+          XDG_CONFIG_HOME: path.join(root, 'xdg'),
+        }),
+        (root) => path.join(root, 'xdg', 'opencode'),
+      )
+      expect(source).toMatchObject({ presence: 'present' })
+    })
+
+    it('does not read <home>/.config/opencode when $XDG_CONFIG_HOME points elsewhere', () => {
+      const source = userSource(
+        (root) => ({
+          HOME: path.join(root, 'home'),
+          XDG_CONFIG_HOME: path.join(root, 'xdg'),
+        }),
+        (root) => path.join(root, 'home', '.config', 'opencode'),
+      )
+      expect(source).toMatchObject({ presence: 'absent' })
+    })
+
+    it('falls back to <home>/.config/opencode when $XDG_CONFIG_HOME is empty', () => {
+      const source = userSource(
+        (root) => ({ HOME: path.join(root, 'home'), XDG_CONFIG_HOME: '' }),
+        (root) => path.join(root, 'home', '.config', 'opencode'),
+      )
+      expect(source).toMatchObject({ presence: 'present' })
+    })
+
+    it('ignores a relative $XDG_CONFIG_HOME and falls back to <home>/.config/opencode, never reading a file planted in the checkout', () => {
+      // The XDG spec calls a relative value invalid. Used as given, it would
+      // resolve against the working directory and read the planted file, which
+      // is not valid JSON, so `capabilities` would fail instead of exiting 0.
+      const source = userSource(
+        (root) => ({
+          HOME: path.join(root, 'home'),
+          XDG_CONFIG_HOME: 'rel-xdg',
+        }),
+        (root) => path.join(root, 'home', '.config', 'opencode'),
+        (project) => {
+          const planted = path.join(project, 'rel-xdg', 'opencode')
+          fs.mkdirSync(planted, { recursive: true })
+          fs.writeFileSync(path.join(planted, 'systematic.json'), '{ not json')
+        },
+      )
+      expect(source).toMatchObject({ presence: 'present' })
     })
   })
 })

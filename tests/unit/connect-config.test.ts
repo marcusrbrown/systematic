@@ -23,6 +23,7 @@ import {
   resolveUserLevelConfigDirs,
   selectUserLevelConfigFiles,
 } from '../../src/lib/search-user-config.js'
+import { withXdgConfigHome } from '../helpers/xdg-env.js'
 import {
   cleanupTempDirs,
   createRepo,
@@ -2102,6 +2103,57 @@ describe('the shipped host-support table', () => {
   it('names a different proof test for each host', () => {
     const named = HOST_SUPPORT_TABLE.map((entry) => entry.observedBy)
     expect(new Set(named).size).toBe(named.length)
+  })
+})
+
+describe('XDG_CONFIG_HOME', () => {
+  it('puts the default user directory under $XDG_CONFIG_HOME/opencode, as OpenCode does', () => {
+    const home = makeDir('connect-home-')
+    const xdg = makeDir('connect-xdg-')
+    withXdgConfigHome(xdg, () => {
+      const dirs = resolveConnectConfigDirs({
+        homeDir: home,
+        customConfigDir: null,
+      })
+      expect(dirs.userConfigDir).toBe(path.join(xdg, 'opencode'))
+      expect(dirs).toEqual(
+        resolveUserLevelConfigDirs({ homeDir: home, customConfigDir: null }),
+      )
+    })
+  })
+
+  it('reads the allow list from $XDG_CONFIG_HOME/opencode and ignores <home>/.config/opencode', () => {
+    const home = makeDir('connect-home-')
+    const xdg = makeDir('connect-xdg-')
+    writeConfig(path.join(home, '.config/opencode'), 'systematic.json', {
+      connect: { allow_projects: ['/from/home'] },
+    })
+    writeConfig(path.join(xdg, 'opencode'), 'systematic.json', {
+      connect: { allow_projects: ['/from/xdg'] },
+    })
+    withXdgConfigHome(xdg, () => {
+      const load = loadConnectAllowList({
+        homeDir: home,
+        customConfigDir: null,
+      })
+      expect(load.allowProjects).toEqual(['/from/xdg'])
+    })
+  })
+
+  it('an explicit userConfigDir wins over XDG_CONFIG_HOME', () => {
+    const dirs = setupDirs()
+    const xdg = makeDir('connect-xdg-')
+    writeConfig(path.join(xdg, 'opencode'), 'systematic.json', {
+      connect: { allow_projects: ['/from/xdg'] },
+    })
+    writeConfig(dirs.userDir, 'systematic.json', {
+      connect: { allow_projects: ['/from/explicit'] },
+    })
+    withXdgConfigHome(xdg, () => {
+      expect(loadConnectAllowList(optionsFor(dirs)).allowProjects).toEqual([
+        '/from/explicit',
+      ])
+    })
   })
 })
 

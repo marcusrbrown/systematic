@@ -3527,7 +3527,7 @@ export function getConfigPaths(
   options?: ConfigPathOptions,
 ) {
   const dirs = resolveUserLevelConfigDirs(options)
-  const { homeDir, customConfigDir } = dirs
+  const { customConfigDir } = dirs
   const selection = selectUserLevelConfigFiles(dirs)
   const fileFor = (layer: UserLevelLayer): string | undefined =>
     selection.files.find((file) => file.layer === layer)?.path
@@ -3563,7 +3563,7 @@ export function getConfigPaths(
     userLocalConfig: userFile('user.local'),
     projectConfig: project.path,
     projectRoot,
-    userDir: path.join(homeDir, '.config/opencode/systematic'),
+    userDir: path.join(dirs.userConfigDir, 'systematic'),
     projectDir: path.join(projectRoot, '.opencode/systematic'),
     customAliasesUser: selection.aliased,
     ...(ignoredProjectConfig !== undefined && { ignoredProjectConfig }),

@@ -36,7 +36,7 @@ The reusable harness lives at `tests/manual/with-without-eval/run-arm.sh`. Reuse
 
 ## Isolation recipe (the part that bites)
 
-`run-arm.sh` runs both arms under a **private temp `HOME`** (with `XDG_CONFIG_HOME` inside it). Systematic reads its config through `HOME`, not `XDG_CONFIG_HOME`: `<homedir>/.config/opencode` (`os.homedir()`) plus the `OPENCODE_CONFIG_DIR` directory (`src/lib/search-user-config.ts:872-883`, called from `src/lib/config.ts:3519`). Redirecting only `XDG_CONFIG_HOME` would leave the user's `systematic.jsonc`, including any `agents.<name>.model` overlay, in the treatment arm. The private `HOME` also drops OpenCode's global `opencode.json`, its MCP servers and the `~/.agents` and `~/.claude` skill dirs from both arms.
+`run-arm.sh` runs both arms under a **private temp `HOME`** with `XDG_CONFIG_HOME` inside it. Systematic reads its user config from `$XDG_CONFIG_HOME/opencode` when that is an absolute path, otherwise from `<homedir>/.config/opencode`, plus the `OPENCODE_CONFIG_DIR` directory. Redirect both, or the user's `systematic.jsonc`, including any `agents.<name>.model` overlay, reaches the treatment arm. The private `HOME` also drops OpenCode's global `opencode.json`, its MCP servers and the `~/.agents` and `~/.claude` skill dirs from both arms.
 
 The script pins `XDG_DATA_HOME` (holds `auth.json`, or the paid model won't authenticate) and `XDG_CACHE_HOME` (holds the model catalog, or `ProviderModelNotFoundError`) to the real paths and reads `auth.json` in place. `OPENCODE_CONFIG_CONTENT` sets the per-arm plugin array.
 

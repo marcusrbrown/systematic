@@ -8,6 +8,7 @@ import {
 } from './asset-plan.js'
 import { composeBootstrapContent } from './bootstrap.js'
 import { loadConfigWithSources, type SystematicConfig } from './config.js'
+import { opencodeUserConfigDir } from './opencode-config-dir.js'
 import {
   installBootstrap,
   OPENCODE_V2_USAGE_TEMPLATE,
@@ -357,7 +358,7 @@ export interface OpenCodeV2Deps {
   packageRoot: string
   /** Home directory for user-level config and skill discovery. Defaults to `os.homedir()`; tests inject a temp dir. */
   homeDir?: string
-  /** User-level OpenCode config directory. Defaults to `<homeDir>/.config/opencode`. */
+  /** User-level OpenCode config directory. Defaults to `$XDG_CONFIG_HOME/opencode` when set, else `<homeDir>/.config/opencode`. */
   opencodeConfigDir?: string
   /** Replaces individual installer slots. Slots left out use the domain's own installer. */
   installers?: Partial<V2Installers>
@@ -414,7 +415,7 @@ function buildSnapshot(
   const { packageRoot } = deps
   const homeDir = deps.homeDir ?? os.homedir()
   const opencodeConfigDir =
-    deps.opencodeConfigDir ?? path.join(homeDir, '.config/opencode')
+    deps.opencodeConfigDir ?? opencodeUserConfigDir(homeDir)
   const opencodeConfigDirOverride = process.env.OPENCODE_CONFIG_DIR?.trim()
     ? process.env.OPENCODE_CONFIG_DIR
     : undefined

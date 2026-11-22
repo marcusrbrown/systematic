@@ -936,6 +936,108 @@ describe('unavailable helper surfaces as an error, not a helper outcome', () => 
 // Generator drift: missing/stale bytes fail loudly, generation is deterministic
 // ═══════════════════════════════════════════════════════════════════════════
 
+// A relative XDG_CONFIG_HOME is invalid under the XDG Base Directory spec and
+// is ignored. Were it honoured, it would resolve against the working directory,
+// so a checkout could ship `<rel>/opencode/systematic.json` and have it read as
+// the trusted user layer that declares `connect.allow_projects` and `pins`.
+describe('XDG_CONFIG_HOME and a config file planted in the checkout', () => {
+  const UPSTREAM_URL = 'https://github.com/owner/lib.git'
+  const PIN_JSON = '{"lib":{"version":"2.0.0"}}'
+
+  interface PlantedWorld {
+    readonly source: string
+    readonly target: string
+    readonly planted: string
+    readonly env: Record<string, string>
+    readonly scenario: Scenario
+  }
+
+  /**
+   * The real home allows `source` and `target` and declares no pin. The source
+   * checkout, the working directory, holds `rel/opencode/systematic.json`, which
+   * also allows a third project and declares a pin the home config does not.
+   */
+  function plantedWorld(xdgConfigHome: (source: string) => string) {
+    const source = createProject(
+      { 'docs/solutions/lock-reclaim.md': LOCK_LEARNING },
+      UPSTREAM_URL,
+    )
+    git(source, ['tag', 'v1.2.0'])
+    const target = createProject({
+      'docs/solutions/lock-now.md': NOW_LEARNING,
+      'deps/pin.json': PIN_JSON,
+    })
+    const planted = createProject({
+      'docs/solutions/lock-planted.md': NOW_LEARNING,
+    })
+    const home = makeTempDir('connect-pack-xdg-home-')
+    const homeConfig = path.join(home, '.config', 'opencode')
+    fs.mkdirSync(homeConfig, { recursive: true })
+    fs.writeFileSync(
+      path.join(homeConfig, 'systematic.json'),
+      JSON.stringify({ connect: { allow_projects: [source, target] } }),
+    )
+    const planting = path.join(source, 'rel', 'opencode')
+    fs.mkdirSync(planting, { recursive: true })
+    fs.writeFileSync(
+      path.join(planting, 'systematic.json'),
+      JSON.stringify({
+        connect: {
+          allow_projects: [source, target, planted],
+          pins: [
+            {
+              project: target,
+              upstream: 'Owner/Lib',
+              file: 'deps/pin.json',
+              key: 'lib.version',
+            },
+          ],
+        },
+      }),
+    )
+    const stateHome = path.join(makeTempDir('connect-pack-xdg-state-'), 'xdg')
+    const env = {
+      PATH: process.env.PATH ?? '',
+      HOME: home,
+      XDG_STATE_HOME: stateHome,
+      XDG_CONFIG_HOME: xdgConfigHome(source),
+    }
+    const scenario: Scenario = { source, target, stateHome, env }
+    return { source, target, planted, env, scenario } satisfies PlantedWorld
+  }
+
+  function begin(world: PlantedWorld): Json {
+    const result = runHelper(HELPER_SRC, ['begin'], world.scenario, {
+      host: 'pi',
+      version: '0.1.0',
+      mode: 'interactive',
+      consent: true,
+    })
+    expect(result.exitCode, result.stdout).toBe(0)
+    return result.json as Json
+  }
+
+  function roots(body: Json): string[] {
+    return (body.projects as Json[]).map((item) => item.root as string)
+  }
+
+  test('control: an absolute XDG_CONFIG_HOME at that directory is read, so the planted allow list and pin take effect', () => {
+    const world = plantedWorld((source) => path.join(source, 'rel'))
+    const body = begin(world)
+    expect(roots(body)).toContain(world.planted)
+    expect(Object.keys(body.pinHints as Json)).toHaveLength(1)
+  })
+
+  test('a relative XDG_CONFIG_HOME is ignored: no planted allow-list entry and no planted pin', () => {
+    const world = plantedWorld(() => 'rel')
+    const body = begin(world)
+    expect(roots(body)).toContain(world.source)
+    expect(roots(body)).toContain(world.target)
+    expect(roots(body)).not.toContain(world.planted)
+    expect(body.pinHints).toEqual({})
+  })
+})
+
 describe('generator drift', () => {
   const GENERATOR = path.join(
     REPO_ROOT,
