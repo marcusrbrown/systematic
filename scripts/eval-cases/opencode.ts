@@ -1504,7 +1504,7 @@ function gradeObservedCase(
 
 function modelInheritanceConfigPaths(fixture: EvalFixture): string[] {
   return [
-    path.join(fixture.homeRoot, '.config', 'opencode', 'systematic.json'),
+    path.join(fixture.xdgConfigRoot, 'opencode', 'systematic.json'),
     path.join(fixture.projectRoot, '.opencode', 'systematic.json'),
     path.join(fixture.opencodeConfigRoot, 'systematic.json'),
   ]
@@ -1554,7 +1554,7 @@ function writeModelInheritanceScenario(
   const target =
     policy === 'project-error'
       ? path.join(fixture.projectRoot, '.opencode', 'systematic.json')
-      : path.join(fixture.homeRoot, '.config', 'opencode', 'systematic.json')
+      : path.join(fixture.xdgConfigRoot, 'opencode', 'systematic.json')
   fs.mkdirSync(path.dirname(target), { recursive: true })
   fs.writeFileSync(target, JSON.stringify(config))
 }

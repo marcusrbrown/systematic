@@ -2407,6 +2407,58 @@ Discovered body for ${name}.`,
         )
       }
 
+      function handlerFor(overrides: { opencodeConfigDir?: string } = {}) {
+        return createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+          ...overrides,
+        })
+      }
+
+      test('XDG_CONFIG_HOME: discovers skills in $XDG_CONFIG_HOME/opencode/skills, not <home>/.config/opencode/skills', async () => {
+        const xdg = path.join(testDir, 'xdg')
+        writeDiscoveredSkill(path.join(xdg, 'opencode/skills'), 'fromxdg')
+        writeDiscoveredSkill(
+          path.join(testDir, 'home/.config/opencode/skills'),
+          'fromhome',
+        )
+
+        const config: Config = {}
+        const previous = process.env.XDG_CONFIG_HOME
+        process.env.XDG_CONFIG_HOME = xdg
+        try {
+          await handlerFor()(config)
+        } finally {
+          if (previous === undefined) delete process.env.XDG_CONFIG_HOME
+          else process.env.XDG_CONFIG_HOME = previous
+        }
+
+        expect(config.command?.fromxdg).toBeDefined()
+        expect(config.command?.fromhome).toBeUndefined()
+      })
+
+      test('XDG_CONFIG_HOME: an explicit opencodeConfigDir still wins', async () => {
+        const xdg = path.join(testDir, 'xdg')
+        const explicit = path.join(testDir, 'explicit-config')
+        writeDiscoveredSkill(path.join(xdg, 'opencode/skills'), 'fromxdg')
+        writeDiscoveredSkill(path.join(explicit, 'skills'), 'fromexplicit')
+
+        const config: Config = {}
+        const previous = process.env.XDG_CONFIG_HOME
+        process.env.XDG_CONFIG_HOME = xdg
+        try {
+          await handlerFor({ opencodeConfigDir: explicit })(config)
+        } finally {
+          if (previous === undefined) delete process.env.XDG_CONFIG_HOME
+          else process.env.XDG_CONFIG_HOME = previous
+        }
+
+        expect(config.command?.fromexplicit).toBeDefined()
+        expect(config.command?.fromxdg).toBeUndefined()
+      })
+
       test('model-invocable discovered skill inlines its full body', async () => {
         writeDiscoveredSkill(path.join(projectDir, '.opencode/skills'), 'foo', {
           description: 'A discovered skill',

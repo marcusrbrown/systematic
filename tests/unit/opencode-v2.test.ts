@@ -271,6 +271,71 @@ describe('setupOpenCodeV2', () => {
     expect(firstSnapshot?.config.bootstrap.enabled).toBe(false)
   })
 
+  async function captureWithXdg(
+    xdg: string,
+    overrides: Partial<OpenCodeV2Deps> = {},
+  ): Promise<V2Snapshot | undefined> {
+    let captured: V2Snapshot | undefined
+    const { ctx } = createFakeContext(undefined)
+    const previous = process.env.XDG_CONFIG_HOME
+    process.env.XDG_CONFIG_HOME = xdg
+    try {
+      await setupOpenCodeV2(
+        ctx,
+        deps({
+          installers: {
+            agents: ({ snapshot }) => {
+              captured = snapshot
+            },
+          },
+          ...overrides,
+        }),
+      )
+    } finally {
+      if (previous === undefined) delete process.env.XDG_CONFIG_HOME
+      else process.env.XDG_CONFIG_HOME = previous
+    }
+    return captured
+  }
+
+  test('XDG_CONFIG_HOME: the user config is read from $XDG_CONFIG_HOME/opencode, not <home>/.config/opencode', async () => {
+    const xdg = path.join(tempRoot, 'xdg')
+    fs.mkdirSync(path.join(xdg, 'opencode'), { recursive: true })
+    fs.writeFileSync(
+      path.join(xdg, 'opencode/systematic.json'),
+      JSON.stringify({ skills_as_commands: false }),
+    )
+    fs.writeFileSync(
+      path.join(homeDir, '.config/opencode/systematic.json'),
+      JSON.stringify({ bootstrap: { enabled: false } }),
+    )
+
+    const captured = await captureWithXdg(xdg)
+
+    expect(captured?.config.skills_as_commands).toBe(false)
+    expect(captured?.config.bootstrap.enabled).toBe(true)
+  })
+
+  test('XDG_CONFIG_HOME: an explicit opencodeConfigDir still wins', async () => {
+    const xdg = path.join(tempRoot, 'xdg')
+    const explicit = path.join(tempRoot, 'explicit-config')
+    fs.mkdirSync(path.join(xdg, 'opencode'), { recursive: true })
+    fs.mkdirSync(explicit, { recursive: true })
+    fs.writeFileSync(
+      path.join(xdg, 'opencode/systematic.json'),
+      JSON.stringify({ skills_as_commands: false }),
+    )
+    fs.writeFileSync(
+      path.join(explicit, 'systematic.json'),
+      JSON.stringify({ bootstrap: { enabled: false } }),
+    )
+
+    const captured = await captureWithXdg(xdg, { opencodeConfigDir: explicit })
+
+    expect(captured?.config.bootstrap.enabled).toBe(false)
+    expect(captured?.config.skills_as_commands).toBe(true)
+  })
+
   test('no project directory loads user-level config only and reports one diagnostic', async () => {
     // Project configs that must not be read: the project's own, and the one
     // under the home directory that discovery is rooted at without a project.

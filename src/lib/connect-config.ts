@@ -5,8 +5,8 @@
  * limits have host-specific evidence.
  *
  * Import rule: this module may import only `jsonc-parser`, node builtins,
- * `search-bounded-read.ts` and `search-project-identity.ts` (both node
- * builtins only). It must never import zod, `config.ts`, `config-schema.ts` or
+ * `opencode-config-dir.ts`, `search-bounded-read.ts` and
+ * `search-project-identity.ts` (each node builtins only). It must never import zod, `config.ts`, `config-schema.ts` or
  * `search-user-config.ts`: the `ce:connect` helper bundles it, and any of those
  * would drag the config loader and zod into that bundle. `config-schema.ts`
  * imports the limits from here and tags the same block `trust:
@@ -50,6 +50,7 @@ import {
   parse as parseJsonc,
   printParseErrorCode,
 } from 'jsonc-parser'
+import { opencodeUserConfigDir } from './opencode-config-dir.js'
 import { readBytesBounded } from './search-bounded-read.js'
 import { resolveProjectIdentity } from './search-project-identity.js'
 
@@ -402,8 +403,7 @@ export function resolveConnectConfigDirs(
   options?: ConnectConfigOptions,
 ): ConnectConfigDirs {
   const homeDir = options?.homeDir ?? os.homedir()
-  const userConfigDir =
-    options?.userConfigDir ?? path.join(homeDir, '.config/opencode')
+  const userConfigDir = options?.userConfigDir ?? opencodeUserConfigDir(homeDir)
   const rawCustom =
     options !== undefined && Object.hasOwn(options, 'customConfigDir')
       ? options.customConfigDir?.trim()

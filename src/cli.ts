@@ -25,6 +25,7 @@ import {
   type SkillDiscoveryIssueCode,
 } from './lib/discovered-skills.js'
 import { isMainModule } from './lib/main-module.js'
+import { opencodeUserConfigDir } from './lib/opencode-config-dir.js'
 import {
   cleanup,
   exportPersonas,
@@ -221,14 +222,13 @@ interface CapabilityCliOptions {
 }
 
 function defaultCapabilityRoots(): CapabilityCliRoots {
-  const configDir = process.env.XDG_CONFIG_HOME
-    ? path.join(process.env.XDG_CONFIG_HOME, 'opencode')
-    : path.join(os.homedir(), '.config/opencode')
+  const homeDir = os.homedir()
+  const configDir = opencodeUserConfigDir(homeDir)
   return {
     agentsRoot: path.join(PACKAGE_ROOT, 'agents'),
     configDir,
     cwd: process.cwd(),
-    homeDir: os.homedir(),
+    homeDir,
     opencodeConfigDirOverride:
       process.env.OPENCODE_CONFIG_DIR?.trim() || undefined,
     packageRoot: PACKAGE_ROOT,
