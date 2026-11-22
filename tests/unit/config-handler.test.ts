@@ -2482,6 +2482,22 @@ Discovered body for ${name}.`,
         expect(config.command?.fromxdg).toBeUndefined()
       })
 
+      test('OPENCODE_CONFIG_DIR with surrounding whitespace: discovers skills in the trimmed directory', async () => {
+        const custom = path.join(testDir, 'custom-config')
+        writeDiscoveredSkill(path.join(custom, 'skills'), 'fromcustom')
+        const previous = process.env.OPENCODE_CONFIG_DIR
+        process.env.OPENCODE_CONFIG_DIR = `  ${custom}  `
+        try {
+          const config = await runHandler(undefined, {
+            homeDir: injectedHome(),
+          })
+          expect(config.command?.fromcustom).toBeDefined()
+        } finally {
+          if (previous === undefined) delete process.env.OPENCODE_CONFIG_DIR
+          else process.env.OPENCODE_CONFIG_DIR = previous
+        }
+      })
+
       test('model-invocable discovered skill inlines its full body', async () => {
         writeDiscoveredSkill(path.join(projectDir, '.opencode/skills'), 'foo', {
           description: 'A discovered skill',
