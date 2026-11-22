@@ -597,10 +597,17 @@ describe('getBootstrapContent', () => {
 
   test('custom config.bootstrap.file with ~/ prefix expands to the home directory', () => {
     const bundledSkillsDir = makeBundledSkillsDir('bundled body')
-    // Write a file in the real home dir (use a timestamped filename to avoid conflicts)
-    const homeFilename = `.systematic-test-bootstrap-${Date.now()}-${Math.random().toString(36).slice(2)}.md`
-    const realHomePath = path.join(os.homedir(), homeFilename)
-    fs.writeFileSync(realHomePath, 'HOME-DIR bootstrap')
+    // Bun ignores in-process HOME changes, so point `os.homedir` at a temp home
+    // instead of writing into the developer's real one.
+    const isolatedHome = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-bootstrap-home-'),
+    )
+    const homeFilename = 'bootstrap.md'
+    fs.writeFileSync(
+      path.join(isolatedHome, homeFilename),
+      'HOME-DIR bootstrap',
+    )
+    const homedir = spyOn(os, 'homedir').mockReturnValue(isolatedHome)
     try {
       const config = {
         bootstrap: { enabled: true, file: `~/${homeFilename}` },
@@ -612,7 +619,8 @@ describe('getBootstrapContent', () => {
         'HOME-DIR bootstrap',
       )
     } finally {
-      fs.unlinkSync(realHomePath)
+      homedir.mockRestore()
+      fs.rmSync(isolatedHome, { recursive: true, force: true })
     }
   })
 
