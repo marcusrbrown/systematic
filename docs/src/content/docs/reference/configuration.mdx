@@ -19,7 +19,7 @@ Systematic reads up to five config files. A later file in this table overrides a
 
 The user layers live in OpenCode's config directory: `$XDG_CONFIG_HOME/opencode` when `XDG_CONFIG_HOME` is set to an absolute path, else `~/.config/opencode`. An empty or relative value is ignored, as the XDG spec says. Otherwise this is the rule OpenCode uses. If you set `XDG_CONFIG_HOME`, keep `systematic.jsonc` (and the `systematic/` directory) in `$XDG_CONFIG_HOME/opencode`, the directory where OpenCode already reads its own config.
 
-The custom layers exist only when `OPENCODE_CONFIG_DIR` is set and not blank. Every file is optional.
+The custom layers exist only when `OPENCODE_CONFIG_DIR` is set and not blank. Every file is optional. Systematic adds this directory on top of the user directory, as OpenCode v1 does. OpenCode v2 uses `OPENCODE_CONFIG_DIR` in place of its user directory, but Systematic still reads its own files from the user directory under v2.
 
 Systematic picks a file by whether it exists, never by whether it is valid:
 

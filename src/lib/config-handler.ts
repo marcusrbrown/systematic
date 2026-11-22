@@ -423,9 +423,8 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
   const homeDir = deps.homeDir ?? os.homedir()
   const opencodeConfigDir =
     deps.opencodeConfigDir ?? opencodeUserConfigDir(homeDir)
-  const opencodeConfigDirOverride = process.env.OPENCODE_CONFIG_DIR?.trim()
-    ? process.env.OPENCODE_CONFIG_DIR
-    : undefined
+  const opencodeConfigDirOverride =
+    process.env.OPENCODE_CONFIG_DIR?.trim() || undefined
   // Routing warnings already written, so a repeat run of this hook stays quiet.
   const reportedRouting = new Set<string>()
 

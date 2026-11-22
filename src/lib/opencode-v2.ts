@@ -416,9 +416,8 @@ function buildSnapshot(
   const homeDir = deps.homeDir ?? os.homedir()
   const opencodeConfigDir =
     deps.opencodeConfigDir ?? opencodeUserConfigDir(homeDir)
-  const opencodeConfigDirOverride = process.env.OPENCODE_CONFIG_DIR?.trim()
-    ? process.env.OPENCODE_CONFIG_DIR
-    : undefined
+  const opencodeConfigDirOverride =
+    process.env.OPENCODE_CONFIG_DIR?.trim() || undefined
   const bundledSkillsDir = path.join(packageRoot, 'skills')
 
   const projectDirectory = resolveProjectDirectory(ctx)
