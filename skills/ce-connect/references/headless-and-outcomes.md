@@ -55,6 +55,7 @@ Headless mode asks no question and offers nothing after the digest. It does not 
 - A host and version the helper does not support is refused: `begin` answers `unsupported-host`. Supported means the lowest version where the tool limits were observed, or any newer release of the same host and major version. A version below that, a prerelease, an unknown host, a version the helper cannot read and a release on its known-bad list are all refused. Interactive mode asks consent instead, except for a known-bad release: that is refused in every mode, and consent does not change it.
 - A user decision (`decide`) is never taken. The digest is the only output.
 - Anything unclear is a stop with a reason, not a question.
+- A `Pins:` line in the summary is printed as the helper wrote it, unchanged, like every other summary line. It lists notes about declared pins, as codes and project keys only. Headless mode asks no question about it and the line never changes the outcome.
 
 ## Host permissions for unattended runs
 
@@ -88,6 +89,25 @@ A run covers a slice of the rule index, not all of it. The helper offers at most
 Rules that are not offered are not a reason to degrade a run. `Connect complete` means the offered slice was fully covered and nothing failed. How much of the index has been covered is sweep progress, and the helper reports it as one line in the digest header and in the publish summary: covered X of Y rules (counting a rule only while its learning has the hash it had when it was covered), how many rules this run covered, and about N runs left in the sweep. A sweep that is finished says so and says the next run starts again with the least recently covered rules.
 
 Coverage is kept in the ledger, and only for a committed run: an aborted or crashed run records none. It holds rule ids, hashes and run ids, no text. Coverage of a rule whose learning has disappeared is dropped. `ledger clear` removes coverage with the rest of the ledger, and the sweep starts over.
+
+## Pin hints and notes
+
+A user may declare dependency pins in config (`connect.pins`). At `begin` the helper turns each pin that matches a selected project and a selected checkout of the upstream into one line, and returns the lines as `pinHints`, keyed by project key. The skill copies them into the dispatch of the families that hold rules of the pinning project (Step 5 of the skill). A run with no pins has empty `pinHints` and `pinNotes`. For setting up `connect.pins`, see the [guide](https://fro.bot/systematic/guides/cross-project-connections/#declare-dependency-pins).
+
+`pinNotes` is a separate channel from `degradeReasons`. A note explains why a declared pin gave no line, or what the helper cut, and it is not a degrade reason: it never degrades the run. The summary prints notes as one `Pins:` line. A note is a fixed code, with the 12-character key of the pinning project when it belongs to one:
+
+| Code | Meaning |
+|---|---|
+| `pin-file-missing` | The pin file is missing, a directory, a symlink, outside the project or unreadable. |
+| `pin-file-too-large` | The pin file is over the read cap. |
+| `pin-file-invalid` | The pin file is empty or is not valid JSON or JSONC. |
+| `pin-key-absent` | The key does not lead to a value. |
+| `pin-value-invalid` | The value is not a string of the allowed form, or a path in the pin cannot be rendered. |
+| `pin-conflict` | Entries for one project, upstream and key name different files. The helper dropped them all. It carries no key. |
+| `hints-truncated` | The helper cut the lines to its cap. It carries no key. |
+| `notes-truncated` | The helper cut the notes to its cap. It carries no key. |
+
+A pin whose project is not selected, or that no selected checkout matches, gives no line and no note. A hint is not evidence, and the researcher agent's rules and the helper's validation are unchanged.
 
 ## Reasons worth naming
 

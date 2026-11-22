@@ -17,9 +17,11 @@ rule ids: <rule id>, <rule id>
 max candidates: <bounds.maxCandidatesPerBatch>
 ```
 
+A family may also carry a `pin hints:` section between `rule ids:` and `max candidates:`. Each row is one of the helper's own lines from `pinHints`, copied unchanged for a family that holds a rule of the pinning project, and the section is left out when none applies. A line names a pinning project, an upstream, a pinned value and an allowed checkout at its tag, and asks the researcher to check claims about the upstream at both versions. It is a hint, not evidence: a candidate still needs cited evidence that validation checks.
+
 A family holds at most `bounds.maxRulesPerFamily` rule ids, all of them rules the helper offered this run. The researcher reads the rule entries from the rules file and finds fingerprints in the files index. Both files are line-oriented so a read tool can page through them.
 
-The rule overview (`rules.tsv`) has one tab-separated line per indexed rule: id, project name, path, title, `applies_when` items and a mark. The mark is `offered` for the rules this run covers, and `later` for the rest. The offered lines come first, so the skill reads the first `offeredCount` lines. The researcher still searches every allowed project, whether or not a rule in it is offered.
+The rule overview (`rules.tsv`) has one tab-separated line per indexed rule: id, project name, path, title, `applies_when` items, a mark and the project key. The mark is `offered` for the rules this run covers, and `later` for the rest. The last column is the key of the rule's project (the same key `begin` lists for it and uses for `pinHints`), because a project name can collide and the key cannot. The offered lines come first, so the skill reads the first `offeredCount` lines. The researcher still searches every allowed project, whether or not a rule in it is offered.
 
 ## What the researcher returns: the batch
 
