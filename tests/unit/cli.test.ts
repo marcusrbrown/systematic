@@ -495,6 +495,7 @@ describe('cli capabilities', () => {
     function userSource(
       env: (root: string) => Record<string, string>,
       writeAt: (root: string) => string,
+      plant?: (project: string) => void,
     ): unknown {
       const root = mkTempCwd()
       try {
@@ -502,6 +503,7 @@ describe('cli capabilities', () => {
         const custom = path.join(root, 'custom')
         fs.mkdirSync(project, { recursive: true })
         fs.mkdirSync(custom, { recursive: true })
+        plant?.(project)
         const dir = writeAt(root)
         fs.mkdirSync(dir, { recursive: true })
         fs.writeFileSync(
@@ -548,6 +550,25 @@ describe('cli capabilities', () => {
       const source = userSource(
         (root) => ({ HOME: path.join(root, 'home'), XDG_CONFIG_HOME: '' }),
         (root) => path.join(root, 'home', '.config', 'opencode'),
+      )
+      expect(source).toMatchObject({ presence: 'present' })
+    })
+
+    it('ignores a relative $XDG_CONFIG_HOME and falls back to <home>/.config/opencode, never reading a file planted in the checkout', () => {
+      // The XDG spec calls a relative value invalid. Used as given, it would
+      // resolve against the working directory and read the planted file, which
+      // is not valid JSON, so `capabilities` would fail instead of exiting 0.
+      const source = userSource(
+        (root) => ({
+          HOME: path.join(root, 'home'),
+          XDG_CONFIG_HOME: 'rel-xdg',
+        }),
+        (root) => path.join(root, 'home', '.config', 'opencode'),
+        (project) => {
+          const planted = path.join(project, 'rel-xdg', 'opencode')
+          fs.mkdirSync(planted, { recursive: true })
+          fs.writeFileSync(path.join(planted, 'systematic.json'), '{ not json')
+        },
       )
       expect(source).toMatchObject({ presence: 'present' })
     })

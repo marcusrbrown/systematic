@@ -1141,7 +1141,10 @@ describe('Pi subprocess integration', () => {
   test(
     'with search.enabled false the researcher child is not offered the tool and the proof fails saying so',
     async () => {
-      const userConfigDir = path.join(fixture.homeDir, '.config/opencode')
+      // The Pi subprocess gets its own absolute XDG_CONFIG_HOME (see
+      // buildChildEnv), and the user config is read from there, not from
+      // `<HOME>/.config/opencode`.
+      const userConfigDir = path.join(fixture.xdgConfigHome, 'opencode')
       fs.mkdirSync(userConfigDir, { recursive: true })
       fs.writeFileSync(
         path.join(userConfigDir, 'systematic.json'),
