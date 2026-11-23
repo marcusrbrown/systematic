@@ -57,7 +57,7 @@ Acceptance Examples AE1 to AE8 are in the origin; where each is proven:
 | AE2 missing researcher model fails prepare red | U2 test; U7 live |
 | AE3 agent step uses the pinned release's action | U2 test; U7 live log |
 | AE4 named word imports only for an allow-listed checkout | U5 tests; U7 live |
-| AE5 run that did not call Systematic's workflow, or called a fork, is refused | U5 tests; U7 fork-calling wrapper |
+| AE5 run that did not call Systematic's workflow, or called a fork, is refused | U5 tests (the live fork-calling run in U7 is waived) |
 | AE6 failed-render rerun resolves artifact names | U2 test; U0 spike on attempts 1 and 2 |
 | AE7 bare word for a pre-cutover direct run still imports | U4 and U5 tests; U3 first-run check |
 | AE8 `pull_request_target` caller is refused by every job | U2 test |
@@ -561,7 +561,7 @@ flowchart TB
 
 **Goal:** fro-bot/agent runs the reusable workflow live from its own wrapper, and the operator promotes one of its candidates locally; this is the cross-owner proof before any other repository is wired.
 
-**Requirements:** R10, R11, R12 (AE1 to AE5 and AE7; AE6 and AE8 are proven in U0 and U2)
+**Requirements:** R10, R11, R12 (AE1 to AE4 and AE7; AE5 rests on U5's tests; AE6 and AE8 are proven in U0 and U2)
 
 **Dependencies:** U3, U5 and U6 merged; the operator's pre-checks (Actions policy, secrets and variables, Issues enabled) done
 
@@ -582,12 +582,12 @@ flowchart TB
   4. Local promotion: with the checkout allow-listed, the report's named fetch word imports a candidate; with the checkout removed, the same word is refused and nothing downloads (AE4).
   5. Negative on a temporary branch: a wrapper named like the real one that calls a fork of the callee is refused as not-a-connect-run (AE5). It needs a temporary fork under Marcus's account, removed afterwards, and is the only fork case in the plan. Waived: the `verify-provenance` unit tests cover the refusal, and the live run is not part of the readiness gate.
   6. A pre-cutover Systematic candidate's bare word still imports (AE7).
-- Readiness for wiring any other repository: steps 1 to 6 pass and the pilot has posted at least one scheduled report. Rollback: disable the wrapper in the caller; nothing in Systematic needs to change.
+- Readiness for wiring any other repository: steps 1 to 4 and 6 pass and the pilot has posted at least one scheduled report. Rollback: disable the wrapper in the caller; nothing in Systematic needs to change.
 - Under stop rule (b): drop step 4 (the named-fetch import) and step 5 (the refusal), record AE4 and AE5 as not applicable, and narrow the readiness gate to steps 1, 2, 3 and 6 plus one scheduled report.
 - Optionally record the pilot's observed and not-observed behaviours in CN-7.
 
 **Test scenarios:**
-- Test expectation: none -- live acceptance. Each step above is pass or fail with evidence, and a failure in step 1, 4 or 5 stops further wiring (steps 4 and 5 drop under stop rule (b)).
+- Test expectation: none -- live acceptance. Each step above is pass or fail with evidence, and a failure in step 1 or 4 stops further wiring (step 4 drops under stop rule (b); step 5 is waived).
 
 **Verification:**
 - Every applicable acceptance example has a recorded outcome.
