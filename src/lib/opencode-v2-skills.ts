@@ -21,7 +21,9 @@ import { isRecord } from './validation.js'
  *
  * The host cuts a tool result at 2000 lines or 51200 bytes after the plugin
  * has returned it, and three bundled skills are larger. The full text is kept
- * by call id and put back into the request before each model call.
+ * by call id and put back into the request before each model call. Memory
+ * serves a running process; loads are also kept, best effort, in the host's plugin
+ * storage (see {@link createDurableSkillOutputs}) so a restart still restores it.
  */
 
 /** The part of a v2 skill this module writes. The host's own skill type is assignable to it. */
@@ -72,12 +74,296 @@ export interface V2ToolEditor {
   add(tool: V2ToolDefinition): void
 }
 
-/**
- * Restoration only has to outlive a session's use of one skill result. A
- * plugin restart drops it, after which the host's cut copy is all that is left.
- */
+type DurableJson =
+  | string
+  | number
+  | boolean
+  | null
+  | DurableJson[]
+  | { [key: string]: DurableJson }
+
+/** The part of the host's plugin `storage` domain this module uses; the host namespaces it by plugin id. */
+export interface V2Storage {
+  get(key: string): Promise<unknown>
+  set(key: string, value: DurableJson): Promise<void>
+  remove(key: string): Promise<void>
+  scan(options: { prefix: string; after?: string; limit?: number }): Promise<{
+    entries: readonly { key: string; value: unknown }[]
+    next?: string
+  }>
+}
+
+/** One skill invocation: the assistant message that made the call and the provider's call id, which a provider may reuse across turns. */
+export interface SkillCallIds {
+  sessionID: string
+  messageID: string
+  callID: string
+}
+
+/** The in-memory store key for a call: the message id keeps a reused call id from reaching another turn's result. */
+export function skillOutputHandle(messageID: string, callID: string): string {
+  return `${messageID}\u0000${callID}`
+}
+
+export interface DurableSkillOutputs {
+  /** Keep one rendered output. Never rejects and never takes longer than the deadline. */
+  put(ids: SkillCallIds, output: string): Promise<void>
+  /** The output kept for exactly this session, message and call. Never rejects: a failure or a miss is `undefined`. */
+  get(ids: SkillCallIds): Promise<string | undefined>
+}
+
+interface DurableSkillOutputOptions {
+  maxEntries?: number
+  maxEntryBytes?: number
+  maxAgeMs?: number
+  deadlineMs?: number
+  maxMisses?: number
+  missTtlMs?: number
+  now?: () => number
+  report?: (message: string) => void
+}
+
+/** The storage key for a call, or `undefined` when an id cannot be encoded (an unpaired surrogate throws). */
+function durableKey(ids: SkillCallIds): string | undefined {
+  try {
+    return `${DURABLE_KEY_PREFIX}${[ids.sessionID, ids.messageID, ids.callID].map(encodeURIComponent).join(':')}`
+  } catch {
+    return undefined
+  }
+}
+
+/** A storage call that outlived its deadline: it may still commit, so its outcome is unknown. */
+class StorageTimeout extends Error {}
+
+/** Runs `operation` and rejects if it has not settled within `ms`; the operation itself is not cancelled. */
+function withDeadline<T>(
+  operation: () => Promise<T>,
+  ms: number,
+  label: number,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () =>
+        reject(new StorageTimeout(`storage did not answer within ${label} ms`)),
+      Math.max(ms, 0),
+    )
+    // A pending deadline must not keep the host process alive.
+    ;(timer as { unref?: () => void }).unref?.()
+    new Promise<T>((settle) => settle(operation())).then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+}
+
+/** The write time of a stored record; anything without one reads as older than any limit. */
+function storedAtOf(value: unknown): number {
+  return isRecord(value) &&
+    typeof value.storedAt === 'number' &&
+    Number.isFinite(value.storedAt)
+    ? value.storedAt
+    : Number.MIN_SAFE_INTEGER
+}
+
+/** Rendered skill outputs kept in the host's plugin storage by session, message and call, one key per record and no index. */
+export function createDurableSkillOutputs(
+  storage: V2Storage,
+  options: DurableSkillOutputOptions = {},
+): DurableSkillOutputs {
+  const maxEntries = options.maxEntries ?? DURABLE_MAX_ENTRIES
+  const maxEntryBytes = options.maxEntryBytes ?? DURABLE_MAX_ENTRY_BYTES
+  const maxAgeMs = options.maxAgeMs ?? DURABLE_MAX_AGE_MS
+  const deadlineMs = options.deadlineMs ?? DURABLE_DEADLINE_MS
+  const maxMisses = options.maxMisses ?? DURABLE_MAX_MISSES
+  const missTtlMs = options.missTtlMs ?? DURABLE_MISS_TTL_MS
+  const now = options.now ?? Date.now
+  const report = options.report ?? (() => {})
+  const reported = new Set<string>()
+  const reportOnce = (kind: string, error?: unknown) => {
+    if (reported.has(kind)) return
+    reported.add(kind)
+    const reason = error instanceof Error ? `: ${error.message}` : ''
+    report(`${kind}${reason}`)
+  }
+  // Keys found to hold nothing usable, with when to look again, oldest first; a transient failure is never added.
+  const misses = new Map<string, number>()
+  const rememberMiss = (key: string) => {
+    misses.delete(key)
+    misses.set(key, now() + missTtlMs)
+    for (const oldest of misses.keys()) {
+      if (misses.size <= maxMisses) break
+      misses.delete(oldest)
+    }
+  }
+  const isKnownMiss = (key: string) => {
+    const until = misses.get(key)
+    if (until === undefined) return false
+    if (until > now()) return true
+    misses.delete(key)
+    return false
+  }
+  // Set after a cleanup fails or a write times out: nothing more is written, so a store that cannot be trimmed cannot grow.
+  let writesStopped = false
+  // One durable write (set and cleanup) at a time per process; a put that finds one running is skipped.
+  let writing = false
+
+  // Every storage call draws on one deadline; none starts once it has passed.
+  const call = <T>(until: number, operation: () => Promise<T>) => {
+    const remaining = until - Date.now()
+    return remaining <= 0
+      ? Promise.reject(
+          new Error(`storage did not answer within ${deadlineMs} ms`),
+        )
+      : withDeadline(operation, remaining, deadlineMs)
+  }
+
+  const listEntries = async (until: number) => {
+    const found: { key: string; storedAt: number }[] = []
+    let after: string | undefined
+    for (let page = 0; page < DURABLE_SCAN_MAX_PAGES; page++) {
+      const result = await call(until, () =>
+        storage.scan({
+          prefix: DURABLE_KEY_PREFIX,
+          limit: DURABLE_SCAN_PAGE,
+          ...(after === undefined ? {} : { after }),
+        }),
+      )
+      for (const entry of result.entries)
+        found.push({ key: entry.key, storedAt: storedAtOf(entry.value) })
+      if (result.next === undefined) break
+      after = result.next
+    }
+    return found
+  }
+
+  // Every writer ranks the same listing the same way, so overlapping trims agree on the survivors.
+  const trim = async (until: number) => {
+    const cutoff = now() - maxAgeMs
+    const ranked = (await listEntries(until)).sort(
+      (a, b) => b.storedAt - a.storedAt || (a.key < b.key ? -1 : 1),
+    )
+    const doomed = ranked.filter(
+      (entry, index) => entry.storedAt < cutoff || index >= maxEntries,
+    )
+    const results = await Promise.allSettled(
+      doomed.map((entry) => call(until, () => storage.remove(entry.key))),
+    )
+    const failed = results.find((result) => result.status === 'rejected')
+    if (failed !== undefined) throw failed.reason
+  }
+
+  return {
+    async put(ids, output) {
+      if (writesStopped || writing) return
+      const key = durableKey(ids)
+      if (key === undefined) {
+        reportOnce(
+          'skill output has an id that cannot be stored and is not kept across a restart',
+        )
+        return
+      }
+      if (Buffer.byteLength(output, 'utf8') > maxEntryBytes) {
+        rememberMiss(key)
+        reportOnce(
+          `skill output is over ${maxEntryBytes} bytes and is not kept across a restart`,
+        )
+        return
+      }
+      writing = true
+      try {
+        const until = Date.now() + deadlineMs
+        const record = {
+          v: DURABLE_RECORD_VERSION,
+          ...ids,
+          output,
+          storedAt: now(),
+        }
+        try {
+          await call(until, () => storage.set(key, record))
+        } catch (error) {
+          if (error instanceof StorageTimeout) {
+            writesStopped = true
+            reportOnce(
+              'skill output write did not finish in time, so no more skill output is kept across a restart',
+              error,
+            )
+          } else {
+            reportOnce('skill output could not be kept across a restart', error)
+          }
+          return
+        }
+        misses.delete(key)
+        try {
+          await trim(until)
+        } catch (error) {
+          writesStopped = true
+          reportOnce(
+            'old skill outputs could not be removed, so no more skill output is kept across a restart',
+            error,
+          )
+        }
+      } finally {
+        writing = false
+      }
+    },
+    async get(ids) {
+      const key = durableKey(ids)
+      if (key === undefined || isKnownMiss(key)) return undefined
+      let stored: unknown
+      try {
+        stored = await call(Date.now() + deadlineMs, () => storage.get(key))
+      } catch (error) {
+        reportOnce('kept skill output could not be read', error)
+        return undefined
+      }
+      if (
+        !isRecord(stored) ||
+        stored.v !== DURABLE_RECORD_VERSION ||
+        stored.sessionID !== ids.sessionID ||
+        stored.messageID !== ids.messageID ||
+        stored.callID !== ids.callID ||
+        typeof stored.output !== 'string' ||
+        now() - storedAtOf(stored) > maxAgeMs
+      ) {
+        rememberMiss(key)
+        return undefined
+      }
+      return stored.output
+    },
+  }
+}
+
 const RESTORE_TTL_MS = 24 * 60 * 60 * 1000
 const RESTORE_MAX_ENTRIES = 32
+
+/** Per-entry cap: ten times the largest bundled skill, with room for `$ARGUMENTS`. */
+export const DURABLE_MAX_ENTRY_BYTES = 1024 * 1024
+
+/** Entries kept, newest first. */
+export const DURABLE_MAX_ENTRIES = 32
+
+/** Matches the host's `ToolOutput.RETENTION` for its own spill files. */
+export const DURABLE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+
+/** How long any one storage call may take before it is treated as failed. */
+export const DURABLE_DEADLINE_MS = 2000
+
+/** Known-missing keys remembered per process. */
+export const DURABLE_MAX_MISSES = 256
+
+/** How long a remembered miss stands before the key is read again. */
+export const DURABLE_MISS_TTL_MS = 60 * 1000
+
+const DURABLE_SCAN_PAGE = 100
+const DURABLE_SCAN_MAX_PAGES = 10
+const DURABLE_KEY_PREFIX = 'systematic:skill-output:'
+const DURABLE_RECORD_VERSION = 2
 
 /** The enabled bundled skills as v2 records, in name order. */
 export function readBundledSkills(
@@ -146,35 +432,105 @@ function parseToolInput(input: unknown): SkillToolInput {
 
 /**
  * Put the full text back into the tool results of a model request where the
- * host cut it. Matching is by session, tool name and call id. Nothing depends
- * on the host's marker text. The store is read, not emptied: the host builds
- * each request from history, so the same result is restored on every later
- * request.
+ * host cut it. Matching is by session, the assistant message that made the call,
+ * tool name and call id. Nothing depends on the host's marker text. The store is
+ * read, not emptied: the host builds each request from history, so the same
+ * result is restored on every later request.
+ * A cut part the store lacks is read from `durable`; a request with none returns `undefined` before any await.
+ * A result whose calling message cannot be identified is left as the host cut it.
  */
 export function restoreSkillResults(
   store: SkillOutputStore,
   event: unknown,
-): void {
-  if (!isRecord(event) || typeof event.sessionID !== 'string') return
+  durable?: DurableSkillOutputs,
+): Promise<void> | undefined {
+  if (!isRecord(event) || typeof event.sessionID !== 'string') return undefined
   const { sessionID, messages } = event
-  if (!Array.isArray(messages)) return
+  if (!Array.isArray(messages)) return undefined
+  const pending: PendingRestore[] = []
+  // The assistant message of the latest skill call under each call id so far; `undefined` when it cannot be told.
+  const callers = new Map<string, string | undefined>()
   for (const message of messages) {
-    if (!isRecord(message) || message.role !== 'tool') continue
-    if (!Array.isArray(message.content)) continue
-    for (const part of message.content) restorePart(store, sessionID, part)
+    if (!isRecord(message) || !Array.isArray(message.content)) continue
+    if (message.role === 'assistant') noteSkillCalls(callers, message)
+    if (message.role !== 'tool') continue
+    for (const part of message.content)
+      restorePart(store, sessionID, part, callers, durable, pending)
   }
+  if (durable === undefined || pending.length === 0) return undefined
+  return restoreFromDurable(store, durable, pending)
+}
+
+function noteSkillCalls(
+  callers: Map<string, string | undefined>,
+  message: Record<string, unknown>,
+): void {
+  if (!Array.isArray(message.content)) return
+  const seen = new Set<string>()
+  for (const part of message.content) {
+    if (!isRecord(part) || part.type !== 'tool-call') continue
+    if (part.name !== SKILL_TOOL_NAME || typeof part.id !== 'string') continue
+    // A call id twice in one message, or a message with no id, cannot be told apart.
+    const named = typeof message.id === 'string' && !seen.has(part.id)
+    callers.set(part.id, named ? (message.id as string) : undefined)
+    seen.add(part.id)
+  }
+}
+
+interface PendingRestore {
+  part: Record<string, unknown>
+  ids: SkillCallIds
 }
 
 function restorePart(
   store: SkillOutputStore,
   sessionID: string,
   part: unknown,
+  callers: ReadonlyMap<string, string | undefined>,
+  durable: DurableSkillOutputs | undefined,
+  pending: PendingRestore[],
 ): void {
   if (!isRecord(part) || part.type !== 'tool-result') return
   if (part.name !== SKILL_TOOL_NAME || typeof part.id !== 'string') return
-  const full = store.peek(sessionID, part.id)
-  if (full === undefined) return
-  part.result = restoredResult(part.result, full)
+  const messageID = callers.get(part.id)
+  if (messageID === undefined) return
+  const full = store.peek(sessionID, skillOutputHandle(messageID, part.id))
+  if (full !== undefined) {
+    part.result = restoredResult(part.result, full)
+    return
+  }
+  if (durable !== undefined && isCutByHost(part.result))
+    pending.push({ part, ids: { sessionID, messageID, callID: part.id } })
+}
+
+/** A host cut adds a marker part, so a cut skill is a `content` result of more than one part. */
+function isCutByHost(result: unknown): boolean {
+  return (
+    isRecord(result) &&
+    result.type === 'content' &&
+    Array.isArray(result.value) &&
+    result.value.length > 1
+  )
+}
+
+async function restoreFromDurable(
+  store: SkillOutputStore,
+  durable: DurableSkillOutputs,
+  pending: readonly PendingRestore[],
+): Promise<void> {
+  await Promise.all(
+    pending.map(async ({ part, ids }) => {
+      const full = await durable.get(ids)
+      if (full === undefined) return
+      part.result = restoredResult(part.result, full)
+      // Later requests in this process read it from memory.
+      store.put(
+        ids.sessionID,
+        skillOutputHandle(ids.messageID, ids.callID),
+        full,
+      )
+    }),
+  )
 }
 
 /**
@@ -205,6 +561,7 @@ function createToolDefinition(
   ctx: Plugin.Context,
   descriptor: SkillToolDescriptor,
   store: SkillOutputStore,
+  durable: DurableSkillOutputs | undefined,
   guard: SafeGuard,
 ): V2ToolDefinition {
   return {
@@ -238,7 +595,17 @@ function createToolDefinition(
         }),
       )
       await progress()
-      store.put(context.sessionID, context.id, loaded.output)
+      const ids = {
+        sessionID: context.sessionID,
+        messageID: context.messageID,
+        callID: context.id,
+      }
+      store.put(
+        ids.sessionID,
+        skillOutputHandle(ids.messageID, ids.callID),
+        loaded.output,
+      )
+      if (durable !== undefined) await durable.put(ids, loaded.output)
       return {
         content: loaded.output,
         metadata: { name: loaded.prefixedName, dir: loaded.dir },
@@ -266,6 +633,12 @@ export const installSkills: V2Installer = async ({
     maxEntries: RESTORE_MAX_ENTRIES,
     ttlMs: RESTORE_TTL_MS,
   })
+  // A host without plugin storage keeps the in-memory restore only.
+  const storage: Plugin.Context['storage'] | undefined = ctx.storage
+  const durable =
+    storage === undefined
+      ? undefined
+      : createDurableSkillOutputs(storage, { report })
   const reported = new Set<string>()
 
   const skillTransform = guard.sync(
@@ -288,12 +661,19 @@ export const installSkills: V2Installer = async ({
       }
       return
     }
-    editor.add(createToolDefinition(ctx, descriptor, store, guard))
+    editor.add(createToolDefinition(ctx, descriptor, store, durable, guard))
   })
 
-  const restore = guard.sync('skill output restore', (event: unknown) => {
-    restoreSkillResults(store, event)
-  })
+  const restoreNow = guard.sync('skill output restore', (event: unknown) =>
+    restoreSkillResults(store, event, durable),
+  )
+  // A request with nothing to read from storage returns synchronously, so the
+  // host waits for this hook only when there is a read to wait for.
+  const restore = (event: unknown): Promise<void> | undefined => {
+    const pending = restoreNow(event)
+    if (pending === undefined) return undefined
+    return guard.async('skill output restore', () => pending)()
+  }
 
   await guard.async('skill registration', () =>
     ctx.skill.transform(skillTransform),
