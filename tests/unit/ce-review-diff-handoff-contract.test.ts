@@ -398,29 +398,31 @@ describe('ce:review pinned scope: the per-path rule survives the parent’s prom
     expect(forms.length).toBe(2)
     const repo = makeRepo()
     try {
-      const fill = (command: string, head: string) =>
+      // Values reach the shell as quoted variables, never spliced into the script.
+      const fill = (command: string) =>
         command
-          .replace('<checkout_path>', repo.root)
-          .replace('<base_sha>', repo.base)
-          .replace('<head>', head)
+          .replace('<checkout_path>', '"$CHECKOUT_PATH"')
+          .replace('<base_sha>', '"$BASE_SHA"')
+          .replace('<head>', '"$HEAD_SHA"')
           .replace('<path>', 'src/keep.ts')
       const headCommit = git(repo.root, 'rev-parse', 'HEAD')
-      const committed = runShell(
-        repo.root,
-        fill(forms[0] as string, headCommit),
-        {},
-      )
+      const vars = {
+        CHECKOUT_PATH: repo.root,
+        BASE_SHA: repo.base,
+        HEAD_SHA: headCommit,
+      }
+      const committed = runShell(repo.root, fill(forms[0] as string), vars)
       expect(committed.status).toBe(0)
       expect(committed.stdout).toContain('+export const keep = 2')
       writeFile(repo.root, 'src/keep.ts', 'export const keep = 9\n')
-      const dirty = runShell(repo.root, fill(forms[1] as string, ''), {})
+      const dirty = runShell(repo.root, fill(forms[1] as string), vars)
       expect(dirty.status).toBe(0)
       expect(dirty.stdout).toContain('+export const keep = 9')
       expect(dirty.stdout).not.toContain('+export const keep = 2')
       const oldSource = runShell(
         repo.root,
-        `git -C ${repo.root} show ${repo.base}:src/gone.ts`,
-        {},
+        'git -C "$CHECKOUT_PATH" show "$BASE_SHA":src/gone.ts',
+        vars,
       )
       expect(oldSource.stdout).toContain('export const gone = 1')
     } finally {
@@ -631,15 +633,18 @@ function git(cwd: string, ...args: string[]): string {
   return result.stdout.trim()
 }
 
+// Fixture shells get an explicit environment, not the parent's.
+const SYSTEM_PATH = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin'
+
 function runShell(
   cwd: string,
   script: string,
   env: Record<string, string>,
 ): ShellResult {
-  const result = spawnSync('bash', ['-c', script], {
+  const result = spawnSync('/bin/bash', ['-c', script], {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, ...env },
+    env: { PATH: SYSTEM_PATH, HOME: cwd, ...env },
   })
   return {
     status: result.status,
@@ -1073,9 +1078,10 @@ describe('ce:review pinned scope: the documented capture, run for real', () => {
     const repo = makeRepo()
     const shim = fs.mkdtempSync(path.join(os.tmpdir(), 'ce-review-shim-'))
     try {
-      const realGit = spawnSync('which', ['git'], {
-        encoding: 'utf8',
-      }).stdout.trim()
+      const realGit = SYSTEM_PATH.split(':')
+        .map((dir) => path.join(dir, 'git'))
+        .find((candidate) => fs.existsSync(candidate))
+      expect(realGit).toBeDefined()
       // A shim stands in for git only where the manifest is listed.
       fs.writeFileSync(
         path.join(shim, 'git'),
@@ -1084,7 +1090,7 @@ describe('ce:review pinned scope: the documented capture, run for real', () => {
       )
       const run = runShell(repo.root, PIN_SCRIPT, {
         BASE: repo.base,
-        PATH: `${shim}:${process.env.PATH ?? ''}`,
+        PATH: `${shim}:${SYSTEM_PATH}`,
       })
       expect(run.status).not.toBe(0)
       expect(run.stdout).toMatch(/^ERROR: manifest status unsupported/m)
