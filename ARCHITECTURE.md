@@ -790,7 +790,9 @@ two v1 profiles each run a smoke subset in one job. Each job uploads its JUnit r
 gate runs the suite only on a pull request that changes a path in the `host-contract` filter of the
 `host-contract-gate` job; a push to `main` skips it, and a malformed filter value fails closed. The
 aggregator, named `Host Contract`, always runs, fails unless the gate succeeded and (when the suite
-was required) every host job did, and runs the guard once per profile even after a job failure. The
+was required) every host job did. When the suite was required, it runs the guard once per profile unless
+the run was cancelled, even after a job failure; on a pull request that skips the suite, the green check
+validated no host report. The
 guard merges a profile's report pairs and judges the union against that profile's expected-suite-file
 list, exempt-skip list, and pass floor on the summed pass counts; a missing report is a violation.
 Refresh the timings file from the final green run's shard JUnit times when the file mix changes
