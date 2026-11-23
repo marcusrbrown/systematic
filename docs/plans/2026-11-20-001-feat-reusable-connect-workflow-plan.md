@@ -1,7 +1,7 @@
 ---
 title: "feat: let other repositories call the scheduled ce:connect workflow"
 type: feat
-status: active
+status: completed
 date: 2026-11-20
 origin: docs/brainstorms/2026-11-20-reusable-ce-connect-workflow-requirements.md
 ---
@@ -555,7 +555,7 @@ flowchart TB
 - `bun scripts/content-integrity.ts` and the docs build (`bun run docs:build`) pass.
 - `bun run surfaces:affected --run` and `bun run surfaces:drift` pass for any touched generated reference.
 
-- [ ] U7. **fro-bot/agent pilot**
+- [x] U7. **fro-bot/agent pilot**
 
 **Target repo:** `fro-bot/agent`. This unit's PR lands there, after a Systematic release carries U1 to U6 and Renovate's bump of `SYSTEMATIC_VERSION` to it has merged.
 
