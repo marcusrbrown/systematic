@@ -147,7 +147,7 @@ OpenCode v1 adapter
 OpenCode v2 adapter
   src/lib/opencode-v2.ts     — setupOpenCodeV2: loads config once, builds one frozen snapshot (asset plan + bootstrap content), runs the per-domain installer slots in order, tool guard first; every installer except the tool guard runs through createSafeGuard; installAgents registers the planned agents through one ctx.agent.transform; invalid config rejects
   src/lib/opencode-v2-tool-guard.ts — installToolGuard: one execute.before hook that refuses any tool call from a read-only agent outside a fixed allowlist, direct or from Code Mode, whatever the session's permission rules say
-  src/lib/opencode-v2-skills.ts — installSkills: registers the enabled bundled skills via ctx.skill.transform, ports systematic_skill through ctx.tool.transform, and restores the host-truncated skill output in the context hook
+  src/lib/opencode-v2-skills.ts — installSkills: registers the enabled bundled skills via ctx.skill.transform, ports systematic_skill through ctx.tool.transform, and restores the host-truncated skill output in the context hook (from memory, and after a restart from the plugin's `ctx.storage`)
   src/lib/opencode-v2-commands.ts — installCommands: registers the planned commands through ctx.command.transform; expands arguments and submits one prompt on the invoking session; refuses a command that declares agent, model or subtask, which v2 plugin commands cannot route; never runs !-backtick blocks
   src/lib/opencode-v2-bootstrap.ts — installBootstrap: puts the composed bootstrap as one keyed instruction entry per session from the prompt hook; OPENCODE_V2_USAGE_TEMPLATE names only tools registered on v2; an entry over 256 KiB is skipped with a diagnostic
   src/lib/opencode-v2-permissions.ts — translatePermissionRules: ordered permission triples to v2 {action, resource, effect} rules (bash to shell, task to subagent, doom_loop and lsp dropped)
@@ -223,7 +223,7 @@ Key symbols:
 | `createOpenCodeV1Hooks` | `src/lib/opencode-v1.ts` | OpenCode v1 adapter: the five v1 hooks |
 | `setupOpenCodeV2` | `src/lib/opencode-v2.ts` | OpenCode v2 adapter scaffold: one config load, one shared snapshot, installer slots in order, tool guard first; every installer but the tool guard runs behind a never-throw guard |
 | `installToolGuard` | `src/lib/opencode-v2-tool-guard.ts` | OpenCode v2 read-only tool guard: an allowlist enforced in the `execute.before` hook for named agents; fails closed |
-| `installSkills` | `src/lib/opencode-v2-skills.ts` | OpenCode v2 skills: native skill registration, the `systematic_skill` port, and full-output restoration |
+| `installSkills` | `src/lib/opencode-v2-skills.ts` | OpenCode v2 skills: native skill registration, the `systematic_skill` port, and full-output restoration, kept across a restart in the host's plugin storage |
 | `installCommands` | `src/lib/opencode-v2-commands.ts` | OpenCode v2 commands: argument expansion, one prompt per invocation, refusal of routing fields |
 | `installBootstrap` | `src/lib/opencode-v2-bootstrap.ts` | OpenCode v2 bootstrap: one instruction entry per session, put from the prompt hook |
 | `translatePermissionRules` | `src/lib/opencode-v2-permissions.ts` | Ordered permission triples to the v2 rule list, one rule per triple in the same order |

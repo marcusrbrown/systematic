@@ -300,6 +300,32 @@ function functionCallOutputs(body: ResponsesRequestBody): Map<string, unknown> {
   )
 }
 
+/**
+ * The text of one `function_call_output` value: the string itself, or every
+ * `input_text` part of an array joined in order. Anything else reads as empty,
+ * so a changed shape fails the byte comparison rather than throwing.
+ */
+function wireText(output: unknown): string {
+  if (typeof output === 'string') return output
+  if (!Array.isArray(output)) return ''
+  return output
+    .map((part: unknown) =>
+      typeof part === 'object' &&
+      part !== null &&
+      'text' in part &&
+      typeof part.text === 'string'
+        ? part.text
+        : '',
+    )
+    .join('')
+}
+
+/**
+ * The cut the host leaves in a result over its limit: a final part such as
+ * `[showing lines 1-515 of 936 (last line cut); full output saved to <path>]`.
+ */
+const HOST_TRUNCATION_MARKER = /\[showing (?:lines \d+-\d+|0 lines) of \d+/
+
 /** The Responses stream for one scripted answer: a tool call, or plain text. */
 function responsesStreamEvents(
   response: ScriptedResponse,
@@ -2180,6 +2206,105 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
               expected,
             )
           }
+        } finally {
+          responses.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'a skill above the host output limit reaches the Responses wire as the same function_call_output after a restart',
+      async () => {
+        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
+        const expected = createSkillToolDescriptor({
+          bundledSkillsDir: path.join(fs.realpathSync(packageDir), 'skills'),
+          disabledSkills: [],
+        }).load({ name: 'ce:review' }).output
+        // The premise: this skill is over the host's 51200 byte limit.
+        expect(Buffer.byteLength(expected)).toBeGreaterThan(51_200)
+        const responses = startResponsesModelServer()
+        const prompt = async (
+          host: Awaited<ReturnType<typeof startAgentHost>>,
+          sessionID: string,
+          text: string,
+        ) => {
+          await host.client.session.prompt({ sessionID, text })
+          await host.client.session.wait({ sessionID })
+        }
+        const loadOutputs = () =>
+          responses.requests
+            .map((body) => functionCallOutputs(body).get('call-1'))
+            .filter((output) => output !== undefined)
+        try {
+          // One process: the store holds the load and the hook restores it.
+          const live = await startAgentHost(
+            pluginSpec,
+            responses,
+            {},
+            'responses',
+          )
+          let sessionID: string
+          try {
+            const session = await live.client.session.create({
+              location: { directory: fixture.projectDir },
+              model: { providerID: SCRIPTED_PROVIDER, id: SCRIPTED_MODEL },
+            })
+            sessionID = session.id
+            await prompt(
+              live,
+              sessionID,
+              '@@TOOL systematic_skill {"name":"ce:review"}',
+            )
+          } finally {
+            await live.server.stop()
+          }
+          const liveOutputs = loadOutputs()
+          // Only the continuation request carries the load so far.
+          expect(liveOutputs).toHaveLength(1)
+          const original = liveOutputs[0]
+          // The raw wire value of the live load, whole and with no cut marker.
+          // The host sends a result over its limit as a one-part array, not a
+          // string, so the shape is part of what a restart must keep.
+          expect(
+            wireText(original) === expected,
+            'the live load is whole',
+          ).toBe(true)
+          expect(wireText(original)).not.toMatch(HOST_TRUNCATION_MARKER)
+
+          // A new process, same fixture storage, same session, no new skill call.
+          // Its store is empty, so the hook has nothing to restore from.
+          const restarted = await startAgentHost(
+            pluginSpec,
+            responses,
+            {},
+            'responses',
+          )
+          try {
+            await prompt(restarted, sessionID, 'Carry on after the restart.')
+          } finally {
+            await restarted.server.stop()
+          }
+          const outputs = loadOutputs()
+          expect(outputs).toHaveLength(2)
+          const replayed = outputs[1]
+
+          // The same raw wire value, byte for byte: the provider caches by the
+          // bytes of the history. The failure messages name the lengths and the
+          // marker so a RED run is self-explanatory.
+          const originalText = wireText(original)
+          const replayedText = wireText(replayed)
+          expect(
+            replayedText.length,
+            `replayed ${replayedText.length} chars in ${Array.isArray(replayed) ? replayed.length : 'a string of'} part(s) vs original ${originalText.length}; marker present: ${HOST_TRUNCATION_MARKER.test(replayedText)}`,
+          ).toBe(originalText.length)
+          expect(
+            replayedText === originalText,
+            'the replayed text is the original rendered payload byte for byte',
+          ).toBe(true)
+          expect(JSON.stringify(replayed) === JSON.stringify(original)).toBe(
+            true,
+          )
         } finally {
           responses.stop()
         }
