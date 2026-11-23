@@ -79,9 +79,7 @@ The plugin builds no workflow guard: it registers no workflow tools and no guard
 repository snapshot. A `workflow_guard` key in config is still accepted and has no effect, and each file
 that carries it logs one warning per load.
 
-The CLI (`src/cli.ts`) is a separate entry point exposing `list`, `capabilities`,
-`validate-review-artifact`, `validate-review-return`, `config`, `setup --harness`, and `pi-subagents`
-subcommands. It does not
+The CLI (`src/cli.ts`) is a separate entry point; `systematic --help` lists its commands. It does not
 participate in the plugin hook lifecycle. `setup --harness opencode|pi` performs project-local,
 atomic, idempotent config writes for those two harnesses; Claude Code has no equivalent CLI setup
 step because it is delivered as a prebuilt plugin (see below), not a runtime config write.
@@ -781,18 +779,22 @@ entry matches nothing silently. Accepted limits: every worktree of an allowed pr
 own proposals and Markdown, and an entry trusts whatever repository is later cloned to its path.
 
 **Host-contract gate** (`.github/workflows/main.yaml` `host-contract-gate`, `host-contract-shard`,
-and `host-contract` jobs, `scripts/host-contract-guard.ts`, `scripts/lib/opencode-pin.ts`,
-`tests/integration/host-contract-timings.json`) — runs `tests/integration` against a real OpenCode
-host pinned to the `@opencode-ai/sdk` devDependency version (`SYSTEMATIC_REQUIRE_OPENCODE=1`) in
-three jobs. The gate runs the suite only on a pull request that changes a relevant path (anything
-under `src`, `tests`, `scripts`, `evals`, `skills`, `agents`, `registry`, or `.github`, or
-`package.json` or `bun.lock`); a push to `main` skips it, and a malformed filter value fails closed.
-Four shards run it with `bun test --shard`, split by the measured per-file durations in the
-committed timings file, and each uploads its JUnit report and log. The aggregator, named
-`Host Contract`, always runs, fails unless the gate succeeded and (when the suite was required)
-every shard did, and runs the guard over all four report pairs even after a shard failure. The
-guard merges the pairs and judges the union against a fixed expected-suite-file list, an
-exempt-skip list, and a pass floor on the summed pass counts; a missing report is a violation.
+`host-contract-v1-floor`, `host-contract-v1-current`, and `host-contract` jobs,
+`scripts/host-contract-guard.ts`, `scripts/lib/opencode-pin.ts`,
+`tests/integration/host-contract-timings.json`, `scripts/opencode-host-pins.json`) — runs
+`tests/integration` against real OpenCode hosts at the versions in `scripts/opencode-host-pins.json`,
+as three profiles (`v2`, `v1-floor`, `v1-current`) that `scripts/host-contract-guard.ts` defines with
+their file lists, exempt skips and pass floors. The `v2` profile runs the full contract in four shards
+with `bun test --shard`, split by the measured per-file durations in the committed timings file; the
+two v1 profiles each run a smoke subset in one job. Each job uploads its JUnit report and log. The
+gate runs the suite only on a pull request that changes a path in the `host-contract` filter of the
+`host-contract-gate` job; a push to `main` skips it, and a malformed filter value fails closed. The
+aggregator, named `Host Contract`, always runs, fails unless the gate succeeded and (when the suite
+was required) every host job did. When the suite was required, it runs the guard once per profile unless
+the run was cancelled, even after a job failure; on a pull request that skips the suite, the green check
+validated no host report. The
+guard merges a profile's report pairs and judges the union against that profile's expected-suite-file
+list, exempt-skip list, and pass floor on the summed pass counts; a missing report is a violation.
 Refresh the timings file from the final green run's shard JUnit times when the file mix changes
 (see `docs/solutions/workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md`). `Host Contract` is a required
 status check in the `main` ruleset and classic branch protection, so a red run blocks the merge;

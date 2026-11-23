@@ -10,7 +10,7 @@ systematic/
 ├── src/              # TypeScript plugin + CLI source
 │   ├── index.ts      # OpenCode plugin entry — default export only
 │   ├── pi.ts         # Pi extension entry — default export only
-│   ├── cli.ts        # CLI entry (list / capabilities / validate-review-artifact / validate-review-return / config / setup --harness / pi-subagents)
+│   ├── cli.ts        # CLI entry (`systematic --help` lists the commands)
 │   ├── claude-code-validator.ts # Claude Code bundled review-artifact validator logic
 │   ├── claude-code-validator-bin.ts # Entry of the validator bin (holds the entry guard)
 │   ├── claude-code-search.ts # Entry of the `systematic-search` Claude Code bin
@@ -231,8 +231,8 @@ coverage, model inheritance) against a real OpenCode runtime, in both source and
   `docs/scripts/` generation scripts, and bundled skill helper scripts under `skills/*/scripts/`
   (e.g. `ce-review-cleanup-*.test.ts`, `ce-review-ensure-ignore.test.ts`)
 - `tests/integration/` — integration tests (skip automatically if deps unavailable locally;
-  `SYSTEMATIC_REQUIRE_OPENCODE=1` in the host-contract CI jobs, behind the required
-  `Host Contract` check, turns those skips into failures against a real, pinned OpenCode host).
+  `SYSTEMATIC_REQUIRE_OPENCODE_V1=1` or `SYSTEMATIC_REQUIRE_OPENCODE_V2=1` in the host-contract CI jobs,
+  behind the required `Host Contract` check, turns those skips into failures against a real, pinned OpenCode host).
   The contract runs as three profiles listed in `scripts/host-contract-guard.ts`: the full contract
   on OpenCode v2 (four shards; `opencode-v2.test.ts` is its host test), and a v1 smoke subset at the
   v1 floor and at the current v1 pin. `scripts/opencode-host-pins.json` holds the four CLI
@@ -284,7 +284,7 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 | `biome.json` | Linter + formatter config |
 | `tsconfig.json` | TypeScript compiler config |
 | `tsconfig.scripts.json` | Required typecheck config covering `src/`, `scripts/`, `docs/scripts/` (`bun run typecheck:scripts`) |
-| `tsconfig.tests.json` | Advisory typecheck config covering `src/`, `scripts/`, `tests/`, `docs/scripts/` (`bun run typecheck:all`) |
+| `tsconfig.tests.json` | Required typecheck config covering `src/`, `scripts/`, `tests/`, `docs/scripts/` (`bun run typecheck:all`) |
 | `package.json` | Package metadata, scripts, dependencies |
 
 ### Core Logic
