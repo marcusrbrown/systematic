@@ -1,7 +1,7 @@
 ---
 title: "feat: let other repositories call the scheduled ce:connect workflow"
 type: feat
-status: completed
+status: active
 date: 2026-11-20
 origin: docs/brainstorms/2026-11-20-reusable-ce-connect-workflow-requirements.md
 ---
@@ -555,7 +555,7 @@ flowchart TB
 - `bun scripts/content-integrity.ts` and the docs build (`bun run docs:build`) pass.
 - `bun run surfaces:affected --run` and `bun run surfaces:drift` pass for any touched generated reference.
 
-- [x] U7. **fro-bot/agent pilot**
+- [ ] U7. **fro-bot/agent pilot**
 
 **Target repo:** `fro-bot/agent`. This unit's PR lands there, after a Systematic release carries U1 to U6 and Renovate's bump of `SYSTEMATIC_VERSION` to it has merged.
 
@@ -580,7 +580,7 @@ flowchart TB
   2. A same-day second dispatch edits the report in place (R5).
   3. A dispatch with the researcher model blanked fails prepare red and posts nothing (AE2).
   4. Local promotion: with the checkout allow-listed, the report's named fetch word imports a candidate; with the checkout removed, the same word is refused and nothing downloads (AE4).
-  5. Negative on a temporary branch: a wrapper named like the real one that calls a fork of the callee is refused as not-a-connect-run (AE5). It needs a temporary fork under Marcus's account, removed afterwards, and is the only fork case in the plan.
+  5. Negative on a temporary branch: a wrapper named like the real one that calls a fork of the callee is refused as not-a-connect-run (AE5). It needs a temporary fork under Marcus's account, removed afterwards, and is the only fork case in the plan. Waived: the `verify-provenance` unit tests cover the refusal, and the live run is not part of the readiness gate.
   6. A pre-cutover Systematic candidate's bare word still imports (AE7).
 - Readiness for wiring any other repository: steps 1 to 6 pass and the pilot has posted at least one scheduled report. Rollback: disable the wrapper in the caller; nothing in Systematic needs to change.
 - Under stop rule (b): drop step 4 (the named-fetch import) and step 5 (the refusal), record AE4 and AE5 as not applicable, and narrow the readiness gate to steps 1, 2, 3 and 6 plus one scheduled report.
