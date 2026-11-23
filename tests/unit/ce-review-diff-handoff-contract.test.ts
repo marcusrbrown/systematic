@@ -396,7 +396,8 @@ describe('ce:review pinned scope: the per-path rule survives the parent’s prom
       (match) => match[1] as string,
     )
     expect(forms.length).toBe(2)
-    const repo = makeRepo()
+    // A space in the checkout path fails the commands unless they quote it.
+    const repo = makeRepo('ce-review pin-')
     try {
       // Values reach the shell as quoted variables, never spliced into the script.
       const fill = (command: string) =>
@@ -709,10 +710,12 @@ function parsePinned(stdout: string): Pinned {
   return pinned
 }
 
-function makeRepo(): { root: string; base: string; cleanup: () => void } {
-  const root = fs.realpathSync(
-    fs.mkdtempSync(path.join(os.tmpdir(), 'ce-review-pin-')),
-  )
+function makeRepo(prefix = 'ce-review-pin-'): {
+  root: string
+  base: string
+  cleanup: () => void
+} {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)))
   git(root, 'init', '-q', '-b', 'main')
   writeFile(root, 'src/keep.ts', 'export const keep = 1\n')
   writeFile(
