@@ -327,6 +327,18 @@ function wireText(output: unknown): string {
  */
 const HOST_TRUNCATION_MARKER = /\[showing (?:lines \d+-\d+|0 lines) of \d+/
 
+/** Every `function_call_output` value for one call id, in request order: one id can be reused across turns. */
+function functionCallOutputList(
+  body: ResponsesRequestBody,
+  callID: string,
+): unknown[] {
+  return responsesItems(body)
+    .filter(
+      (item) => item.type === 'function_call_output' && item.call_id === callID,
+    )
+    .map((item) => item.output)
+}
+
 /** The Responses stream for one scripted answer: a tool call, or plain text. */
 function responsesStreamEvents(
   response: ScriptedResponse,
@@ -2329,12 +2341,110 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
               )
               .all()
               .map((row) => row.key.slice(row.key.indexOf('systematic:')))
-            expect(keys).toEqual([
-              `systematic:skill-output:${encodeURIComponent(sessionID)}:call-1`,
-            ])
+            expect(keys).toHaveLength(1)
+            // Session, the assistant message that made the call, and the call id.
+            expect(keys[0]).toMatch(
+              new RegExp(
+                `^systematic:skill-output:${encodeURIComponent(sessionID)}:msg_[^:]+:call-1$`,
+              ),
+            )
           } finally {
             db.close()
           }
+        } finally {
+          responses.stop()
+        }
+      },
+      TIMEOUT_MS,
+    )
+
+    test(
+      'two different over-limit outputs under one provider call id on separate turns each replay their own bytes live and after a restart',
+      async () => {
+        const { pluginSpec, packageDir } = extractPackagedPlugin(fixture, HOST)
+        const render = (name: string) =>
+          createSkillToolDescriptor({
+            bundledSkillsDir: path.join(fs.realpathSync(packageDir), 'skills'),
+            disabledSkills: [],
+          }).load({ name }).output
+        const first = render('ce:review')
+        const second = render('ce:plan')
+        // The premise: both are over the host's limit, and they differ.
+        expect(Buffer.byteLength(first)).toBeGreaterThan(51_200)
+        expect(Buffer.byteLength(second)).toBeGreaterThan(51_200)
+        expect(first === second).toBe(false)
+        const responses = startResponsesModelServer()
+        const prompt = async (
+          host: Awaited<ReturnType<typeof startAgentHost>>,
+          sessionID: string,
+          text: string,
+        ) => {
+          await host.client.session.prompt({ sessionID, text })
+          await host.client.session.wait({ sessionID })
+        }
+        // The mock answers every tool call with the id `call-1`, so both loads share it.
+        const lastRequestOutputs = () => {
+          const body = responses.requests.at(-1)
+          return body === undefined
+            ? []
+            : functionCallOutputList(body, 'call-1')
+        }
+        try {
+          const live = await startAgentHost(
+            pluginSpec,
+            responses,
+            {},
+            'responses',
+          )
+          let sessionID: string
+          let liveOutputs: unknown[]
+          try {
+            const session = await live.client.session.create({
+              location: { directory: fixture.projectDir },
+              model: { providerID: SCRIPTED_PROVIDER, id: SCRIPTED_MODEL },
+            })
+            sessionID = session.id
+            await prompt(
+              live,
+              sessionID,
+              '@@TOOL systematic_skill {"name":"ce:review"}',
+            )
+            await prompt(
+              live,
+              sessionID,
+              '@@TOOL systematic_skill {"name":"ce:plan"}',
+            )
+            await prompt(live, sessionID, 'Carry on.')
+            liveOutputs = lastRequestOutputs()
+          } finally {
+            await live.server.stop()
+          }
+          // In one process each historical result already carries its own bytes.
+          expect(liveOutputs.map(wireText).map((text) => text.length)).toEqual([
+            first.length,
+            second.length,
+          ])
+          expect(liveOutputs.map(wireText) as string[]).toEqual([first, second])
+
+          // A new process, same storage and session: the same two values.
+          const restarted = await startAgentHost(
+            pluginSpec,
+            responses,
+            {},
+            'responses',
+          )
+          try {
+            await prompt(restarted, sessionID, 'Carry on after the restart.')
+          } finally {
+            await restarted.server.stop()
+          }
+          const replayed = lastRequestOutputs()
+          expect(replayed.map(wireText).map((text) => text.length)).toEqual([
+            first.length,
+            second.length,
+          ])
+          expect(replayed.map(wireText) as string[]).toEqual([first, second])
+          expect(JSON.stringify(replayed)).toBe(JSON.stringify(liveOutputs))
         } finally {
           responses.stop()
         }

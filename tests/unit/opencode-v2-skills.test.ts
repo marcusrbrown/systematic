@@ -21,7 +21,10 @@ import {
   DURABLE_MAX_ENTRIES,
   DURABLE_MAX_ENTRY_BYTES,
   DURABLE_MAX_MISSES,
+  DURABLE_MISS_TTL_MS,
   restoreSkillResults,
+  type SkillCallIds,
+  skillOutputHandle,
   type V2SkillRecord,
   type V2Storage,
 } from '../../src/lib/opencode-v2-skills.js'
@@ -557,10 +560,50 @@ function textToolResultMessage(id: string, name: string, text: string) {
 
 type ToolResultMessage = ReturnType<typeof textToolResultMessage>
 
+/** The assistant message every test call belongs to: the default `messageID` of `toolContext`. */
+const OWNER = 'message-1'
+
+/** The in-memory store key of a test call. */
+function handleOf(callID: string): string {
+  return skillOutputHandle(OWNER, callID)
+}
+
+/** The identity of a test call. */
+function ids(callID: string, sessionID = 's', messageID = OWNER): SkillCallIds {
+  return { sessionID, messageID, callID }
+}
+
+type Part = { type?: unknown; name?: unknown; id?: unknown }
+
+/**
+ * The request the host sends: before each tool message, the assistant message
+ * that made its calls. The tool messages are the same objects, so a test reads
+ * its results from the event it built.
+ */
+function owned<T>(event: T, messageID = OWNER): T {
+  if (typeof event !== 'object' || event === null) return event
+  const { messages } = event as { messages?: unknown }
+  if (!Array.isArray(messages)) return event
+  const withOwners = messages.flatMap((message: unknown) => {
+    const tool = message as { role?: unknown; content?: unknown } | null
+    if (tool?.role !== 'tool' || !Array.isArray(tool.content)) return [message]
+    const calls = (tool.content as Part[])
+      .filter((part) => part?.type === 'tool-result')
+      .map((part) => ({
+        type: 'tool-call',
+        id: part.id,
+        name: part.name,
+        input: {},
+      }))
+    return [{ role: 'assistant', id: messageID, content: calls }, message]
+  })
+  return { ...event, messages: withOwners }
+}
+
 describe('restoreSkillResults', () => {
   test('replaces the matching tool-result with the full text and leaves the rest', () => {
     const store = createSkillOutputStore()
-    store.put('s', 'c1', 'FULL-OUTPUT')
+    store.put('s', handleOf('c1'), 'FULL-OUTPUT')
     const event = {
       sessionID: 's',
       messages: [
@@ -574,7 +617,7 @@ describe('restoreSkillResults', () => {
       ],
     }
 
-    restoreSkillResults(store, event)
+    restoreSkillResults(store, owned(event))
 
     const [, restored, otherCall, otherTool] = event.messages as ReturnType<
       typeof toolResultMessage
@@ -594,14 +637,14 @@ describe('restoreSkillResults', () => {
 
   test('restores on every request, because the store is read and not consumed', () => {
     const store = createSkillOutputStore()
-    store.put('s', 'c1', 'FULL-OUTPUT')
+    store.put('s', handleOf('c1'), 'FULL-OUTPUT')
 
     for (let request = 0; request < 3; request++) {
       const event = {
         sessionID: 's',
         messages: [toolResultMessage('c1', 'systematic_skill', ['CUT'])],
       }
-      restoreSkillResults(store, event)
+      restoreSkillResults(store, owned(event))
       expect(
         (event.messages[0] as ReturnType<typeof toolResultMessage>).content[0]
           ?.result.value,
@@ -611,7 +654,7 @@ describe('restoreSkillResults', () => {
 
   test('does not depend on the host marker text', () => {
     const store = createSkillOutputStore()
-    store.put('s', 'c1', 'FULL-OUTPUT')
+    store.put('s', handleOf('c1'), 'FULL-OUTPUT')
     const event = {
       sessionID: 's',
       messages: [
@@ -619,7 +662,7 @@ describe('restoreSkillResults', () => {
       ],
     }
 
-    restoreSkillResults(store, event)
+    restoreSkillResults(store, owned(event))
 
     expect(
       (event.messages[0] as ReturnType<typeof toolResultMessage>).content[0]
@@ -629,13 +672,13 @@ describe('restoreSkillResults', () => {
 
   test('does not cross sessions', () => {
     const store = createSkillOutputStore()
-    store.put('other-session', 'c1', 'FULL-OUTPUT')
+    store.put('other-session', handleOf('c1'), 'FULL-OUTPUT')
     const event = {
       sessionID: 's',
       messages: [toolResultMessage('c1', 'systematic_skill', ['CUT'])],
     }
 
-    restoreSkillResults(store, event)
+    restoreSkillResults(store, owned(event))
 
     expect(
       (event.messages[0] as ReturnType<typeof toolResultMessage>).content[0]
@@ -645,7 +688,7 @@ describe('restoreSkillResults', () => {
 
   test('leaves a text result unchanged when it already holds the full text', () => {
     const store = createSkillOutputStore()
-    store.put('s', 'c1', 'FULL-OUTPUT')
+    store.put('s', handleOf('c1'), 'FULL-OUTPUT')
     const event = {
       sessionID: 's',
       messages: [
@@ -653,7 +696,7 @@ describe('restoreSkillResults', () => {
       ],
     }
 
-    restoreSkillResults(store, event)
+    restoreSkillResults(store, owned(event))
 
     expect((event.messages[0] as ToolResultMessage).content[0]?.result).toEqual(
       { type: 'text', value: 'FULL-OUTPUT' },
@@ -662,13 +705,13 @@ describe('restoreSkillResults', () => {
 
   test('leaves a content result unchanged when its only text part is the full text', () => {
     const store = createSkillOutputStore()
-    store.put('s', 'c1', 'FULL-OUTPUT')
+    store.put('s', handleOf('c1'), 'FULL-OUTPUT')
     const event = {
       sessionID: 's',
       messages: [toolResultMessage('c1', 'systematic_skill', ['FULL-OUTPUT'])],
     }
 
-    restoreSkillResults(store, event)
+    restoreSkillResults(store, owned(event))
 
     expect(
       (event.messages[0] as ReturnType<typeof toolResultMessage>).content[0]
@@ -681,13 +724,13 @@ describe('restoreSkillResults', () => {
 
   test('restores a truncated text result as text, not as content', () => {
     const store = createSkillOutputStore()
-    store.put('s', 'c1', 'FULL-OUTPUT')
+    store.put('s', handleOf('c1'), 'FULL-OUTPUT')
     const event = {
       sessionID: 's',
       messages: [textToolResultMessage('c1', 'systematic_skill', 'CUT')],
     }
 
-    restoreSkillResults(store, event)
+    restoreSkillResults(store, owned(event))
 
     expect((event.messages[0] as ToolResultMessage).content[0]?.result).toEqual(
       { type: 'text', value: 'FULL-OUTPUT' },
@@ -696,7 +739,7 @@ describe('restoreSkillResults', () => {
 
   test('restores a truncated content result as content and drops the host marker', () => {
     const store = createSkillOutputStore()
-    store.put('s', 'c1', 'FULL-OUTPUT')
+    store.put('s', handleOf('c1'), 'FULL-OUTPUT')
     const event = {
       sessionID: 's',
       messages: [
@@ -704,7 +747,7 @@ describe('restoreSkillResults', () => {
       ],
     }
 
-    restoreSkillResults(store, event)
+    restoreSkillResults(store, owned(event))
 
     expect(
       (event.messages[0] as ReturnType<typeof toolResultMessage>).content[0]
@@ -725,7 +768,7 @@ describe('restoreSkillResults', () => {
       ],
     }
 
-    restoreSkillResults(store, event)
+    restoreSkillResults(store, owned(event))
 
     const [text, content] = event.messages as [
       ToolResultMessage,
@@ -740,7 +783,7 @@ describe('restoreSkillResults', () => {
 
   test('does not overwrite an error result, even when the store has the full text', () => {
     const store = createSkillOutputStore()
-    store.put('s', 'c1', 'FULL-OUTPUT')
+    store.put('s', handleOf('c1'), 'FULL-OUTPUT')
     // The shape the hook receives: the host's normalized `{ type: 'error', value }`,
     // whose value is the stored `{ error, content }` (ToolResultValue.make).
     const failed = {
@@ -755,7 +798,7 @@ describe('restoreSkillResults', () => {
       ],
     }
 
-    restoreSkillResults(store, { sessionID: 's', messages: [failed] })
+    restoreSkillResults(store, owned({ sessionID: 's', messages: [failed] }))
 
     expect(failed.content[0]?.result).toEqual({
       type: 'error',
@@ -765,7 +808,7 @@ describe('restoreSkillResults', () => {
 
   test('ignores events and messages of any other shape without throwing', () => {
     const store = createSkillOutputStore()
-    store.put('s', 'c1', 'FULL-OUTPUT')
+    store.put('s', handleOf('c1'), 'FULL-OUTPUT')
 
     for (const event of [
       undefined,
@@ -781,7 +824,7 @@ describe('restoreSkillResults', () => {
       },
       { messages: [toolResultMessage('c1', 'systematic_skill', ['CUT'])] },
     ]) {
-      expect(() => restoreSkillResults(store, event)).not.toThrow()
+      expect(() => restoreSkillResults(store, owned(event))).not.toThrow()
     }
   })
 })
@@ -806,7 +849,7 @@ describe('context hook wiring', () => {
         ]),
       ],
     }
-    await contextHooks[0]?.callback(event)
+    await contextHooks[0]?.callback(owned(event))
 
     expect(
       (event.messages[0] as ReturnType<typeof toolResultMessage>).content[0]
@@ -856,7 +899,7 @@ describe('context hook wiring', () => {
         ],
       }
 
-      await hook.callback(event)
+      await hook.callback(owned(event))
 
       const [fit, cutText, cutContent] = event.messages as [
         ToolResultMessage,
@@ -899,7 +942,9 @@ describe('context hook wiring', () => {
       messages: [toolResultMessage('call-deny', 'systematic_skill', ['CUT'])],
     }
 
-    await host.hooks.find((hook) => hook.name === 'context')?.callback(event)
+    await host.hooks
+      .find((hook) => hook.name === 'context')
+      ?.callback(owned(event))
 
     expect(
       (event.messages[0] as ReturnType<typeof toolResultMessage>).content[0]
@@ -1001,7 +1046,14 @@ const DAY_MS = 24 * 60 * 60 * 1000
 
 /** A stored record as the plugin writes it, for seeding storage. */
 function record(callID: string, storedAt: number, output = `OUT-${callID}`) {
-  return { v: 1, sessionID: 's', callID, output, storedAt }
+  return {
+    v: 2,
+    sessionID: 's',
+    messageID: OWNER,
+    callID,
+    output,
+    storedAt,
+  }
 }
 
 function seed(
@@ -1009,7 +1061,10 @@ function seed(
   callID: string,
   storedAt: number,
 ) {
-  storage.data.set(`${KEY_PREFIX}s:${callID}`, record(callID, storedAt))
+  storage.data.set(
+    `${KEY_PREFIX}s:message-1:${callID}`,
+    record(callID, storedAt),
+  )
 }
 
 function storedCalls(storage: { data: Map<string, unknown> }): string[] {
@@ -1035,7 +1090,7 @@ function cutRequest(sessionID: string, callID: string) {
 function contextHook(host: Awaited<ReturnType<typeof setup>>) {
   const hook = host.hooks.find((candidate) => candidate.name === 'context')
   if (hook === undefined) throw new Error('the context hook is not registered')
-  return hook.callback
+  return (event: unknown) => hook.callback(owned(event))
 }
 
 function resultOf(event: ReturnType<typeof cutRequest>): unknown {
@@ -1060,14 +1115,17 @@ describe('durable skill output: persist on execute', () => {
 
     expect(Buffer.byteLength(big.content ?? '')).toBeGreaterThan(51_200)
     expect(Buffer.byteLength(small.content ?? '')).toBeLessThan(51_200)
-    expect(storage.data.get(`${KEY_PREFIX}s-1:call-big`)).toEqual({
-      v: 1,
+    expect(storage.data.get(`${KEY_PREFIX}s-1:message-1:call-big`)).toEqual({
+      v: 2,
       sessionID: 's-1',
+      messageID: 'message-1',
       callID: 'call-big',
       output: big.content,
       storedAt: expect.any(Number),
     })
-    expect(storage.data.get(`${KEY_PREFIX}s-1:call-small`)).toMatchObject({
+    expect(
+      storage.data.get(`${KEY_PREFIX}s-1:message-1:call-small`),
+    ).toMatchObject({
       callID: 'call-small',
       output: small.content,
     })
@@ -1162,14 +1220,14 @@ describe('durable skill output: the cap, and entries listed by prefix', () => {
       report: (message) => reports.push(message),
     })
 
-    await durable.put('s', 'c1', '1234567890')
-    await durable.put('s', 'c2', '12345678901')
-    await durable.put('s', 'c3', '€€€€')
+    await durable.put(ids('c1'), '1234567890')
+    await durable.put(ids('c2'), '12345678901')
+    await durable.put(ids('c3'), '€€€€')
     storage.calls.length = 0
 
-    expect(await durable.get('s', 'c1')).toBe('1234567890')
-    expect(await durable.get('s', 'c2')).toBeUndefined()
-    expect(await durable.get('s', 'c3')).toBeUndefined()
+    expect(await durable.get(ids('c1'))).toBe('1234567890')
+    expect(await durable.get(ids('c2'))).toBeUndefined()
+    expect(await durable.get(ids('c3'))).toBeUndefined()
     // Only the entry that was kept needed a read.
     expect(storage.calls.filter((call) => call.op === 'get')).toHaveLength(1)
     expect(reports).toHaveLength(1)
@@ -1185,15 +1243,15 @@ describe('durable skill output: the cap, and entries listed by prefix', () => {
     })
 
     for (const id of ['c1', 'c2', 'c3', 'c4', 'c5']) {
-      await durable.put('s', id, `OUT-${id}`)
+      await durable.put(ids(id), `OUT-${id}`)
     }
 
     expect(storedCalls(storage)).toEqual([
-      `${KEY_PREFIX}s:c3`,
-      `${KEY_PREFIX}s:c4`,
-      `${KEY_PREFIX}s:c5`,
+      `${KEY_PREFIX}s:message-1:c3`,
+      `${KEY_PREFIX}s:message-1:c4`,
+      `${KEY_PREFIX}s:message-1:c5`,
     ])
-    expect(await durable.get('s', 'c5')).toBe('OUT-c5')
+    expect(await durable.get(ids('c5'))).toBe('OUT-c5')
   })
 
   test('writes the entry before it lists or removes anything', async () => {
@@ -1204,7 +1262,7 @@ describe('durable skill output: the cap, and entries listed by prefix', () => {
       now: () => 100,
     })
 
-    await durable.put('s', 'new', 'OUT-new')
+    await durable.put(ids('new'), 'OUT-new')
 
     expect(storage.calls.map((call) => call.op)).toEqual([
       'set',
@@ -1213,7 +1271,7 @@ describe('durable skill output: the cap, and entries listed by prefix', () => {
     ])
   })
 
-  test('the entry just written survives even when its time is older than the others', async () => {
+  test('ranks the entry just written like any other, so an older one is not kept past the cap', async () => {
     const storage = createFakeStorage()
     seed(storage, 'ahead', 9_999)
     const durable = createDurableSkillOutputs(storage, {
@@ -1221,9 +1279,9 @@ describe('durable skill output: the cap, and entries listed by prefix', () => {
       now: () => 100,
     })
 
-    await durable.put('s', 'behind', 'OUT-behind')
+    await durable.put(ids('behind'), 'OUT-behind')
 
-    expect(storedCalls(storage)).toEqual([`${KEY_PREFIX}s:behind`])
+    expect(storedCalls(storage)).toEqual([`${KEY_PREFIX}s:message-1:ahead`])
   })
 
   test('writing a key again refreshes its time, so it is the last to go', async () => {
@@ -1234,14 +1292,14 @@ describe('durable skill output: the cap, and entries listed by prefix', () => {
       now: () => clock++,
     })
 
-    await durable.put('s', 'c1', 'ONE')
-    await durable.put('s', 'c2', 'TWO')
-    await durable.put('s', 'c1', 'ONE-AGAIN')
-    await durable.put('s', 'c3', 'THREE')
+    await durable.put(ids('c1'), 'ONE')
+    await durable.put(ids('c2'), 'TWO')
+    await durable.put(ids('c1'), 'ONE-AGAIN')
+    await durable.put(ids('c3'), 'THREE')
 
-    expect(await durable.get('s', 'c2')).toBeUndefined()
-    expect(await durable.get('s', 'c1')).toBe('ONE-AGAIN')
-    expect(await durable.get('s', 'c3')).toBe('THREE')
+    expect(await durable.get(ids('c2'))).toBeUndefined()
+    expect(await durable.get(ids('c1'))).toBe('ONE-AGAIN')
+    expect(await durable.get(ids('c3'))).toBe('THREE')
   })
 
   test('lists every page of the prefix, so a long backlog is trimmed to the cap', async () => {
@@ -1254,17 +1312,17 @@ describe('durable skill output: the cap, and entries listed by prefix', () => {
       now: () => 5000,
     })
 
-    await durable.put('s', 'newest', 'OUT-newest')
+    await durable.put(ids('newest'), 'OUT-newest')
 
     const kept = storedCalls(storage).filter((key) =>
       key.startsWith(KEY_PREFIX),
     )
     expect(kept).toEqual([
-      `${KEY_PREFIX}s:c226`,
-      `${KEY_PREFIX}s:c227`,
-      `${KEY_PREFIX}s:c228`,
-      `${KEY_PREFIX}s:c229`,
-      `${KEY_PREFIX}s:newest`,
+      `${KEY_PREFIX}s:message-1:c226`,
+      `${KEY_PREFIX}s:message-1:c227`,
+      `${KEY_PREFIX}s:message-1:c228`,
+      `${KEY_PREFIX}s:message-1:c229`,
+      `${KEY_PREFIX}s:message-1:newest`,
     ])
     expect(storage.data.get('someone-else:key')).toBe('untouched')
   })
@@ -1273,11 +1331,11 @@ describe('durable skill output: the cap, and entries listed by prefix', () => {
     const storage = createFakeStorage()
     const durable = createDurableSkillOutputs(storage)
 
-    await durable.put('a:b', 'c', 'FIRST')
-    await durable.put('a', 'b:c', 'SECOND')
+    await durable.put(ids('c', 'a:b'), 'FIRST')
+    await durable.put(ids('b:c', 'a'), 'SECOND')
 
-    expect(await durable.get('a:b', 'c')).toBe('FIRST')
-    expect(await durable.get('a', 'b:c')).toBe('SECOND')
+    expect(await durable.get(ids('c', 'a:b'))).toBe('FIRST')
+    expect(await durable.get(ids('b:c', 'a'))).toBe('SECOND')
   })
 
   test('two instances over one storage, writing at the same time, keep the cap and leave no stray entry', async () => {
@@ -1289,21 +1347,21 @@ describe('durable skill output: the cap, and entries listed by prefix', () => {
 
     for (let round = 0; round < 12; round++) {
       await Promise.all([
-        first.put('s', `a${round}`, `OUT-a${round}`),
-        second.put('s', `b${round}`, `OUT-b${round}`),
+        first.put(ids(`a${round}`), `OUT-a${round}`),
+        second.put(ids(`b${round}`), `OUT-b${round}`),
       ])
       // Two writers can each miss the other's newest entry for one round.
       expect(storage.data.size).toBeLessThanOrEqual(5 + 1)
     }
     // The next write from either instance settles it.
-    await first.put('s', 'last', 'OUT-last')
+    await first.put(ids('last'), 'OUT-last')
 
     expect(storage.data.size).toBe(5)
     for (const [key, value] of storage.data) {
       expect(key.startsWith(KEY_PREFIX)).toBe(true)
-      expect(value).toMatchObject({ v: 1, sessionID: 's' })
+      expect(value).toMatchObject({ v: 2, sessionID: 's' })
     }
-    expect(await second.get('s', 'last')).toBe('OUT-last')
+    expect(await second.get(ids('last'))).toBe('OUT-last')
   })
 
   test('a removal that two instances both try is harmless', async () => {
@@ -1320,9 +1378,9 @@ describe('durable skill output: the cap, and entries listed by prefix', () => {
       await realRemove(key)
     }
 
-    await durable.put('s', 'new', 'OUT-new')
+    await durable.put(ids('new'), 'OUT-new')
 
-    expect(storedCalls(storage)).toEqual([`${KEY_PREFIX}s:new`])
+    expect(storedCalls(storage)).toEqual([`${KEY_PREFIX}s:message-1:new`])
   })
 })
 
@@ -1335,26 +1393,26 @@ describe('durable skill output: expiry', () => {
     seed(storage, 'fresh', now - 1 * DAY_MS)
     const durable = createDurableSkillOutputs(storage, { now: () => now })
 
-    await durable.put('s', 'new', 'OUT-new')
+    await durable.put(ids('new'), 'OUT-new')
 
     expect(storedCalls(storage)).toEqual([
-      `${KEY_PREFIX}s:edge`,
-      `${KEY_PREFIX}s:fresh`,
-      `${KEY_PREFIX}s:new`,
+      `${KEY_PREFIX}s:message-1:edge`,
+      `${KEY_PREFIX}s:message-1:fresh`,
+      `${KEY_PREFIX}s:message-1:new`,
     ])
   })
 
   test('a record with no usable time is removed by the next write', async () => {
     const storage = createFakeStorage()
-    storage.data.set(`${KEY_PREFIX}s:odd`, { v: 1, sessionID: 's' })
-    storage.data.set(`${KEY_PREFIX}s:text`, 'not a record')
+    storage.data.set(`${KEY_PREFIX}s:message-1:odd`, { v: 2, sessionID: 's' })
+    storage.data.set(`${KEY_PREFIX}s:message-1:text`, 'not a record')
     const durable = createDurableSkillOutputs(storage, {
       now: () => 5 * DAY_MS,
     })
 
-    await durable.put('s', 'new', 'OUT-new')
+    await durable.put(ids('new'), 'OUT-new')
 
-    expect(storedCalls(storage)).toEqual([`${KEY_PREFIX}s:new`])
+    expect(storedCalls(storage)).toEqual([`${KEY_PREFIX}s:message-1:new`])
   })
 
   test('a read treats a record older than the age limit as a miss and a record at the limit as a hit', async () => {
@@ -1364,21 +1422,22 @@ describe('durable skill output: expiry', () => {
     seed(storage, 'stale', now - 7 * DAY_MS - 1)
     const durable = createDurableSkillOutputs(storage, { now: () => now })
 
-    expect(await durable.get('s', 'edge')).toBe('OUT-edge')
-    expect(await durable.get('s', 'stale')).toBeUndefined()
+    expect(await durable.get(ids('edge'))).toBe('OUT-edge')
+    expect(await durable.get(ids('stale'))).toBeUndefined()
   })
 
   test('a read does not trust a record whose time is missing', async () => {
     const storage = createFakeStorage()
-    storage.data.set(`${KEY_PREFIX}s:c1`, {
-      v: 1,
+    storage.data.set(`${KEY_PREFIX}s:message-1:c1`, {
+      v: 2,
       sessionID: 's',
+      messageID: OWNER,
       callID: 'c1',
       output: 'NO-TIME',
     })
     const durable = createDurableSkillOutputs(storage, { now: () => 1000 })
 
-    expect(await durable.get('s', 'c1')).toBeUndefined()
+    expect(await durable.get(ids('c1'))).toBeUndefined()
   })
 })
 
@@ -1387,9 +1446,9 @@ describe('durable skill output: remembered misses', () => {
     const storage = createFakeStorage()
     const durable = createDurableSkillOutputs(storage)
 
-    expect(await durable.get('s', 'c1')).toBeUndefined()
-    expect(await durable.get('s', 'c1')).toBeUndefined()
-    expect(await durable.get('s', 'c1')).toBeUndefined()
+    expect(await durable.get(ids('c1'))).toBeUndefined()
+    expect(await durable.get(ids('c1'))).toBeUndefined()
+    expect(await durable.get(ids('c1'))).toBeUndefined()
 
     expect(storage.calls.filter((call) => call.op === 'get')).toHaveLength(1)
   })
@@ -1398,14 +1457,14 @@ describe('durable skill output: remembered misses', () => {
     const storage = createFakeStorage()
     const now = 100 * DAY_MS
     seed(storage, 'stale', 1)
-    storage.data.set(`${KEY_PREFIX}s:wrong-call`, {
+    storage.data.set(`${KEY_PREFIX}s:message-1:wrong-call`, {
       ...record('other', now),
     })
     const durable = createDurableSkillOutputs(storage, { now: () => now })
 
     for (let read = 0; read < 2; read++) {
-      expect(await durable.get('s', 'stale')).toBeUndefined()
-      expect(await durable.get('s', 'wrong-call')).toBeUndefined()
+      expect(await durable.get(ids('stale'))).toBeUndefined()
+      expect(await durable.get(ids('wrong-call'))).toBeUndefined()
     }
 
     expect(storage.calls.filter((call) => call.op === 'get')).toHaveLength(2)
@@ -1414,24 +1473,24 @@ describe('durable skill output: remembered misses', () => {
   test('a write for the key clears the remembered miss', async () => {
     const storage = createFakeStorage()
     const durable = createDurableSkillOutputs(storage)
-    expect(await durable.get('s', 'c1')).toBeUndefined()
+    expect(await durable.get(ids('c1'))).toBeUndefined()
 
-    await durable.put('s', 'c1', 'NOW-HERE')
+    await durable.put(ids('c1'), 'NOW-HERE')
 
-    expect(await durable.get('s', 'c1')).toBe('NOW-HERE')
+    expect(await durable.get(ids('c1'))).toBe('NOW-HERE')
   })
 
   test('a failed write does not clear it', async () => {
     const storage = createFakeStorage()
     const durable = createDurableSkillOutputs(storage, { report: () => {} })
-    expect(await durable.get('s', 'c1')).toBeUndefined()
+    expect(await durable.get(ids('c1'))).toBeUndefined()
     storage.fail.set = new Error('disk full')
-    await durable.put('s', 'c1', 'LOST')
+    await durable.put(ids('c1'), 'LOST')
     storage.fail.set = undefined
-    storage.data.set(`${KEY_PREFIX}s:c1`, record('c1', Date.now()))
+    storage.data.set(`${KEY_PREFIX}s:message-1:c1`, record('c1', Date.now()))
     storage.calls.length = 0
 
-    expect(await durable.get('s', 'c1')).toBeUndefined()
+    expect(await durable.get(ids('c1'))).toBeUndefined()
     expect(storage.calls).toEqual([])
   })
 
@@ -1443,25 +1502,25 @@ describe('durable skill output: remembered misses', () => {
       report: () => {},
     })
     storage.fail.get = new Error('database locked')
-    expect(await durable.get('s', 'c1')).toBeUndefined()
+    expect(await durable.get(ids('c1'))).toBeUndefined()
     storage.fail.get = undefined
     storage.hang.get = true
-    expect(await durable.get('s', 'c1')).toBeUndefined()
+    expect(await durable.get(ids('c1'))).toBeUndefined()
     storage.hang.get = false
 
-    expect(await durable.get('s', 'c1')).toBe('OUT-c1')
+    expect(await durable.get(ids('c1'))).toBe('OUT-c1')
   })
 
   test('only the newest misses are kept', async () => {
     const storage = createFakeStorage()
     const durable = createDurableSkillOutputs(storage, { maxMisses: 2 })
-    for (const id of ['a', 'b', 'c']) await durable.get('s', id)
+    for (const id of ['a', 'b', 'c']) await durable.get(ids(id))
     storage.calls.length = 0
 
-    await durable.get('s', 'b')
-    await durable.get('s', 'c')
+    await durable.get(ids('b'))
+    await durable.get(ids('c'))
     expect(storage.calls).toHaveLength(0)
-    await durable.get('s', 'a')
+    await durable.get(ids('a'))
 
     expect(storage.calls).toHaveLength(1)
   })
@@ -1480,7 +1539,7 @@ describe('durable skill output: failures leave what is stored intact and never b
       report: (message) => reports.push(message),
     })
 
-    await durable.put('s', 'c4', 'OUT-c4')
+    await durable.put(ids('c4'), 'OUT-c4')
 
     expect(storedCalls(storage)).toEqual(before)
     expect(storage.calls.map((call) => call.op)).toEqual(['set'])
@@ -1489,7 +1548,7 @@ describe('durable skill output: failures leave what is stored intact and never b
     ])
   })
 
-  test('a listing or a removal that fails keeps the new entry and says so once', async () => {
+  test('a listing or a removal that fails keeps the new entry, stops further writes, and says so once', async () => {
     for (const op of ['scan', 'remove'] as const) {
       const storage = createFakeStorage()
       seed(storage, 'old', 1)
@@ -1501,14 +1560,18 @@ describe('durable skill output: failures leave what is stored intact and never b
         report: (message) => reports.push(message),
       })
 
-      await durable.put('s', 'a', 'OUT-a')
-      await durable.put('s', 'b', 'OUT-b')
+      await durable.put(ids('a'), 'OUT-a')
+      await durable.put(ids('b'), 'OUT-b')
+      await durable.put(ids('c'), 'OUT-c')
 
-      expect(storage.data.has(`${KEY_PREFIX}s:a`), op).toBe(true)
-      expect(storage.data.has(`${KEY_PREFIX}s:b`), op).toBe(true)
+      expect(storage.data.has(`${KEY_PREFIX}s:message-1:a`), op).toBe(true)
+      expect(storage.data.has(`${KEY_PREFIX}s:message-1:b`), op).toBe(false)
+      expect(storage.data.has(`${KEY_PREFIX}s:message-1:c`), op).toBe(false)
       expect(reports, op).toEqual([
-        'old skill outputs could not be removed: locked',
+        'old skill outputs could not be removed, so no more skill output is kept across a restart: locked',
       ])
+      // Reads still work for what was kept.
+      expect(await durable.get(ids('a')), op).toBe('OUT-a')
     }
   })
 
@@ -1522,14 +1585,14 @@ describe('durable skill output: failures leave what is stored intact and never b
     storage.hang.set = true
 
     const started = Date.now()
-    await durable.put('s', 'c1', 'ONE')
+    await durable.put(ids('c1'), 'ONE')
     const waited = Date.now() - started
     storage.hang.set = false
-    await durable.put('s', 'c2', 'TWO')
+    await durable.put(ids('c2'), 'TWO')
 
     expect(waited).toBeGreaterThanOrEqual(25)
     expect(waited).toBeLessThan(1000)
-    expect(await durable.get('s', 'c2')).toBe('TWO')
+    expect(await durable.get(ids('c2'))).toBe('TWO')
     expect(reports).toEqual([
       'skill output could not be kept across a restart: storage did not answer within 30 ms',
     ])
@@ -1544,11 +1607,11 @@ describe('durable skill output: failures leave what is stored intact and never b
     })
     storage.hang.scan = true
 
-    await durable.put('s', 'c1', 'ONE')
+    await durable.put(ids('c1'), 'ONE')
 
-    expect(storage.data.has(`${KEY_PREFIX}s:c1`)).toBe(true)
+    expect(storage.data.has(`${KEY_PREFIX}s:message-1:c1`)).toBe(true)
     expect(reports).toEqual([
-      'old skill outputs could not be removed: storage did not answer within 30 ms',
+      'old skill outputs could not be removed, so no more skill output is kept across a restart: storage did not answer within 30 ms',
     ])
   })
 
@@ -1562,11 +1625,11 @@ describe('durable skill output: failures leave what is stored intact and never b
     storage.slow.ms = 70
 
     const started = Date.now()
-    await durable.put('s', 'c1', 'ONE')
+    await durable.put(ids('c1'), 'ONE')
 
     expect(Date.now() - started).toBeLessThan(150)
     expect(reports).toEqual([
-      'old skill outputs could not be removed: storage did not answer within 100 ms',
+      'old skill outputs could not be removed, so no more skill output is kept across a restart: storage did not answer within 100 ms',
     ])
   })
 
@@ -1575,7 +1638,7 @@ describe('durable skill output: failures leave what is stored intact and never b
     seed(storage, 'c1', Date.now())
     const spy = spyOn(globalThis, 'clearTimeout')
     try {
-      await createDurableSkillOutputs(storage).get('s', 'c1')
+      await createDurableSkillOutputs(storage).get(ids('c1'))
       expect(spy).toHaveBeenCalledTimes(1)
     } finally {
       spy.mockRestore()
@@ -1592,7 +1655,7 @@ describe('durable skill output: failures leave what is stored intact and never b
     })
 
     const started = Date.now()
-    const found = await durable.get('s', 'c1')
+    const found = await durable.get(ids('c1'))
 
     expect(found).toBeUndefined()
     expect(Date.now() - started).toBeLessThan(1000)
@@ -1682,8 +1745,8 @@ describe('durable skill output: restore on a store miss', () => {
   test('restores each cut skill in a request from its own entry', async () => {
     const storage = createFakeStorage()
     const durable = createDurableSkillOutputs(storage)
-    await durable.put('s', 'c1', 'FULL-ONE')
-    await durable.put('s', 'c2', 'FULL-TWO')
+    await durable.put(ids('c1'), 'FULL-ONE')
+    await durable.put(ids('c2'), 'FULL-TWO')
     const host = await setup(undefined, { storage })
     const event = {
       sessionID: 's',
@@ -1706,7 +1769,7 @@ describe('durable skill output: restore on a store miss', () => {
 
   test('a call under another session or another call id is not restored', async () => {
     const storage = createFakeStorage()
-    await createDurableSkillOutputs(storage).put('s-a', 'call-1', 'FULL-A')
+    await createDurableSkillOutputs(storage).put(ids('call-1', 's-a'), 'FULL-A')
     const host = await setup(undefined, { storage })
     const hook = contextHook(host)
 
@@ -1733,39 +1796,40 @@ describe('durable skill output: restore on a store miss', () => {
     const storage = createFakeStorage()
     const host = await setup(undefined, { storage })
     const hook = contextHook(host)
-    const key = (call: string) => `systematic:skill-output:s:${call}`
-    storage.data.set(key('wrong-session'), {
-      v: 1,
-      sessionID: 'other',
-      callID: 'wrong-session',
-      output: 'FORGED',
-      storedAt: Date.now(),
-    })
-    storage.data.set(key('wrong-call'), {
-      v: 1,
-      sessionID: 's',
-      callID: 'other',
-      output: 'FORGED',
-      storedAt: Date.now(),
-    })
-    storage.data.set(key('wrong-version'), {
+    const key = (call: string) => `systematic:skill-output:s:message-1:${call}`
+    const base = {
       v: 2,
       sessionID: 's',
-      callID: 'wrong-version',
+      messageID: OWNER,
       output: 'FORGED',
       storedAt: Date.now(),
+    }
+    storage.data.set(key('wrong-session'), {
+      ...base,
+      sessionID: 'other',
+      callID: 'wrong-session',
+    })
+    storage.data.set(key('wrong-message'), {
+      ...base,
+      messageID: 'other',
+      callID: 'wrong-message',
+    })
+    storage.data.set(key('wrong-call'), { ...base, callID: 'other' })
+    storage.data.set(key('wrong-version'), {
+      ...base,
+      v: 1,
+      callID: 'wrong-version',
     })
     storage.data.set(key('not-text'), {
-      v: 1,
-      sessionID: 's',
+      ...base,
       callID: 'not-text',
       output: 5,
-      storedAt: Date.now(),
     })
     storage.data.set(key('bare-string'), 'FORGED')
 
     for (const call of [
       'wrong-session',
+      'wrong-message',
       'wrong-call',
       'wrong-version',
       'not-text',
@@ -1821,9 +1885,10 @@ describe('durable skill output: no work without a cut skill part', () => {
   }
 
   const ENTRY = {
-    'systematic:skill-output:s:c1': {
-      v: 1,
+    'systematic:skill-output:s:message-1:c1': {
+      v: 2,
       sessionID: 's',
+      messageID: OWNER,
       callID: 'c1',
       output: 'FULL',
     },
@@ -1911,7 +1976,420 @@ describe('durable skill output: no work without a cut skill part', () => {
     const store = createSkillOutputStore()
     const event = cutRequest('s', 'c1')
 
-    expect(restoreSkillResults(store, event)).toBeUndefined()
+    expect(restoreSkillResults(store, owned(event))).toBeUndefined()
     expect((resultOf(event) as { value: unknown[] }).value).toHaveLength(2)
+  })
+})
+
+// --- Reused call ids, ranking, stopped writes, deadlines, misses, keys ---------
+
+/** The assistant message the host builds for a turn: it holds the calls, and its id is the calling message. */
+function assistantMessage(messageID: string | undefined, callIDs: string[]) {
+  return {
+    role: 'assistant',
+    ...(messageID === undefined ? {} : { id: messageID }),
+    content: callIDs.map((id) => ({
+      type: 'tool-call',
+      id,
+      name: 'systematic_skill',
+      input: {},
+    })),
+  }
+}
+
+function rawContextHook(host: Awaited<ReturnType<typeof setup>>) {
+  const hook = host.hooks.find((candidate) => candidate.name === 'context')
+  if (hook === undefined) throw new Error('the context hook is not registered')
+  return hook.callback
+}
+
+function textOf(message: unknown): unknown {
+  return (message as ReturnType<typeof toolResultMessage>).content[0]?.result
+    .value
+}
+
+describe('durable skill output: a call id reused across turns', () => {
+  /** Two turns of one session that both got the provider call id `call-1`, each cut by the host. */
+  function reusedCallRequest() {
+    return {
+      sessionID: 's-reuse',
+      messages: [
+        assistantMessage('msg-1', ['call-1']),
+        toolResultMessage('call-1', 'systematic_skill', ['CUT-1', 'marker']),
+        assistantMessage('msg-2', ['call-1']),
+        toolResultMessage('call-1', 'systematic_skill', ['CUT-2', 'marker']),
+      ],
+    }
+  }
+
+  async function loadTwo(storage: ReturnType<typeof createFakeStorage>) {
+    const host = await setup(undefined, { storage })
+    const tool = await registeredTool(host)
+    const first = await tool.execute(
+      { name: UNDER_LIMIT_SKILL },
+      toolContext({ sessionID: 's-reuse', messageID: 'msg-1', id: 'call-1' }),
+    )
+    const second = await tool.execute(
+      { name: 'git-commit' },
+      toolContext({ sessionID: 's-reuse', messageID: 'msg-2', id: 'call-1' }),
+    )
+    expect(first.content).not.toBe(second.content)
+    return { host, first: first.content, second: second.content }
+  }
+
+  test('each result gets its own output in one process, from memory', async () => {
+    const { host, first, second } = await loadTwo(createFakeStorage())
+    const event = reusedCallRequest()
+
+    await rawContextHook(host)(event)
+
+    expect(textOf(event.messages[1])).toEqual([{ type: 'text', text: first }])
+    expect(textOf(event.messages[3])).toEqual([{ type: 'text', text: second }])
+  })
+
+  test('each result gets its own output after a restart, from storage', async () => {
+    const storage = createFakeStorage()
+    const { first, second } = await loadTwo(storage)
+    const restarted = await setup(undefined, { storage })
+    const event = reusedCallRequest()
+
+    await rawContextHook(restarted)(event)
+
+    expect(textOf(event.messages[1])).toEqual([{ type: 'text', text: first }])
+    expect(textOf(event.messages[3])).toEqual([{ type: 'text', text: second }])
+    expect(storage.data.size).toBe(2)
+  })
+
+  test('a result whose calling message is missing, unnamed, ambiguous or another tool is left as the host cut it', async () => {
+    const storage = createFakeStorage()
+    const { host } = await loadTwo(storage)
+    const restarted = await setup(undefined, { storage })
+    const cut = () =>
+      toolResultMessage('call-1', 'systematic_skill', ['CUT', 'm'])
+    const cases: [string, unknown[]][] = [
+      ['no assistant message', [cut()]],
+      [
+        'an assistant message with no id',
+        [assistantMessage(undefined, ['call-1']), cut()],
+      ],
+      [
+        'the call id twice in one message',
+        [assistantMessage('msg-1', ['call-1', 'call-1']), cut()],
+      ],
+      [
+        'a message id nothing was stored under',
+        [assistantMessage('msg-9', ['call-1']), cut()],
+      ],
+      [
+        'the latest call under the id is unnamed',
+        [
+          assistantMessage('msg-1', ['call-1']),
+          assistantMessage(undefined, ['call-1']),
+          cut(),
+        ],
+      ],
+      [
+        'a call of another tool under the id',
+        [
+          {
+            role: 'assistant',
+            id: 'msg-1',
+            content: [
+              { type: 'tool-call', id: 'call-1', name: 'skill', input: {} },
+            ],
+          },
+          cut(),
+        ],
+      ],
+    ]
+
+    for (const [label, messages] of cases) {
+      for (const target of [host, restarted]) {
+        const event = { sessionID: 's-reuse', messages }
+        const message = messages.at(-1)
+        const returned = rawContextHook(target)(event)
+        await returned
+        expect(textOf(message), label).toEqual([
+          { type: 'text', text: 'CUT' },
+          { type: 'text', text: 'm' },
+        ])
+      }
+    }
+  })
+
+  test('a record stored under one message is not read for another message with the same call id', async () => {
+    const storage = createFakeStorage()
+    const durable = createDurableSkillOutputs(storage)
+    await durable.put(ids('call-1', 's', 'msg-1'), 'ONE')
+
+    expect(await durable.get(ids('call-1', 's', 'msg-1'))).toBe('ONE')
+    expect(await durable.get(ids('call-1', 's', 'msg-2'))).toBeUndefined()
+  })
+})
+
+describe('durable skill output: one ranking for every writer', () => {
+  test('two cleanups over one snapshot of 33 records leave exactly the 32 newest', async () => {
+    const storage = createFakeStorage()
+    for (let index = 1; index <= 31; index++)
+      seed(storage, `seed${String(index).padStart(2, '0')}`, 10 * index)
+    // Both writers list only after both have written, so they trim the same 33 records.
+    const realScan = storage.scan.bind(storage)
+    const arrivals: {
+      options: Parameters<typeof realScan>[0]
+      done: (value: Awaited<ReturnType<typeof realScan>>) => void
+    }[] = []
+    storage.scan = (options) =>
+      new Promise((done) => {
+        arrivals.push({ options, done })
+        if (arrivals.length < 2) return
+        for (const arrival of arrivals)
+          void realScan(arrival.options).then(arrival.done)
+      })
+    const oldest = createDurableSkillOutputs(storage, { now: () => 5 })
+    const newest = createDurableSkillOutputs(storage, { now: () => 1000 })
+
+    await Promise.all([
+      oldest.put(ids('oldest'), 'OUT-oldest'),
+      newest.put(ids('newest'), 'OUT-newest'),
+    ])
+
+    const kept = storedCalls(storage)
+    expect(kept).toHaveLength(32)
+    expect(kept).not.toContain(`${KEY_PREFIX}s:message-1:oldest`)
+    expect(kept).toContain(`${KEY_PREFIX}s:message-1:newest`)
+    expect(kept.filter((key) => key.includes(':seed'))).toHaveLength(31)
+  })
+
+  test('equal times rank by key, so every writer keeps the same records', async () => {
+    const storage = createFakeStorage()
+    for (const id of ['d', 'a', 'c', 'b']) seed(storage, id, 50)
+    const durable = createDurableSkillOutputs(storage, {
+      maxEntries: 2,
+      now: () => 50,
+    })
+
+    await durable.put(ids('e'), 'OUT-e')
+
+    expect(storedCalls(storage)).toEqual([
+      `${KEY_PREFIX}s:message-1:a`,
+      `${KEY_PREFIX}s:message-1:b`,
+    ])
+  })
+})
+
+describe('durable skill output: unhealthy cleanup stops durable writes', () => {
+  test('sustained listing failure keeps the stored count bounded while every tool call still succeeds', async () => {
+    const storage = createFakeStorage()
+    storage.fail.scan = new Error('locked')
+    const host = await setup(undefined, { storage })
+    const tool = await registeredTool(host)
+
+    for (let call = 0; call < 20; call++) {
+      const loaded = await tool.execute(
+        { name: UNDER_LIMIT_SKILL },
+        toolContext({ sessionID: 's-grow', id: `call-${call}` }),
+      )
+      expect(loaded.content).toContain('<skill_content')
+    }
+
+    expect(storage.data.size).toBe(1)
+    expect(storage.calls.filter((call) => call.op === 'set')).toHaveLength(1)
+    expect(errorMessages()).toHaveLength(1)
+  })
+
+  test('sustained removal failure at the cap adds one record and then none', async () => {
+    const storage = createFakeStorage()
+    for (let index = 0; index < 32; index++)
+      seed(storage, `c${index}`, 1000 + index)
+    storage.fail.remove = new Error('locked')
+    const durable = createDurableSkillOutputs(storage, {
+      now: () => 5000,
+      report: () => {},
+    })
+
+    for (let call = 0; call < 10; call++)
+      await durable.put(ids(`new${call}`), `OUT-${call}`)
+
+    expect(storage.data.size).toBe(33)
+  })
+
+  test('after the stop, reads still work and the in-memory store still restores a live result', async () => {
+    const storage = createFakeStorage()
+    seed(storage, 'kept', Date.now())
+    storage.fail.scan = new Error('locked')
+    const host = await setup(undefined, { storage })
+    const tool = await registeredTool(host)
+    const live = await tool.execute(
+      { name: UNDER_LIMIT_SKILL },
+      toolContext({ sessionID: 's', id: 'call-live' }),
+    )
+    storage.fail.scan = undefined
+
+    const liveEvent = cutRequest('s', 'call-live')
+    await contextHook(host)(liveEvent)
+    const keptEvent = cutRequest('s', 'kept')
+    await contextHook(host)(keptEvent)
+
+    expect(resultOf(liveEvent)).toEqual({
+      type: 'content',
+      value: [{ type: 'text', text: live.content }],
+    })
+    expect(resultOf(keptEvent)).toEqual({
+      type: 'content',
+      value: [{ type: 'text', text: 'OUT-kept' }],
+    })
+  })
+
+  test('a failed write alone does not stop later writes', async () => {
+    const storage = createFakeStorage()
+    const durable = createDurableSkillOutputs(storage, { report: () => {} })
+    storage.fail.set = new Error('disk full')
+    await durable.put(ids('a'), 'OUT-a')
+    storage.fail.set = undefined
+
+    await durable.put(ids('b'), 'OUT-b')
+
+    expect(await durable.get(ids('b'))).toBe('OUT-b')
+  })
+})
+
+describe('durable skill output: one deadline across the write and the cleanup', () => {
+  test("the listing pages draw on the write's own budget, so a long listing ends at the deadline", async () => {
+    const storage = createFakeStorage()
+    for (let index = 0; index < 250; index++)
+      seed(storage, `c${String(index).padStart(3, '0')}`, 1000 + index)
+    const durable = createDurableSkillOutputs(storage, {
+      deadlineMs: 200,
+      maxEntries: 5,
+      now: () => 5000,
+      report: () => {},
+    })
+    storage.slow.ms = 60
+
+    await durable.put(ids('new'), 'OUT-new')
+    const callsAtReturn = storage.calls.length
+    await Bun.sleep(300)
+
+    // Ten pages are listed when each call has the whole deadline; here at most three fit.
+    const ops = storage.calls.map((call) => call.op)
+    expect(ops.filter((op) => op === 'scan').length).toBeLessThanOrEqual(4)
+    expect(ops).not.toContain('remove')
+    expect(storage.calls).toHaveLength(callsAtReturn)
+  })
+
+  test('a deadline that is already spent starts no storage call', async () => {
+    const storage = createFakeStorage()
+    seed(storage, 'c1', Date.now())
+    const reports: string[] = []
+    const durable = createDurableSkillOutputs(storage, {
+      deadlineMs: 0,
+      report: (message) => reports.push(message),
+    })
+
+    await durable.put(ids('new'), 'OUT-new')
+    expect(await durable.get(ids('c1'))).toBeUndefined()
+
+    expect(storage.calls).toEqual([])
+    expect(reports).toEqual([
+      'skill output could not be kept across a restart: storage did not answer within 0 ms',
+      'kept skill output could not be read: storage did not answer within 0 ms',
+    ])
+  })
+
+  test('a write whose budget is spent by a slow set reports once and starts no cleanup', async () => {
+    const storage = createFakeStorage()
+    const reports: string[] = []
+    const durable = createDurableSkillOutputs(storage, {
+      deadlineMs: 30,
+      report: (message) => reports.push(message),
+    })
+    storage.slow.ms = 80
+
+    await durable.put(ids('a'), 'OUT-a')
+    await Bun.sleep(150)
+
+    expect(storage.calls.map((call) => call.op)).toEqual(['set'])
+    expect(reports).toEqual([
+      'skill output could not be kept across a restart: storage did not answer within 30 ms',
+    ])
+  })
+})
+
+describe('durable skill output: a remembered miss expires', () => {
+  test('a key is read again once the miss is older than its time to live', async () => {
+    const storage = createFakeStorage()
+    let clock = 1_000_000
+    const durable = createDurableSkillOutputs(storage, { now: () => clock })
+    expect(await durable.get(ids('c1'))).toBeUndefined()
+    // Another instance writes the record afterwards.
+    storage.data.set(`${KEY_PREFIX}s:message-1:c1`, record('c1', clock))
+
+    clock += DURABLE_MISS_TTL_MS - 1
+    expect(await durable.get(ids('c1'))).toBeUndefined()
+    expect(storage.calls.filter((call) => call.op === 'get')).toHaveLength(1)
+
+    clock += 1
+    expect(await durable.get(ids('c1'))).toBe('OUT-c1')
+    expect(storage.calls.filter((call) => call.op === 'get')).toHaveLength(2)
+  })
+
+  test('the time to live is 60 seconds', () => {
+    expect(DURABLE_MISS_TTL_MS).toBe(60_000)
+  })
+})
+
+describe('durable skill output: an id that cannot be a key', () => {
+  const LONE = 'a\ud800b'
+
+  test('put and get resolve without throwing and touch no storage, for each id', async () => {
+    const storage = createFakeStorage()
+    const reports: string[] = []
+    const durable = createDurableSkillOutputs(storage, {
+      report: (message) => reports.push(message),
+    })
+
+    for (const bad of [ids('c', LONE), ids(LONE), ids('c', 's', LONE)]) {
+      await expect(durable.put(bad, 'OUT')).resolves.toBeUndefined()
+      await expect(durable.get(bad)).resolves.toBeUndefined()
+    }
+
+    expect(storage.calls).toEqual([])
+    expect(reports).toEqual([
+      'skill output has an id that cannot be stored and is not kept across a restart',
+    ])
+  })
+
+  test('a skill load under such a call id still succeeds and is restored from memory', async () => {
+    const storage = createFakeStorage()
+    const host = await setup(undefined, { storage })
+    const tool = await registeredTool(host)
+
+    const loaded = await tool.execute(
+      { name: UNDER_LIMIT_SKILL },
+      toolContext({ sessionID: 's', id: LONE }),
+    )
+    const event = cutRequest('s', LONE)
+    await contextHook(host)(event)
+
+    expect(loaded.content).toContain('<skill_content')
+    expect(resultOf(event)).toEqual({
+      type: 'content',
+      value: [{ type: 'text', text: loaded.content }],
+    })
+    expect(storage.calls).toEqual([])
+  })
+
+  test('a cut result under such an id after a restart stays cut without a throw', async () => {
+    const storage = createFakeStorage()
+    const host = await setup(undefined, { storage })
+    const event = cutRequest('s', LONE)
+
+    await expect(
+      Promise.resolve(contextHook(host)(event)),
+    ).resolves.toBeUndefined()
+
+    expect((resultOf(event) as { value: unknown[] }).value).toHaveLength(2)
+    expect(storage.calls).toEqual([])
+    expect(errorMessages()).toEqual([])
   })
 })

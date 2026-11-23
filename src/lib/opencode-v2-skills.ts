@@ -93,11 +93,23 @@ export interface V2Storage {
   }>
 }
 
+/** One skill invocation: the assistant message that made the call and the provider's call id, which a provider may reuse across turns. */
+export interface SkillCallIds {
+  sessionID: string
+  messageID: string
+  callID: string
+}
+
+/** The in-memory store key for a call: the message id keeps a reused call id from reaching another turn's result. */
+export function skillOutputHandle(messageID: string, callID: string): string {
+  return `${messageID}\u0000${callID}`
+}
+
 export interface DurableSkillOutputs {
   /** Keep one rendered output. Never rejects and never takes longer than the deadline. */
-  put(sessionID: string, callID: string, output: string): Promise<void>
-  /** The output kept for exactly this session and call. Never rejects: a failure or a miss is `undefined`. */
-  get(sessionID: string, callID: string): Promise<string | undefined>
+  put(ids: SkillCallIds, output: string): Promise<void>
+  /** The output kept for exactly this session, message and call. Never rejects: a failure or a miss is `undefined`. */
+  get(ids: SkillCallIds): Promise<string | undefined>
 }
 
 interface DurableSkillOutputOptions {
@@ -106,21 +118,30 @@ interface DurableSkillOutputOptions {
   maxAgeMs?: number
   deadlineMs?: number
   maxMisses?: number
+  missTtlMs?: number
   now?: () => number
   report?: (message: string) => void
 }
 
-/** Opaque ids can hold any character, so each is encoded: `:` becomes `%3A` and two pairs never share a key. */
-function durableKey(sessionID: string, callID: string): string {
-  return `${DURABLE_KEY_PREFIX}${encodeURIComponent(sessionID)}:${encodeURIComponent(callID)}`
+/** The storage key for a call, or `undefined` when an id cannot be encoded (an unpaired surrogate throws). */
+function durableKey(ids: SkillCallIds): string | undefined {
+  try {
+    return `${DURABLE_KEY_PREFIX}${[ids.sessionID, ids.messageID, ids.callID].map(encodeURIComponent).join(':')}`
+  } catch {
+    return undefined
+  }
 }
 
 /** Runs `operation` and rejects if it has not settled within `ms`; the operation itself is not cancelled. */
-function withDeadline<T>(operation: () => Promise<T>, ms: number): Promise<T> {
+function withDeadline<T>(
+  operation: () => Promise<T>,
+  ms: number,
+  label: number,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
-      () => reject(new Error(`storage did not answer within ${ms} ms`)),
-      ms,
+      () => reject(new Error(`storage did not answer within ${label} ms`)),
+      Math.max(ms, 0),
     )
     // A pending deadline must not keep the host process alive.
     ;(timer as { unref?: () => void }).unref?.()
@@ -146,7 +167,7 @@ function storedAtOf(value: unknown): number {
     : Number.MIN_SAFE_INTEGER
 }
 
-/** Rendered skill outputs kept in the host's plugin storage by session and call, one key per record and no index. */
+/** Rendered skill outputs kept in the host's plugin storage by session, message and call, one key per record and no index. */
 export function createDurableSkillOutputs(
   storage: V2Storage,
   options: DurableSkillOutputOptions = {},
@@ -156,6 +177,7 @@ export function createDurableSkillOutputs(
   const maxAgeMs = options.maxAgeMs ?? DURABLE_MAX_AGE_MS
   const deadlineMs = options.deadlineMs ?? DURABLE_DEADLINE_MS
   const maxMisses = options.maxMisses ?? DURABLE_MAX_MISSES
+  const missTtlMs = options.missTtlMs ?? DURABLE_MISS_TTL_MS
   const now = options.now ?? Date.now
   const report = options.report ?? (() => {})
   const reported = new Set<string>()
@@ -165,24 +187,41 @@ export function createDurableSkillOutputs(
     const reason = error instanceof Error ? `: ${error.message}` : ''
     report(`${kind}${reason}`)
   }
-  // Keys known to hold nothing usable, oldest first; a transient failure is never added.
-  const misses = new Set<string>()
+  // Keys found to hold nothing usable, with when to look again, oldest first; a transient failure is never added.
+  const misses = new Map<string, number>()
   const rememberMiss = (key: string) => {
     misses.delete(key)
-    misses.add(key)
-    for (const oldest of misses) {
+    misses.set(key, now() + missTtlMs)
+    for (const oldest of misses.keys()) {
       if (misses.size <= maxMisses) break
       misses.delete(oldest)
     }
   }
-  const call = <T>(operation: () => Promise<T>) =>
-    withDeadline(operation, deadlineMs)
+  const isKnownMiss = (key: string) => {
+    const until = misses.get(key)
+    if (until === undefined) return false
+    if (until > now()) return true
+    misses.delete(key)
+    return false
+  }
+  // Set after a cleanup fails or times out: nothing more is written, so a store that cannot be trimmed cannot grow.
+  let writesStopped = false
 
-  const listEntries = async () => {
+  // Every storage call draws on one deadline; none starts once it has passed.
+  const call = <T>(until: number, operation: () => Promise<T>) => {
+    const remaining = until - Date.now()
+    return remaining <= 0
+      ? Promise.reject(
+          new Error(`storage did not answer within ${deadlineMs} ms`),
+        )
+      : withDeadline(operation, remaining, deadlineMs)
+  }
+
+  const listEntries = async (until: number) => {
     const found: { key: string; storedAt: number }[] = []
     let after: string | undefined
     for (let page = 0; page < DURABLE_SCAN_MAX_PAGES; page++) {
-      const result = await call(() =>
+      const result = await call(until, () =>
         storage.scan({
           prefix: DURABLE_KEY_PREFIX,
           limit: DURABLE_SCAN_PAGE,
@@ -197,79 +236,86 @@ export function createDurableSkillOutputs(
     return found
   }
 
-  // Runs only after the new entry is written; the entry just written is never removed.
-  const trim = async (ownKey: string) => {
+  // Every writer ranks the same listing the same way, so overlapping trims agree on the survivors.
+  const trim = async (until: number) => {
     const cutoff = now() - maxAgeMs
-    const others = (await listEntries())
-      .filter((entry) => entry.key !== ownKey)
-      .sort((a, b) => b.storedAt - a.storedAt || (a.key < b.key ? -1 : 1))
-    const doomed = others.filter(
-      (entry, index) => entry.storedAt < cutoff || index >= maxEntries - 1,
+    const ranked = (await listEntries(until)).sort(
+      (a, b) => b.storedAt - a.storedAt || (a.key < b.key ? -1 : 1),
+    )
+    const doomed = ranked.filter(
+      (entry, index) => entry.storedAt < cutoff || index >= maxEntries,
     )
     const results = await Promise.allSettled(
-      doomed.map((entry) => call(() => storage.remove(entry.key))),
+      doomed.map((entry) => call(until, () => storage.remove(entry.key))),
     )
     const failed = results.find((result) => result.status === 'rejected')
     if (failed !== undefined) throw failed.reason
   }
 
   return {
-    put(sessionID, callID, output) {
-      const key = durableKey(sessionID, callID)
+    async put(ids, output) {
+      if (writesStopped) return
+      const key = durableKey(ids)
+      if (key === undefined) {
+        reportOnce(
+          'skill output has an id that cannot be stored and is not kept across a restart',
+        )
+        return
+      }
       if (Buffer.byteLength(output, 'utf8') > maxEntryBytes) {
         rememberMiss(key)
         reportOnce(
           `skill output is over ${maxEntryBytes} bytes and is not kept across a restart`,
         )
-        return Promise.resolve()
+        return
       }
+      const until = Date.now() + deadlineMs
       const record = {
         v: DURABLE_RECORD_VERSION,
-        sessionID,
-        callID,
+        ...ids,
         output,
         storedAt: now(),
       }
-      let written = false
-      const work = async () => {
-        await call(() => storage.set(key, record))
-        written = true
-        misses.delete(key)
-        await trim(key).catch((error: unknown) =>
-          reportOnce('old skill outputs could not be removed', error),
+      try {
+        await call(until, () => storage.set(key, record))
+      } catch (error) {
+        reportOnce('skill output could not be kept across a restart', error)
+        return
+      }
+      misses.delete(key)
+      try {
+        await trim(until)
+      } catch (error) {
+        writesStopped = true
+        reportOnce(
+          'old skill outputs could not be removed, so no more skill output is kept across a restart',
+          error,
         )
       }
-      return withDeadline(work, deadlineMs).catch((error: unknown) =>
-        reportOnce(
-          written
-            ? 'old skill outputs could not be removed'
-            : 'skill output could not be kept across a restart',
-          error,
-        ),
-      )
     },
-    async get(sessionID, callID) {
-      const key = durableKey(sessionID, callID)
-      if (misses.has(key)) return undefined
-      let record: unknown
+    async get(ids) {
+      const key = durableKey(ids)
+      if (key === undefined || isKnownMiss(key)) return undefined
+      let stored: unknown
       try {
-        record = await call(() => storage.get(key))
+        stored = await call(Date.now() + deadlineMs, () => storage.get(key))
       } catch (error) {
         reportOnce('kept skill output could not be read', error)
         return undefined
       }
       if (
-        !isRecord(record) ||
-        record.v !== DURABLE_RECORD_VERSION ||
-        record.sessionID !== sessionID ||
-        record.callID !== callID ||
-        typeof record.output !== 'string' ||
-        now() - storedAtOf(record) > maxAgeMs
+        !isRecord(stored) ||
+        stored.v !== DURABLE_RECORD_VERSION ||
+        stored.sessionID !== ids.sessionID ||
+        stored.messageID !== ids.messageID ||
+        stored.callID !== ids.callID ||
+        typeof stored.output !== 'string' ||
+        now() - storedAtOf(stored) > maxAgeMs
       ) {
         rememberMiss(key)
         return undefined
       }
-      return record.output
+      return stored.output
     },
   }
 }
@@ -292,10 +338,13 @@ export const DURABLE_DEADLINE_MS = 2000
 /** Known-missing keys remembered per process. */
 export const DURABLE_MAX_MISSES = 256
 
+/** How long a remembered miss stands before the key is read again. */
+export const DURABLE_MISS_TTL_MS = 60 * 1000
+
 const DURABLE_SCAN_PAGE = 100
 const DURABLE_SCAN_MAX_PAGES = 10
 const DURABLE_KEY_PREFIX = 'systematic:skill-output:'
-const DURABLE_RECORD_VERSION = 1
+const DURABLE_RECORD_VERSION = 2
 
 /** The enabled bundled skills as v2 records, in name order. */
 export function readBundledSkills(
@@ -364,11 +413,12 @@ function parseToolInput(input: unknown): SkillToolInput {
 
 /**
  * Put the full text back into the tool results of a model request where the
- * host cut it. Matching is by session, tool name and call id. Nothing depends
- * on the host's marker text. The store is read, not emptied: the host builds
- * each request from history, so the same result is restored on every later
- * request.
+ * host cut it. Matching is by session, the assistant message that made the call,
+ * tool name and call id. Nothing depends on the host's marker text. The store is
+ * read, not emptied: the host builds each request from history, so the same
+ * result is restored on every later request.
  * A cut part the store lacks is read from `durable`; a request with none returns `undefined` before any await.
+ * A result whose calling message cannot be identified is left as the host cut it.
  */
 export function restoreSkillResults(
   store: SkillOutputStore,
@@ -379,38 +429,59 @@ export function restoreSkillResults(
   const { sessionID, messages } = event
   if (!Array.isArray(messages)) return undefined
   const pending: PendingRestore[] = []
+  // The assistant message of the latest skill call under each call id so far; `undefined` when it cannot be told.
+  const callers = new Map<string, string | undefined>()
   for (const message of messages) {
-    if (!isRecord(message) || message.role !== 'tool') continue
-    if (!Array.isArray(message.content)) continue
+    if (!isRecord(message) || !Array.isArray(message.content)) continue
+    if (message.role === 'assistant') noteSkillCalls(callers, message)
+    if (message.role !== 'tool') continue
     for (const part of message.content)
-      restorePart(store, sessionID, part, durable, pending)
+      restorePart(store, sessionID, part, callers, durable, pending)
   }
   if (durable === undefined || pending.length === 0) return undefined
   return restoreFromDurable(store, durable, pending)
 }
 
+function noteSkillCalls(
+  callers: Map<string, string | undefined>,
+  message: Record<string, unknown>,
+): void {
+  if (!Array.isArray(message.content)) return
+  const seen = new Set<string>()
+  for (const part of message.content) {
+    if (!isRecord(part) || part.type !== 'tool-call') continue
+    if (part.name !== SKILL_TOOL_NAME || typeof part.id !== 'string') continue
+    // A call id twice in one message, or a message with no id, cannot be told apart.
+    const named = typeof message.id === 'string' && !seen.has(part.id)
+    callers.set(part.id, named ? (message.id as string) : undefined)
+    seen.add(part.id)
+  }
+}
+
 interface PendingRestore {
   part: Record<string, unknown>
-  sessionID: string
-  callID: string
+  ids: SkillCallIds
 }
 
 function restorePart(
   store: SkillOutputStore,
   sessionID: string,
   part: unknown,
+  callers: ReadonlyMap<string, string | undefined>,
   durable: DurableSkillOutputs | undefined,
   pending: PendingRestore[],
 ): void {
   if (!isRecord(part) || part.type !== 'tool-result') return
   if (part.name !== SKILL_TOOL_NAME || typeof part.id !== 'string') return
-  const full = store.peek(sessionID, part.id)
+  const messageID = callers.get(part.id)
+  if (messageID === undefined) return
+  const full = store.peek(sessionID, skillOutputHandle(messageID, part.id))
   if (full !== undefined) {
     part.result = restoredResult(part.result, full)
     return
   }
   if (durable !== undefined && isCutByHost(part.result))
-    pending.push({ part, sessionID, callID: part.id })
+    pending.push({ part, ids: { sessionID, messageID, callID: part.id } })
 }
 
 /** A host cut adds a marker part, so a cut skill is a `content` result of more than one part. */
@@ -429,12 +500,16 @@ async function restoreFromDurable(
   pending: readonly PendingRestore[],
 ): Promise<void> {
   await Promise.all(
-    pending.map(async ({ part, sessionID, callID }) => {
-      const full = await durable.get(sessionID, callID)
+    pending.map(async ({ part, ids }) => {
+      const full = await durable.get(ids)
       if (full === undefined) return
       part.result = restoredResult(part.result, full)
       // Later requests in this process read it from memory.
-      store.put(sessionID, callID, full)
+      store.put(
+        ids.sessionID,
+        skillOutputHandle(ids.messageID, ids.callID),
+        full,
+      )
     }),
   )
 }
@@ -501,9 +576,17 @@ function createToolDefinition(
         }),
       )
       await progress()
-      store.put(context.sessionID, context.id, loaded.output)
-      if (durable !== undefined)
-        await durable.put(context.sessionID, context.id, loaded.output)
+      const ids = {
+        sessionID: context.sessionID,
+        messageID: context.messageID,
+        callID: context.id,
+      }
+      store.put(
+        ids.sessionID,
+        skillOutputHandle(ids.messageID, ids.callID),
+        loaded.output,
+      )
+      if (durable !== undefined) await durable.put(ids, loaded.output)
       return {
         content: loaded.output,
         metadata: { name: loaded.prefixedName, dir: loaded.dir },

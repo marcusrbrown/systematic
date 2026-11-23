@@ -223,7 +223,7 @@ Key symbols:
 | `createOpenCodeV1Hooks` | `src/lib/opencode-v1.ts` | OpenCode v1 adapter: the five v1 hooks |
 | `setupOpenCodeV2` | `src/lib/opencode-v2.ts` | OpenCode v2 adapter scaffold: one config load, one shared snapshot, installer slots in order, tool guard first; every installer but the tool guard runs behind a never-throw guard |
 | `installToolGuard` | `src/lib/opencode-v2-tool-guard.ts` | OpenCode v2 read-only tool guard: an allowlist enforced in the `execute.before` hook for named agents; fails closed |
-| `installSkills` | `src/lib/opencode-v2-skills.ts` | OpenCode v2 skills: native skill registration, the `systematic_skill` port, and full-output restoration, every load kept across a restart in the host's plugin storage (newest 32, 7 days, bounded by a deadline) |
+| `installSkills` | `src/lib/opencode-v2-skills.ts` | OpenCode v2 skills: native skill registration, the `systematic_skill` port, and full-output restoration, every load kept across a restart in the host's plugin storage by session, calling message and call (newest 32, 7 days, one deadline per write) |
 | `installCommands` | `src/lib/opencode-v2-commands.ts` | OpenCode v2 commands: argument expansion, one prompt per invocation, refusal of routing fields |
 | `installBootstrap` | `src/lib/opencode-v2-bootstrap.ts` | OpenCode v2 bootstrap: one instruction entry per session, put from the prompt hook |
 | `translatePermissionRules` | `src/lib/opencode-v2-permissions.ts` | Ordered permission triples to the v2 rule list, one rule per triple in the same order |
