@@ -21,10 +21,9 @@ import { isRecord } from './validation.js'
  *
  * The host cuts a tool result at 2000 lines or 51200 bytes after the plugin
  * has returned it, and three bundled skills are larger. The full text is kept
- * by call id and put back into the request before each model call. An
- * in-memory store serves a running process. A result over the limit is also
- * written to the host's plugin storage (see {@link createDurableSkillOutputs}),
- * so the restore survives a restart.
+ * by call id and put back into the request before each model call. Memory
+ * serves a running process; every load is also kept in the host's plugin
+ * storage (see {@link createDurableSkillOutputs}) so a restart still restores it.
  */
 
 /** The part of a v2 skill this module writes. The host's own skill type is assignable to it. */
@@ -83,19 +82,19 @@ type DurableJson =
   | DurableJson[]
   | { [key: string]: DurableJson }
 
-/**
- * The part of the host's plugin `storage` domain this module uses. The host
- * namespaces it by plugin id, so no other plugin reads or writes these keys.
- * The host's own domain type is assignable to it.
- */
+/** The part of the host's plugin `storage` domain this module uses; the host namespaces it by plugin id. */
 export interface V2Storage {
   get(key: string): Promise<unknown>
   set(key: string, value: DurableJson): Promise<void>
   remove(key: string): Promise<void>
+  scan(options: { prefix: string; after?: string; limit?: number }): Promise<{
+    entries: readonly { key: string; value: unknown }[]
+    next?: string
+  }>
 }
 
 export interface DurableSkillOutputs {
-  /** Keep one rendered output. Never rejects: a failure is reported once and the call carries on. */
+  /** Keep one rendered output. Never rejects and never takes longer than the deadline. */
   put(sessionID: string, callID: string, output: string): Promise<void>
   /** The output kept for exactly this session and call. Never rejects: a failure or a miss is `undefined`. */
   get(sessionID: string, callID: string): Promise<string | undefined>
@@ -104,55 +103,60 @@ export interface DurableSkillOutputs {
 interface DurableSkillOutputOptions {
   maxEntries?: number
   maxEntryBytes?: number
+  maxAgeMs?: number
+  deadlineMs?: number
+  maxMisses?: number
+  now?: () => number
   report?: (message: string) => void
 }
 
-function lineCount(text: string): number {
-  if (text === '') return 0
-  let count = 1
-  for (
-    let index = text.indexOf('\n');
-    index !== -1 && index < text.length - 1;
-    index = text.indexOf('\n', index + 1)
-  )
-    count++
-  return count
-}
-
-/** Whether the host cuts this text: over 2000 lines or 51200 bytes, counted as the host counts. */
-export function exceedsHostOutputLimit(text: string): boolean {
-  return (
-    Buffer.byteLength(text, 'utf8') > HOST_OUTPUT_MAX_BYTES ||
-    lineCount(text) > HOST_OUTPUT_MAX_LINES
-  )
-}
-
-/**
- * Opaque ids can hold any character, so each is encoded before it joins the
- * key: `:` becomes `%3A`, which keeps two different pairs from sharing a key.
- */
+/** Opaque ids can hold any character, so each is encoded: `:` becomes `%3A` and two pairs never share a key. */
 function durableKey(sessionID: string, callID: string): string {
   return `${DURABLE_KEY_PREFIX}${encodeURIComponent(sessionID)}:${encodeURIComponent(callID)}`
 }
 
-function parseIndex(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === 'string')
-    : []
+/** Runs `operation` and rejects if it has not settled within `ms`; the operation itself is not cancelled. */
+function withDeadline<T>(operation: () => Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`storage did not answer within ${ms} ms`)),
+      ms,
+    )
+    // A pending deadline must not keep the host process alive.
+    ;(timer as { unref?: () => void }).unref?.()
+    new Promise<T>((settle) => settle(operation())).then(
+      (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown) => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
 }
 
-/**
- * Rendered skill outputs kept in the host's plugin storage by session and call,
- * so a restart still has the full text. A read returns an output only when both
- * ids match. Writes drop evicted entries, then the index, then the entry, so a
- * partial failure never leaves an unindexed entry.
- */
+/** The write time of a stored record; anything without one reads as older than any limit. */
+function storedAtOf(value: unknown): number {
+  return isRecord(value) &&
+    typeof value.storedAt === 'number' &&
+    Number.isFinite(value.storedAt)
+    ? value.storedAt
+    : Number.MIN_SAFE_INTEGER
+}
+
+/** Rendered skill outputs kept in the host's plugin storage by session and call, one key per record and no index. */
 export function createDurableSkillOutputs(
   storage: V2Storage,
   options: DurableSkillOutputOptions = {},
 ): DurableSkillOutputs {
   const maxEntries = options.maxEntries ?? DURABLE_MAX_ENTRIES
   const maxEntryBytes = options.maxEntryBytes ?? DURABLE_MAX_ENTRY_BYTES
+  const maxAgeMs = options.maxAgeMs ?? DURABLE_MAX_AGE_MS
+  const deadlineMs = options.deadlineMs ?? DURABLE_DEADLINE_MS
+  const maxMisses = options.maxMisses ?? DURABLE_MAX_MISSES
+  const now = options.now ?? Date.now
   const report = options.report ?? (() => {})
   const reported = new Set<string>()
   const reportOnce = (kind: string, error?: unknown) => {
@@ -161,22 +165,59 @@ export function createDurableSkillOutputs(
     const reason = error instanceof Error ? `: ${error.message}` : ''
     report(`${kind}${reason}`)
   }
-  let queue: Promise<void> = Promise.resolve()
+  // Keys known to hold nothing usable, oldest first; a transient failure is never added.
+  const misses = new Set<string>()
+  const rememberMiss = (key: string) => {
+    misses.delete(key)
+    misses.add(key)
+    for (const oldest of misses) {
+      if (misses.size <= maxMisses) break
+      misses.delete(oldest)
+    }
+  }
+  const call = <T>(operation: () => Promise<T>) =>
+    withDeadline(operation, deadlineMs)
 
-  const write = async (key: string, record: DurableJson) => {
-    const index = parseIndex(await storage.get(DURABLE_INDEX_KEY)).filter(
-      (entry) => entry !== key,
+  const listEntries = async () => {
+    const found: { key: string; storedAt: number }[] = []
+    let after: string | undefined
+    for (let page = 0; page < DURABLE_SCAN_MAX_PAGES; page++) {
+      const result = await call(() =>
+        storage.scan({
+          prefix: DURABLE_KEY_PREFIX,
+          limit: DURABLE_SCAN_PAGE,
+          ...(after === undefined ? {} : { after }),
+        }),
+      )
+      for (const entry of result.entries)
+        found.push({ key: entry.key, storedAt: storedAtOf(entry.value) })
+      if (result.next === undefined) break
+      after = result.next
+    }
+    return found
+  }
+
+  // Runs only after the new entry is written; the entry just written is never removed.
+  const trim = async (ownKey: string) => {
+    const cutoff = now() - maxAgeMs
+    const others = (await listEntries())
+      .filter((entry) => entry.key !== ownKey)
+      .sort((a, b) => b.storedAt - a.storedAt || (a.key < b.key ? -1 : 1))
+    const doomed = others.filter(
+      (entry, index) => entry.storedAt < cutoff || index >= maxEntries - 1,
     )
-    index.push(key)
-    const evicted = index.splice(0, Math.max(0, index.length - maxEntries))
-    for (const entry of evicted) await storage.remove(entry)
-    await storage.set(DURABLE_INDEX_KEY, index)
-    await storage.set(key, record)
+    const results = await Promise.allSettled(
+      doomed.map((entry) => call(() => storage.remove(entry.key))),
+    )
+    const failed = results.find((result) => result.status === 'rejected')
+    if (failed !== undefined) throw failed.reason
   }
 
   return {
     put(sessionID, callID, output) {
+      const key = durableKey(sessionID, callID)
       if (Buffer.byteLength(output, 'utf8') > maxEntryBytes) {
+        rememberMiss(key)
         reportOnce(
           `skill output is over ${maxEntryBytes} bytes and is not kept across a restart`,
         )
@@ -187,53 +228,73 @@ export function createDurableSkillOutputs(
         sessionID,
         callID,
         output,
+        storedAt: now(),
       }
-      queue = queue.then(() =>
-        write(durableKey(sessionID, callID), record).catch((error: unknown) =>
-          reportOnce('skill output could not be kept across a restart', error),
+      let written = false
+      const work = async () => {
+        await call(() => storage.set(key, record))
+        written = true
+        misses.delete(key)
+        await trim(key).catch((error: unknown) =>
+          reportOnce('old skill outputs could not be removed', error),
+        )
+      }
+      return withDeadline(work, deadlineMs).catch((error: unknown) =>
+        reportOnce(
+          written
+            ? 'old skill outputs could not be removed'
+            : 'skill output could not be kept across a restart',
+          error,
         ),
       )
-      return queue
     },
     async get(sessionID, callID) {
+      const key = durableKey(sessionID, callID)
+      if (misses.has(key)) return undefined
+      let record: unknown
       try {
-        const record = await storage.get(durableKey(sessionID, callID))
-        if (
-          !isRecord(record) ||
-          record.v !== DURABLE_RECORD_VERSION ||
-          record.sessionID !== sessionID ||
-          record.callID !== callID ||
-          typeof record.output !== 'string'
-        )
-          return undefined
-        return record.output
+        record = await call(() => storage.get(key))
       } catch (error) {
         reportOnce('kept skill output could not be read', error)
         return undefined
       }
+      if (
+        !isRecord(record) ||
+        record.v !== DURABLE_RECORD_VERSION ||
+        record.sessionID !== sessionID ||
+        record.callID !== callID ||
+        typeof record.output !== 'string' ||
+        now() - storedAtOf(record) > maxAgeMs
+      ) {
+        rememberMiss(key)
+        return undefined
+      }
+      return record.output
     },
   }
 }
 
-/**
- * The in-memory store serves a running process and is dropped with it. The
- * durable copy (below) takes over after a restart.
- */
 const RESTORE_TTL_MS = 24 * 60 * 60 * 1000
 const RESTORE_MAX_ENTRIES = 32
-
-/** The host's default tool output limit (`ToolOutput.MAX_LINES` / `MAX_BYTES`). */
-const HOST_OUTPUT_MAX_BYTES = 50 * 1024
-const HOST_OUTPUT_MAX_LINES = 2000
 
 /** Per-entry cap: ten times the largest bundled skill, with room for `$ARGUMENTS`. */
 export const DURABLE_MAX_ENTRY_BYTES = 1024 * 1024
 
-/** Entries kept, oldest evicted first. */
+/** Entries kept, newest first. */
 export const DURABLE_MAX_ENTRIES = 32
 
+/** Matches the host's `ToolOutput.RETENTION` for its own spill files. */
+export const DURABLE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+
+/** How long any one storage call may take before it is treated as failed. */
+export const DURABLE_DEADLINE_MS = 2000
+
+/** Known-missing keys remembered per process. */
+export const DURABLE_MAX_MISSES = 256
+
+const DURABLE_SCAN_PAGE = 100
+const DURABLE_SCAN_MAX_PAGES = 10
 const DURABLE_KEY_PREFIX = 'systematic:skill-output:'
-const DURABLE_INDEX_KEY = 'systematic:skill-output-index'
 const DURABLE_RECORD_VERSION = 1
 
 /** The enabled bundled skills as v2 records, in name order. */
@@ -307,12 +368,7 @@ function parseToolInput(input: unknown): SkillToolInput {
  * on the host's marker text. The store is read, not emptied: the host builds
  * each request from history, so the same result is restored on every later
  * request.
- *
- * A part the store does not hold, and the host has cut, is read from `durable`
- * when there is one. That is decided here, before anything is awaited: a
- * request with no such part returns `undefined` and never touches storage. The
- * returned promise never rejects, and a read that fails or finds nothing
- * leaves the part as the host cut it.
+ * A cut part the store lacks is read from `durable`; a request with none returns `undefined` before any await.
  */
 export function restoreSkillResults(
   store: SkillOutputStore,
@@ -446,8 +502,7 @@ function createToolDefinition(
       )
       await progress()
       store.put(context.sessionID, context.id, loaded.output)
-      // Only what the host will cut needs a copy that outlives the process.
-      if (durable !== undefined && exceedsHostOutputLimit(loaded.output))
+      if (durable !== undefined)
         await durable.put(context.sessionID, context.id, loaded.output)
       return {
         content: loaded.output,

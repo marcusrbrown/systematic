@@ -1,3 +1,4 @@
+import { Database } from 'bun:sqlite'
 import {
   afterAll,
   afterEach,
@@ -2245,6 +2246,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
             'responses',
           )
           let sessionID: string
+          let liveOutput = ''
           try {
             const session = await live.client.session.create({
               location: { directory: fixture.projectDir },
@@ -2256,6 +2258,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
               sessionID,
               '@@TOOL systematic_skill {"name":"ce:review"}',
             )
+            liveOutput = live.server.output()
           } finally {
             await live.server.stop()
           }
@@ -2280,8 +2283,10 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
             {},
             'responses',
           )
+          let restartedOutput = ''
           try {
             await prompt(restarted, sessionID, 'Carry on after the restart.')
+            restartedOutput = restarted.server.output()
           } finally {
             await restarted.server.stop()
           }
@@ -2305,6 +2310,31 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           expect(JSON.stringify(replayed) === JSON.stringify(original)).toBe(
             true,
           )
+
+          // The write, the listing and the removals ran against the real
+          // storage without a diagnostic, and left the one record under the
+          // plugin's keys and no index.
+          const diagnostics = `${liveOutput}\n${restartedOutput}`
+            .split('\n')
+            .filter((line) => line.includes('systematic: skill output'))
+          expect(diagnostics).toEqual([])
+          const db = new Database(
+            path.join(fixture.xdgDataHome, 'opencode/opencode.db'),
+            { readonly: true },
+          )
+          try {
+            const keys = db
+              .query<{ key: string }, []>(
+                "SELECT key FROM kv WHERE key LIKE '%systematic:skill-output%'",
+              )
+              .all()
+              .map((row) => row.key.slice(row.key.indexOf('systematic:')))
+            expect(keys).toEqual([
+              `systematic:skill-output:${encodeURIComponent(sessionID)}:call-1`,
+            ])
+          } finally {
+            db.close()
+          }
         } finally {
           responses.stop()
         }
