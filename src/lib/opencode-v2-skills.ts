@@ -22,7 +22,7 @@ import { isRecord } from './validation.js'
  * The host cuts a tool result at 2000 lines or 51200 bytes after the plugin
  * has returned it, and three bundled skills are larger. The full text is kept
  * by call id and put back into the request before each model call. Memory
- * serves a running process; every load is also kept in the host's plugin
+ * serves a running process; loads are also kept, best effort, in the host's plugin
  * storage (see {@link createDurableSkillOutputs}) so a restart still restores it.
  */
 
@@ -132,6 +132,9 @@ function durableKey(ids: SkillCallIds): string | undefined {
   }
 }
 
+/** A storage call that outlived its deadline: it may still commit, so its outcome is unknown. */
+class StorageTimeout extends Error {}
+
 /** Runs `operation` and rejects if it has not settled within `ms`; the operation itself is not cancelled. */
 function withDeadline<T>(
   operation: () => Promise<T>,
@@ -140,7 +143,8 @@ function withDeadline<T>(
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
-      () => reject(new Error(`storage did not answer within ${label} ms`)),
+      () =>
+        reject(new StorageTimeout(`storage did not answer within ${label} ms`)),
       Math.max(ms, 0),
     )
     // A pending deadline must not keep the host process alive.
@@ -204,8 +208,10 @@ export function createDurableSkillOutputs(
     misses.delete(key)
     return false
   }
-  // Set after a cleanup fails or times out: nothing more is written, so a store that cannot be trimmed cannot grow.
+  // Set after a cleanup fails or a write times out: nothing more is written, so a store that cannot be trimmed cannot grow.
   let writesStopped = false
+  // One durable write (set and cleanup) at a time per process; a put that finds one running is skipped.
+  let writing = false
 
   // Every storage call draws on one deadline; none starts once it has passed.
   const call = <T>(until: number, operation: () => Promise<T>) => {
@@ -254,7 +260,7 @@ export function createDurableSkillOutputs(
 
   return {
     async put(ids, output) {
-      if (writesStopped) return
+      if (writesStopped || writing) return
       const key = durableKey(ids)
       if (key === undefined) {
         reportOnce(
@@ -269,28 +275,41 @@ export function createDurableSkillOutputs(
         )
         return
       }
-      const until = Date.now() + deadlineMs
-      const record = {
-        v: DURABLE_RECORD_VERSION,
-        ...ids,
-        output,
-        storedAt: now(),
-      }
+      writing = true
       try {
-        await call(until, () => storage.set(key, record))
-      } catch (error) {
-        reportOnce('skill output could not be kept across a restart', error)
-        return
-      }
-      misses.delete(key)
-      try {
-        await trim(until)
-      } catch (error) {
-        writesStopped = true
-        reportOnce(
-          'old skill outputs could not be removed, so no more skill output is kept across a restart',
-          error,
-        )
+        const until = Date.now() + deadlineMs
+        const record = {
+          v: DURABLE_RECORD_VERSION,
+          ...ids,
+          output,
+          storedAt: now(),
+        }
+        try {
+          await call(until, () => storage.set(key, record))
+        } catch (error) {
+          if (error instanceof StorageTimeout) {
+            writesStopped = true
+            reportOnce(
+              'skill output write did not finish in time, so no more skill output is kept across a restart',
+              error,
+            )
+          } else {
+            reportOnce('skill output could not be kept across a restart', error)
+          }
+          return
+        }
+        misses.delete(key)
+        try {
+          await trim(until)
+        } catch (error) {
+          writesStopped = true
+          reportOnce(
+            'old skill outputs could not be removed, so no more skill output is kept across a restart',
+            error,
+          )
+        }
+      } finally {
+        writing = false
       }
     },
     async get(ids) {

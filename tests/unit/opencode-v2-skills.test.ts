@@ -1180,7 +1180,7 @@ describe('durable skill output: persist on execute', () => {
     expect(readMs).toBeLessThan(DURABLE_DEADLINE_MS + 1500)
     expect((resultOf(event) as { value: unknown[] }).value).toHaveLength(2)
     expect(errorMessages()).toEqual([
-      `systematic: skill output could not be kept across a restart: storage did not answer within ${DURABLE_DEADLINE_MS} ms`,
+      `systematic: skill output write did not finish in time, so no more skill output is kept across a restart: storage did not answer within ${DURABLE_DEADLINE_MS} ms`,
       `systematic: kept skill output could not be read: storage did not answer within ${DURABLE_DEADLINE_MS} ms`,
     ])
   }, 15_000)
@@ -1575,7 +1575,7 @@ describe('durable skill output: failures leave what is stored intact and never b
     }
   })
 
-  test('a write that never answers resolves at the deadline, and the next write is not queued behind it', async () => {
+  test('a write that never answers resolves at the deadline, reports once, and stops further writes', async () => {
     const storage = createFakeStorage()
     const reports: string[] = []
     const durable = createDurableSkillOutputs(storage, {
@@ -1592,9 +1592,10 @@ describe('durable skill output: failures leave what is stored intact and never b
 
     expect(waited).toBeGreaterThanOrEqual(25)
     expect(waited).toBeLessThan(1000)
-    expect(await durable.get(ids('c2'))).toBe('TWO')
+    expect(storage.calls.filter((call) => call.op === 'set')).toHaveLength(1)
+    expect(await durable.get(ids('c2'))).toBeUndefined()
     expect(reports).toEqual([
-      'skill output could not be kept across a restart: storage did not answer within 30 ms',
+      'skill output write did not finish in time, so no more skill output is kept across a restart: storage did not answer within 30 ms',
     ])
   })
 
@@ -2310,7 +2311,7 @@ describe('durable skill output: one deadline across the write and the cleanup', 
 
     expect(storage.calls.map((call) => call.op)).toEqual(['set'])
     expect(reports).toEqual([
-      'skill output could not be kept across a restart: storage did not answer within 30 ms',
+      'skill output write did not finish in time, so no more skill output is kept across a restart: storage did not answer within 30 ms',
     ])
   })
 })
@@ -2391,5 +2392,132 @@ describe('durable skill output: an id that cannot be a key', () => {
     expect((resultOf(event) as { value: unknown[] }).value).toHaveLength(2)
     expect(storage.calls).toEqual([])
     expect(errorMessages()).toEqual([])
+  })
+})
+
+describe('durable skill output: one write in flight, and a timed-out write stops writes', () => {
+  test('several writes that each commit after their deadline leave the stored count within the cap plus one', async () => {
+    const storage = createFakeStorage()
+    for (const id of ['c1', 'c2', 'c3']) seed(storage, id, 1000)
+    const durable = createDurableSkillOutputs(storage, {
+      deadlineMs: 30,
+      maxEntries: 3,
+      now: () => 2000,
+      report: () => {},
+    })
+    storage.slow.ms = 80
+
+    for (let call = 0; call < 6; call++)
+      await durable.put(ids(`late${call}`), `OUT-${call}`)
+    // Let every set that outlived its deadline commit.
+    await Bun.sleep(300)
+
+    expect(storage.data.size).toBeLessThanOrEqual(3 + 1)
+    expect(storage.calls.filter((call) => call.op === 'set')).toHaveLength(1)
+  })
+
+  test('a burst of overlapping puts at the cap with the cleanup blocked stays within the cap plus one', async () => {
+    for (const block of ['hang', 'fail'] as const) {
+      const storage = createFakeStorage()
+      for (const id of ['c1', 'c2', 'c3']) seed(storage, id, 1000)
+      if (block === 'hang') storage.hang.scan = true
+      else storage.fail.scan = new Error('locked')
+      const durable = createDurableSkillOutputs(storage, {
+        deadlineMs: 30,
+        maxEntries: 3,
+        now: () => 2000,
+        report: () => {},
+      })
+
+      await Promise.all(
+        Array.from({ length: 10 }, (_, call) =>
+          durable.put(ids(`burst${call}`), `OUT-${call}`),
+        ),
+      )
+      await Bun.sleep(100)
+
+      expect(storage.data.size, block).toBeLessThanOrEqual(3 + 1)
+      expect(
+        storage.calls.filter((call) => call.op === 'set'),
+        block,
+      ).toHaveLength(1)
+    }
+  })
+
+  test('a put that arrives while another write is in flight is skipped, and the next one after it settles is written', async () => {
+    const storage = createFakeStorage()
+    const durable = createDurableSkillOutputs(storage)
+    storage.slow.ms = 40
+
+    const first = durable.put(ids('a'), 'OUT-a')
+    const overlapping = durable.put(ids('b'), 'OUT-b')
+    await Promise.all([first, overlapping])
+    await durable.put(ids('c'), 'OUT-c')
+
+    expect(storedCalls(storage)).toEqual([
+      `${KEY_PREFIX}s:message-1:a`,
+      `${KEY_PREFIX}s:message-1:c`,
+    ])
+  })
+
+  test('a put that arrives during the cleanup of another write is skipped too', async () => {
+    const storage = createFakeStorage()
+    const durable = createDurableSkillOutputs(storage)
+    storage.slow.ms = 40
+
+    const first = durable.put(ids('a'), 'OUT-a')
+    // The set takes 40 ms and the listing the next 40: this lands in the cleanup.
+    await Bun.sleep(60)
+    await durable.put(ids('b'), 'OUT-b')
+    await first
+
+    expect(storedCalls(storage)).toEqual([`${KEY_PREFIX}s:message-1:a`])
+  })
+
+  test('a skipped write still restores the live result from memory', async () => {
+    const storage = createFakeStorage()
+    storage.slow.ms = 60
+    const host = await setup(undefined, { storage })
+    const tool = await registeredTool(host)
+
+    const [first, second] = await Promise.all([
+      tool.execute(
+        { name: UNDER_LIMIT_SKILL },
+        toolContext({ sessionID: 's-skip', id: 'call-a' }),
+      ),
+      tool.execute(
+        { name: 'git-commit' },
+        toolContext({ sessionID: 's-skip', id: 'call-b' }),
+      ),
+    ])
+    storage.slow.ms = 0
+    const event = {
+      sessionID: 's-skip',
+      messages: [
+        toolResultMessage('call-a', 'systematic_skill', ['CUT', 'marker']),
+        toolResultMessage('call-b', 'systematic_skill', ['CUT', 'marker']),
+      ],
+    }
+    storage.calls.length = 0
+    await contextHook(host)(event)
+
+    // One of the two was kept in storage and both come back from memory, with no read.
+    expect(storedCalls(storage)).toHaveLength(1)
+    const [a, b] = event.messages
+    expect(textOf(a)).toEqual([{ type: 'text', text: first.content }])
+    expect(textOf(b)).toEqual([{ type: 'text', text: second.content }])
+    expect(storage.calls.filter((call) => call.op === 'get')).toEqual([])
+  })
+
+  test('a write that fails outright, rather than timing out, does not stop later writes', async () => {
+    const storage = createFakeStorage()
+    const durable = createDurableSkillOutputs(storage, { report: () => {} })
+    storage.fail.set = new Error('disk full')
+    await durable.put(ids('a'), 'OUT-a')
+    storage.fail.set = undefined
+
+    await durable.put(ids('b'), 'OUT-b')
+
+    expect(await durable.get(ids('b'))).toBe('OUT-b')
   })
 })

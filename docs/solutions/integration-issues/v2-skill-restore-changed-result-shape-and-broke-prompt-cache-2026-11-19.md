@@ -82,7 +82,7 @@ The old rewrite therefore made the request bytes depend on a cache that a restar
 - Test the wire value, not flattened text. Compare the raw `function_call_output.output` across a live request, a follow-up and a restarted host, and compare it with the expected full text so that a value that is stable but wrong also fails.
 - A unit test for a hook should fail when the hook is not registered.
 - To isolate a cache regression, turn off every plugin's `context` and transform hooks, your own included, before blaming the host. Give upstream a plain-plugin repro rather than a cause inferred from reading code.
-- Text the host cut at its output limit survives a restart too: every `systematic_skill` load is kept in the plugin's `ctx.storage` by session, calling message and call id (newest 32 records, 7 days, one 2 s budget per write and its cleanup) and read back when the in-memory store misses and the result has the host's cut shape (#1461). The fix keeps an uncut skill's bytes the same whether or not the store has the entry. That removes this cause of a prefix break; it does not guarantee a provider cache hit.
+- Text the host cut at its output limit survives a restart too: `systematic_skill` loads are kept, best effort, in the plugin's `ctx.storage` by session, calling message and call id (newest 32 records, 7 days, one 2 s budget per write and its cleanup; a failed cleanup or a timed-out write stops durable writes for that plugin instance) and read back when the in-memory store misses and the result has the host's cut shape (#1461). The fix keeps an uncut skill's bytes the same whether or not the store has the entry. That removes this cause of a prefix break; it does not guarantee a provider cache hit.
 
 ## Related Issues
 
