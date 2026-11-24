@@ -4,6 +4,43 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.38.1](https://github.com/marcusrbrown/systematic/compare/v3.38.0...v3.38.1) (2026-11-24)
+
+### Bug Fixes
+
+* **connect:** print the revision on imported candidates so a decision binds to it ([#1507](https://github.com/marcusrbrown/systematic/issues/1507)) ([48ea05e](https://github.com/marcusrbrown/systematic/commit/48ea05ead56833c1c9a499d7e7618b2d66a862e9))
+* **opencode-v2:** keep the full skill result across a host restart ([#1500](https://github.com/marcusrbrown/systematic/issues/1500)) ([af68367](https://github.com/marcusrbrown/systematic/commit/af68367cee12016a7f63f3dfa92829fcc989e06c))
+* pass a trimmed OPENCODE_CONFIG_DIR to skill discovery, and say how it differs from OpenCode v2 ([#1492](https://github.com/marcusrbrown/systematic/issues/1492)) ([7e29988](https://github.com/marcusrbrown/systematic/commit/7e299885d310b444fcbde8d5ff5767bd5bf11428))
+
+### Build System
+
+* **deps:** update Pi to v1.6.0 ([#1503](https://github.com/marcusrbrown/systematic/issues/1503)) ([2304689](https://github.com/marcusrbrown/systematic/commit/2304689234c9de2b6de4af5d153fa3c7926ac3dd))
+
+### Documentation
+
+* point the root CLI and host-contract inventories at their sources ([#1498](https://github.com/marcusrbrown/systematic/issues/1498)) ([b9d53f8](https://github.com/marcusrbrown/systematic/commit/b9d53f8bdefb8f74802f993b968242c20ad842bf))
+* record live runs of the reusable ce:connect workflow from fro-bot/agent ([#1504](https://github.com/marcusrbrown/systematic/issues/1504)) ([fb50489](https://github.com/marcusrbrown/systematic/commit/fb504897e809c4f93a3644f765e39426fb1465ab))
+
+### Tests
+
+* expand a ~/ bootstrap file against a temp home instead of the developer's ([#1495](https://github.com/marcusrbrown/systematic/issues/1495)) ([b6f7e67](https://github.com/marcusrbrown/systematic/commit/b6f7e6703ac0b941bfe3dcd26931b06194175e9b))
+* keep temp paths out of the diff-handoff fixture's shell scripts ([#1497](https://github.com/marcusrbrown/systematic/issues/1497)) ([f0f5f39](https://github.com/marcusrbrown/systematic/commit/f0f5f39353b16916e69107b095399448faa2ff5d))
+
+### Continuous Integration
+
+* **deps:** update Systematic to v3.38.0 ([#1493](https://github.com/marcusrbrown/systematic/issues/1493)) ([19ee54f](https://github.com/marcusrbrown/systematic/commit/19ee54f3bf10ae1d1a2873b5652fe797d80f082e))
+* **release:** stop the release preview clone racing background git maintenance ([#1510](https://github.com/marcusrbrown/systematic/issues/1510)) ([8ba593e](https://github.com/marcusrbrown/systematic/commit/8ba593ecf58740e19df47baf4b787e8f1136b0b4))
+
+### Code Refactoring
+
+* **opencode-v2:** keep skill storage deadlines class-free ([#1505](https://github.com/marcusrbrown/systematic/issues/1505)) ([2b061cd](https://github.com/marcusrbrown/systematic/commit/2b061cd603b7622f3a8cadf9ef58fb70a67f858a))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.147.1 ([#1496](https://github.com/marcusrbrown/systematic/issues/1496)) ([4e815f7](https://github.com/marcusrbrown/systematic/commit/4e815f7855f48c24eace7e1c5ba09c1af4a5932c))
+* **deps:** update fro-bot/agent to v0.147.2 ([#1502](https://github.com/marcusrbrown/systematic/issues/1502)) ([d003126](https://github.com/marcusrbrown/systematic/commit/d003126649f79d8899326517fe4cd178cd0c5ba8))
+* **deps:** update github/codeql-action action to v4.39.5 ([#1509](https://github.com/marcusrbrown/systematic/issues/1509)) ([e6f4b7b](https://github.com/marcusrbrown/systematic/commit/e6f4b7bb61e3d319f35586cc7008f30990dd8e3c))
+
 ## [3.38.0](https://github.com/marcusrbrown/systematic/compare/v3.37.0...v3.38.0) (2026-11-22)
 
 ### Features
