@@ -141,6 +141,7 @@ import {
   readRunRecord,
   recordsEvidenceOf,
   releaseLock,
+  revisionOf,
   revisionOfCandidate,
   rewriteRunFiles,
   writeInvocationRecord,
@@ -628,7 +629,7 @@ interface AcceptedCandidate {
   readonly refreshPointer?: string
   readonly possibleMatches: readonly string[]
   readonly candidate: ValidCandidate
-  /** The revision the ledger gives the candidate once the run is written. Absent for an import, which has no decision step. */
+  /** The revision the ledger gives the candidate once the run is written: what a decision on it must carry. */
   readonly revision?: string
   /** The checkout HEAD each `counterevidence` item was recorded at, for an import. */
   readonly evidenceHeads?: ReadonlyArray<string | undefined>
@@ -2823,6 +2824,7 @@ function ledgerShow(request: unknown, deps: HelperDeps): HelperResult {
       ...(entry.mismatchReason === undefined
         ? {}
         : { mismatchReason: entry.mismatchReason }),
+      revision: revisionOf(entry),
       sources: entry.sources.map((source) => ({
         role: source.role,
         path: source.path,
@@ -3037,6 +3039,7 @@ function freshOf(
       : { refreshPointer: extra.refreshPointer }),
     possibleMatches: extra.possibleMatches ?? [],
     candidate: item.candidate,
+    revision: revisionOfCandidate(item.record),
     ...(item.evidenceHeads === undefined
       ? {}
       : { evidenceHeads: item.evidenceHeads }),

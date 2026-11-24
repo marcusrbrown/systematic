@@ -2801,6 +2801,30 @@ describe('ledger show paging', () => {
     expect(page.nextOffset).toBeNull()
   })
 
+  it('projects the revision of each entry: the stored one, or the one its own fields hash to', () => {
+    const world = buildWorld()
+    seedLedger(world, 2)
+    const file = path.join(world.stateRoot, 'ledger.json')
+    const ledger = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      entries: Json[]
+    }
+    const [stored, legacy] = ledger.entries
+    if (stored === undefined || legacy === undefined) throw new Error('seed')
+    stored.revision = 'abcdef123456'
+    delete legacy.revision
+    fs.writeFileSync(file, JSON.stringify(ledger), { mode: 0o600 })
+
+    const shown = (ok(runHelperOp('ledger-show', {}, world.deps)).entries ??
+      []) as Json[]
+    expect(shown[0]?.revision).toBe('abcdef123456')
+    const hashed = revisionOf({
+      sources: [],
+      targetEvidence: [],
+    } as unknown as LedgerEntry)
+    expect(hashed).toMatch(HEX12)
+    expect(shown[1]?.revision).toBe(hashed)
+  })
+
   it.each([
     { offset: -1 },
     { offset: 1.5 },
