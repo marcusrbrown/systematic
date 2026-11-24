@@ -2810,19 +2810,50 @@ describe('ledger show paging', () => {
     }
     const [stored, legacy] = ledger.entries
     if (stored === undefined || legacy === undefined) throw new Error('seed')
-    stored.revision = 'abcdef123456'
+    const fields = {
+      sources: [
+        {
+          role: 'source@a654dc9722c3',
+          path: 'docs/solutions/lock-reclaim.md',
+          fingerprint: 'a'.repeat(64),
+        },
+        {
+          role: 'source@cf2a193d0b3c',
+          path: 'docs/solutions/other.md',
+          fingerprint: 'b'.repeat(64),
+        },
+      ],
+      targetEvidence: [
+        { path: 'src/lock.ts', fingerprint: 'c'.repeat(64) },
+        { path: 'src/other.ts', fingerprint: 'd'.repeat(64) },
+      ],
+      evidence: [
+        {
+          project: 'cf2a193d0b3c',
+          path: 'docs/solutions/lock-now.md',
+          fingerprint: 'e'.repeat(64),
+        },
+      ],
+    }
+    Object.assign(stored, fields, { revision: 'abcdef123456' })
+    Object.assign(legacy, fields)
     delete legacy.revision
     fs.writeFileSync(file, JSON.stringify(ledger), { mode: 0o600 })
 
     const shown = (ok(runHelperOp('ledger-show', {}, world.deps)).entries ??
       []) as Json[]
+    // A stored revision is shown as it was written, whatever the fields hash to.
     expect(shown[0]?.revision).toBe('abcdef123456')
-    const hashed = revisionOf({
+    // An entry with none shows what its own fields hash to, the value `decide` checks.
+    const hashed = revisionOf(legacy as unknown as LedgerEntry)
+    const empty = revisionOf({
       sources: [],
       targetEvidence: [],
     } as unknown as LedgerEntry)
     expect(hashed).toMatch(HEX12)
+    expect(hashed).not.toBe(empty)
     expect(shown[1]?.revision).toBe(hashed)
+    expect(shown[1]?.revision).not.toBe(empty)
   })
 
   it.each([
