@@ -132,8 +132,12 @@ function durableKey(ids: SkillCallIds): string | undefined {
   }
 }
 
-/** A storage call that outlived its deadline: it may still commit, so its outcome is unknown. */
-class StorageTimeout extends Error {}
+/** Identifies only deadlines that fired while a storage call was in flight. */
+const storageTimeouts = new WeakSet<Error>()
+
+function isStorageTimeout(error: unknown): boolean {
+  return error instanceof Error && storageTimeouts.has(error)
+}
 
 /** Runs `operation` and rejects if it has not settled within `ms`; the operation itself is not cancelled. */
 function withDeadline<T>(
@@ -143,8 +147,11 @@ function withDeadline<T>(
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
-      () =>
-        reject(new StorageTimeout(`storage did not answer within ${label} ms`)),
+      () => {
+        const error = new Error(`storage did not answer within ${label} ms`)
+        storageTimeouts.add(error)
+        reject(error)
+      },
       Math.max(ms, 0),
     )
     // A pending deadline must not keep the host process alive.
@@ -287,7 +294,7 @@ export function createDurableSkillOutputs(
         try {
           await call(until, () => storage.set(key, record))
         } catch (error) {
-          if (error instanceof StorageTimeout) {
+          if (isStorageTimeout(error)) {
             writesStopped = true
             reportOnce(
               'skill output write did not finish in time, so no more skill output is kept across a restart',
