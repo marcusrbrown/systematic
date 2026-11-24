@@ -139,7 +139,6 @@ import {
   readInvocationRecord,
   readLedger,
   readRunRecord,
-  recordsEvidenceOf,
   releaseLock,
   revisionOf,
   revisionOfCandidate,
@@ -3126,11 +3125,13 @@ function placeOne(
   const entry = ledger.entries.find((known) => known.id === item.id)
   const skipped = skippedOf(item, entry)
   if (skipped !== undefined) return { skipped }
-  // A retained record is reused only while the ledger still watches the
-  // evidence it holds. After the claim was published with other evidence, a
-  // decision made from the old record would watch files it never cited.
+  // A retained record is reused only while the ledger holds what that record's
+  // digest shows. The revision covers the sources, target citations and
+  // evidence, so after the claim was published with other citations or evidence
+  // a decision made from the old digest would be refused as stale on every try.
   const held =
-    entry !== undefined && !recordsEvidenceOf(entry, item.record)
+    entry !== undefined &&
+    revisionOf(entry) !== revisionOfCandidate(item.record)
       ? undefined
       : heldIn(item)
   return {

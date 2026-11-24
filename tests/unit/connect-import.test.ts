@@ -2368,6 +2368,64 @@ describe('import: the revision a digest shows is the one the ledger holds', () =
     },
   )
 
+  describe('a retained run for an open candidate', () => {
+    const A = (): Json[] => [lockCitation()]
+    const AB = (): Json[] => [lockCitation(), otherCitation()]
+
+    it('is not reused once the ledger holds other citations: A, then A+B, then A again', () => {
+      const world = worldWithExtraFile()
+      const first = ok(importOp(world, downloaded(lessonRecord(A()))))
+      const id = String(list(first.candidates)[0]?.id)
+      const second = ok(importOp(world, downloaded(lessonRecord(AB()))))
+      expect(second.imported).toBe(1)
+      const heldByB = ledgerEntries(world)[0]?.revision
+      expect(heldByB).toBe(digestRevisionOf(second.digestPath, id))
+
+      // Both runs are kept and nothing was decided. The A record is the first
+      // run's, but the ledger watches A+B, so that run's digest is not what a
+      // decision may be made from.
+      const third = ok(importOp(world, downloaded(lessonRecord(A()))))
+      expect(third.imported).toBe(1)
+      expect(third.alreadyImported).toBe(0)
+      expect(list(third.candidates)[0]?.runRecordPath).not.toBe(
+        first.runRecordPath,
+      )
+
+      const shown = digestRevisionOf(third.digestPath, id)
+      expect(shown).toMatch(/^[0-9a-f]{12}$/)
+      expect(shown).not.toBe(heldByB)
+      expect(ledgerEntries(world)[0]?.revision).toBe(shown)
+      expect(shownRevision(world, id)).toBe(shown)
+
+      expect(
+        failed(
+          runHelperOp('decide', decision(id, heldByB as string), world.deps),
+        ).reason,
+      ).toBe('stale-revision')
+      expect(
+        ok(runHelperOp('decide', decision(id, shown), world.deps)).status,
+      ).toBe('decided')
+    })
+
+    it('is reused when the ledger holds what the record cites: A, then A+B, then A+B again', () => {
+      const world = worldWithExtraFile()
+      ok(importOp(world, downloaded(lessonRecord(A()))))
+      const second = ok(importOp(world, downloaded(lessonRecord(AB()))))
+      const id = String(list(second.candidates)[0]?.id)
+
+      const again = ok(importOp(world, downloaded(lessonRecord(AB()))))
+      expect(again.imported).toBe(0)
+      expect(again.alreadyImported).toBe(1)
+      expect(list(again.candidates)[0]?.runRecordPath).toBe(
+        second.runRecordPath,
+      )
+      expect(runDirs(world)).toHaveLength(2)
+      expect(ledgerEntries(world)[0]?.revision).toBe(
+        digestRevisionOf(second.digestPath, id),
+      )
+    })
+  })
+
   it('uses the revision of the local record, whatever revision and project keys the CI record carries', () => {
     const world = buildWorld()
     const record = fixtureRecord('good')
