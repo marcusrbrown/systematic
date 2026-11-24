@@ -4,7 +4,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import yaml from 'js-yaml'
-import { KEPT_PLUGINS, previewRelease } from '../../scripts/release/preview.ts'
+import {
+  isolatedGitEnv,
+  KEPT_PLUGINS,
+  mirrorCloneArgs,
+  previewRelease,
+  workCloneArgs,
+} from '../../scripts/release/preview.ts'
 
 const REPO_ROOT = path.resolve(import.meta.dir, '../..')
 const RELEASERC = path.join(REPO_ROOT, '.releaserc.yaml')
@@ -60,6 +66,12 @@ function snapshot(dir: string): Record<string, string> {
   }
 }
 
+function findLockFiles(dir: string): string[] {
+  return fs
+    .readdirSync(dir, { recursive: true, encoding: 'utf8' })
+    .filter((entry) => entry.endsWith('.lock'))
+}
+
 function leftoverTempDirs(): string[] {
   return fs
     .readdirSync(os.tmpdir())
@@ -82,6 +94,54 @@ describe('.releaserc.yaml plugins', () => {
     )
 
     expect(names).toEqual([...KEPT_PLUGINS])
+  })
+})
+
+describe('isolatedGitEnv', () => {
+  test(
+    'disables automatic maintenance and gc for every git command',
+    () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'release-env-'))
+      fixtures.push(home)
+      const env = isolatedGitEnv(home)
+
+      const read = (key: string) =>
+        spawnSync('git', ['config', '--get', key], {
+          cwd: home,
+          encoding: 'utf8',
+          env,
+        }).stdout.trim()
+
+      expect(read('maintenance.auto')).toBe('false')
+      expect(read('gc.auto')).toBe('0')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  test('keeps git isolated from user and system config', () => {
+    const env = isolatedGitEnv('/some/home')
+
+    expect(env.HOME).toBe('/some/home')
+    expect(env.GIT_CONFIG_NOSYSTEM).toBe('1')
+    expect(env.GIT_TERMINAL_PROMPT).toBe('0')
+  })
+})
+
+describe('clone argv', () => {
+  test('both clones copy objects instead of hardlinking them', () => {
+    expect(mirrorCloneArgs('/src', '/mirror')).toContain('--no-local')
+    expect(workCloneArgs('/mirror', '/work')).toContain('--no-local')
+  })
+
+  test('clones target the given source and destination', () => {
+    expect(mirrorCloneArgs('/src', '/mirror').slice(-2)).toEqual([
+      '/src',
+      '/mirror',
+    ])
+    expect(workCloneArgs('/mirror', '/work').slice(-2)).toEqual([
+      '/mirror',
+      '/work',
+    ])
   })
 })
 
@@ -210,6 +270,7 @@ describe('previewRelease', () => {
       expect(result.kind).toBe('release')
       expect(snapshot(dir)).toEqual(before)
       expect(leftoverTempDirs()).toEqual(tmpBefore)
+      expect(findLockFiles(path.join(dir, '.git'))).toEqual([])
     },
     TEST_TIMEOUT_MS,
   )

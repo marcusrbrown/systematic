@@ -41,6 +41,36 @@ export const KEPT_PLUGINS = [
   '@semantic-release/release-notes-generator',
 ]
 
+/**
+ * Isolate git from user/system config (signing, insteadOf, hooks, ...) and
+ * turn off automatic maintenance. `git fetch` otherwise spawns a detached
+ * `git maintenance run --auto` that rewrites the commit-graph chain in the
+ * mirror while the next local clone hardlinks from it, and that detached job
+ * can also outlive the temp directory removed in `finally`.
+ */
+export function isolatedGitEnv(home: string): Record<string, string> {
+  return {
+    PATH: process.env.PATH ?? '',
+    HOME: home,
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: 'maintenance.auto',
+    GIT_CONFIG_VALUE_0: 'false',
+    GIT_CONFIG_KEY_1: 'gc.auto',
+    GIT_CONFIG_VALUE_1: '0',
+  }
+}
+
+/** `--no-local` copies objects instead of hardlinking them from the source. */
+export function mirrorCloneArgs(source: string, mirror: string): string[] {
+  return ['clone', '--bare', '--no-local', source, mirror]
+}
+
+export function workCloneArgs(mirror: string, work: string): string[] {
+  return ['clone', '--no-local', mirror, work]
+}
+
 async function git(
   cwd: string,
   env: Record<string, string>,
@@ -91,13 +121,7 @@ export async function dryRunRelease({
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), TEMP_PREFIX))
 
   try {
-    // Isolate git from user/system config (signing, insteadOf, hooks, ...).
-    const env: Record<string, string> = {
-      PATH: process.env.PATH ?? '',
-      HOME: tmp,
-      GIT_CONFIG_NOSYSTEM: '1',
-      GIT_TERMINAL_PROMPT: '0',
-    }
+    const env = isolatedGitEnv(tmp)
 
     const sha = await git(
       cwd,
@@ -110,7 +134,7 @@ export async function dryRunRelease({
     const mirror = path.join(tmp, 'remote.git')
     const work = path.join(tmp, 'work')
 
-    await git(tmp, env, 'clone', '--bare', '--no-local', cwd, mirror)
+    await git(tmp, env, ...mirrorCloneArgs(cwd, mirror))
     await git(mirror, env, 'update-ref', 'refs/heads/main', sha)
     await git(
       mirror,
@@ -122,7 +146,7 @@ export async function dryRunRelease({
       'refs/tags/v*:refs/tags/v*',
     )
 
-    await git(tmp, env, 'clone', mirror, work)
+    await git(tmp, env, ...workCloneArgs(mirror, work))
     await git(work, env, 'checkout', '-B', 'main', sha)
     for (const alias of REPOSITORY_URL_ALIASES) {
       await git(
