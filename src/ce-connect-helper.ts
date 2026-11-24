@@ -139,8 +139,8 @@ import {
   readInvocationRecord,
   readLedger,
   readRunRecord,
-  recordsEvidenceOf,
   releaseLock,
+  revisionOf,
   revisionOfCandidate,
   rewriteRunFiles,
   writeInvocationRecord,
@@ -628,7 +628,7 @@ interface AcceptedCandidate {
   readonly refreshPointer?: string
   readonly possibleMatches: readonly string[]
   readonly candidate: ValidCandidate
-  /** The revision the ledger gives the candidate once the run is written. Absent for an import, which has no decision step. */
+  /** The revision the ledger gives the candidate once the run is written: what a decision on it must carry. */
   readonly revision?: string
   /** The checkout HEAD each `counterevidence` item was recorded at, for an import. */
   readonly evidenceHeads?: ReadonlyArray<string | undefined>
@@ -2823,6 +2823,7 @@ function ledgerShow(request: unknown, deps: HelperDeps): HelperResult {
       ...(entry.mismatchReason === undefined
         ? {}
         : { mismatchReason: entry.mismatchReason }),
+      revision: revisionOf(entry),
       sources: entry.sources.map((source) => ({
         role: source.role,
         path: source.path,
@@ -3037,6 +3038,7 @@ function freshOf(
       : { refreshPointer: extra.refreshPointer }),
     possibleMatches: extra.possibleMatches ?? [],
     candidate: item.candidate,
+    revision: revisionOfCandidate(item.record),
     ...(item.evidenceHeads === undefined
       ? {}
       : { evidenceHeads: item.evidenceHeads }),
@@ -3123,11 +3125,13 @@ function placeOne(
   const entry = ledger.entries.find((known) => known.id === item.id)
   const skipped = skippedOf(item, entry)
   if (skipped !== undefined) return { skipped }
-  // A retained record is reused only while the ledger still watches the
-  // evidence it holds. After the claim was published with other evidence, a
-  // decision made from the old record would watch files it never cited.
+  // A retained record is reused only while the ledger holds what that record's
+  // digest shows. The revision covers the sources, target citations and
+  // evidence, so after the claim was published with other citations or evidence
+  // a decision made from the old digest would be refused as stale on every try.
   const held =
-    entry !== undefined && !recordsEvidenceOf(entry, item.record)
+    entry !== undefined &&
+    revisionOf(entry) !== revisionOfCandidate(item.record)
       ? undefined
       : heldIn(item)
   return {

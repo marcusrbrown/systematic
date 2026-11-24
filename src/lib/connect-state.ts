@@ -839,24 +839,6 @@ function normalizedEvidence(candidate: CandidateRecord): EvidenceRef[] {
   )
 }
 
-/** Whether a ledger entry records exactly the evidence files, with fingerprints, that a candidate cites. */
-export function recordsEvidenceOf(
-  entry: LedgerEntry,
-  candidate: CandidateRecord,
-): boolean {
-  const recorded = entry.evidence ?? []
-  const cited = normalizedEvidence(candidate)
-  return (
-    recorded.length === cited.length &&
-    recorded.every(
-      (ref, index) =>
-        ref.project === cited[index]?.project &&
-        ref.path === cited[index]?.path &&
-        ref.fingerprint === cited[index]?.fingerprint,
-    )
-  )
-}
-
 /**
  * The identity of a candidate: kind, target, rule id and the normalized
  * (role, path) of each source. Fingerprints and target evidence are not part
@@ -1434,17 +1416,26 @@ function mismatchFields(candidate: CandidateRecord): {
   }
 }
 
-/** The entry with exactly this evidence; an empty list leaves the field out. */
-function withEvidence(
+/**
+ * The entry with exactly what a digest of this candidate shows: its target
+ * citations and its recorded evidence, an empty evidence list leaving the field
+ * out. Sources stay: an id holds the (role, path) of each, and a changed
+ * fingerprint reopens the entry instead of reaching here.
+ */
+function withShownEvidence(
   entry: LedgerEntry,
-  evidence: readonly EvidenceRef[],
+  candidate: CandidateRecord,
 ): LedgerEntry {
+  const evidence = normalizedEvidence(candidate)
   const { evidence: _recorded, revision: _stale, ...rest } = entry
-  const next =
-    evidence.length === 0 ? rest : { ...rest, evidence: [...evidence] }
-  // The revision covers the evidence a decision reviews, so it follows it: a
-  // digest of the evidence the entry had no longer matches, and a decision made
-  // from it is refused until a digest of the new evidence is read.
+  const next = {
+    ...rest,
+    targetEvidence: normalizedTargetEvidence(candidate),
+    ...(evidence.length === 0 ? {} : { evidence: [...evidence] }),
+  }
+  // The revision covers the citations and evidence a decision reviews, so it
+  // follows them: a digest of what the entry had no longer matches, and a
+  // decision made from it is refused until a digest of the new ones is read.
   return { ...next, revision: revisionOf(next) }
 }
 
@@ -1560,11 +1551,10 @@ function applyCandidates(
       outcome.priorStatus === 'candidate'
     ) {
       // An open entry a run publishes again is what its digest shows next, so a
-      // decision made from that digest must watch the evidence it cites.
+      // decision made from that digest must watch the citations and evidence it
+      // shows.
       entries = entries.map((entry) =>
-        entry.id === outcome.id
-          ? withEvidence(entry, normalizedEvidence(candidate))
-          : entry,
+        entry.id === outcome.id ? withShownEvidence(entry, candidate) : entry,
       )
     } else if (outcome.standing === 'reopened') {
       entries = entries.map((entry) =>

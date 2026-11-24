@@ -21,6 +21,7 @@ import {
   decideLedgerEntry,
   prepareStateRoot,
   readLedger,
+  revisionOfCandidate,
 } from '../../src/lib/connect-state.js'
 import { cleanupTempDirs, git, makeDir } from './git-worktree-fixtures'
 
@@ -206,6 +207,15 @@ function ledgerEntries(world: World): Json[] {
   const read = readLedger(world.stateRoot)
   if (read.status !== 'ok') throw new Error('ledger unreadable')
   return read.ledger.entries as unknown as Json[]
+}
+
+/** The revision a digest prints for the candidate with this id. */
+function digestRevisionOf(digestPath: unknown, id: string): string {
+  const digest = fs.readFileSync(String(digestPath), 'utf8')
+  const block = digest
+    .split('### Candidate ')
+    .find((part) => part.includes(`- Id: \`${id}\``))
+  return /^- Revision: ([0-9a-f]{12})$/m.exec(block ?? '')?.[1] ?? ''
 }
 
 function head(project: string): string {
@@ -1361,6 +1371,69 @@ describe('import: the ledger and the lock', () => {
     expect(digest).toContain(PROVENANCE.runId)
   })
 
+  it('prints the revision of each imported candidate in the digest, the one the ledger holds', () => {
+    const world = buildWorld()
+    const body = ok(importOp(world, downloaded(fixtureRecord('good'))))
+    const run = JSON.parse(
+      fs.readFileSync(body.runRecordPath as string, 'utf8'),
+    ) as Json
+    const imported = list((run.candidateBlock as Json).candidates)
+    expect(imported).toHaveLength(2)
+    const digest = fs.readFileSync(body.digestPath as string, 'utf8')
+    for (const candidate of imported) {
+      const revision = revisionOfCandidate(
+        toCandidateRecord(candidate as never),
+      )
+      expect(digest).toContain(`- Revision: ${revision}`)
+      const entry = ledgerEntries(world).find((e) => e.id === candidate.id)
+      expect(entry?.revision).toBe(revision)
+    }
+  })
+
+  it('decides against the revision the import digest printed, and refuses another', () => {
+    const world = buildWorld()
+    const body = ok(importOp(world, downloaded(fixtureRecord('good'))))
+    const digest = fs.readFileSync(body.digestPath as string, 'utf8')
+    const [id, other] = list(body.candidates).map((c) => String(c.id))
+    const revisionIn = (candidateId: string): string => {
+      const block = digest
+        .split('### Candidate ')
+        .find((part) => part.includes(`- Id: \`${candidateId}\``))
+      return /^- Revision: ([0-9a-f]{12})$/m.exec(block ?? '')?.[1] ?? ''
+    }
+    const revision = revisionIn(id ?? '')
+    expect(revision).toMatch(/^[0-9a-f]{12}$/)
+    const decision = (over: Json): Json => ({
+      id,
+      status: 'rejected',
+      reason: 'checked by hand',
+      ...over,
+    })
+
+    // The digest of another candidate shows another revision, so it is stale here.
+    const wrong = revisionIn(other ?? '')
+    expect(wrong).not.toBe(revision)
+    expect(
+      failed(runHelperOp('decide', decision({ revision: wrong }), world.deps)),
+    ).toMatchObject({ op: 'decide', reason: 'stale-revision' })
+    expect(ledgerEntries(world).find((e) => e.id === id)?.status).toBe(
+      'candidate',
+    )
+
+    // `ledger show` names the revision `decide` checks against.
+    const shown = ok(runHelperOp('ledger-show', {}, world.deps))
+    expect(list(shown.entries).find((entry) => entry.id === id)?.revision).toBe(
+      revision,
+    )
+
+    expect(
+      ok(runHelperOp('decide', decision({ revision }), world.deps)).status,
+    ).toBe('decided')
+    expect(ledgerEntries(world).find((e) => e.id === id)?.status).toBe(
+      'rejected',
+    )
+  })
+
   it('is reachable from the command line', () => {
     const world = buildWorld()
     const lines: string[] = []
@@ -1936,6 +2009,48 @@ describe('import: a code-mismatch candidate carries its reason and evidence', ()
       ])
     })
 
+    it('prints the revision the ledger holds when an open entry is published again with other evidence', () => {
+      const world = buildWorld()
+      const code = fixtureFiles('target')['src/lock.ts'] ?? ''
+      const citingB = (): Json => {
+        const record = mismatchRecord()
+        candidateOf(record).counterevidence = [
+          {
+            project: '/runner/work/connect/checkouts/acme__target',
+            projectName: 'acme__target',
+            path: 'src/lock.ts',
+            fingerprint: sha256(code),
+            excerpt: 'export function reclaimLock(path: string): boolean {',
+            cite: 'x',
+            start: 3,
+            end: 3,
+          },
+        ]
+        return record
+      }
+      const digestRevision = (body: Json): string => {
+        const digest = fs.readFileSync(body.digestPath as string, 'utf8')
+        return /^- Revision: ([0-9a-f]{12})$/m.exec(digest)?.[1] ?? ''
+      }
+      const first = ok(importOp(world, downloaded(mismatchRecord())))
+      const [before] = ledgerEntries(world)
+      expect(digestRevision(first)).toBe(before?.revision as string)
+
+      // The open entry is suppressed, then written again: it keeps its prior
+      // sources and target evidence and takes the evidence of the new record.
+      const second = ok(importOp(world, downloaded(citingB())))
+      expect(second.imported).toBe(1)
+      const [after] = ledgerEntries(world)
+      expect(after?.sources).toEqual(before?.sources)
+      expect(after?.targetEvidence).toEqual(before?.targetEvidence)
+      expect(list(after?.evidence)).toMatchObject([
+        { path: 'src/lock.ts', fingerprint: sha256(code) },
+      ])
+      expect(digestRevision(second)).toMatch(/^[0-9a-f]{12}$/)
+      expect(digestRevision(second)).toBe(after?.revision as string)
+      expect(digestRevision(second)).not.toBe(digestRevision(first))
+    })
+
     it('still reuses the retained record when the ledger watches the evidence it holds', () => {
       const world = buildWorld()
       const dir = downloaded(mismatchRecord())
@@ -2146,5 +2261,219 @@ describe('import: a code-mismatch candidate carries its reason and evidence', ()
     expect(String(body.summary)).toContain(
       '/ce:compound-refresh path:docs/solutions/lock-now.md',
     )
+  })
+})
+
+describe('import: the revision a digest shows is the one the ledger holds', () => {
+  const EXTRA_FILE = 'src/other.ts'
+  const EXTRA_CODE = 'export function other(): number {\n  return 1\n}\n'
+  const lockCode = fixtureFiles('target')['src/lock.ts'] ?? ''
+
+  function worldWithExtraFile(): World {
+    return buildWorld({
+      targetFiles: { ...fixtureFiles('target'), [EXTRA_FILE]: EXTRA_CODE },
+    })
+  }
+
+  const lockCitation = (): Json => ({
+    path: 'src/lock.ts',
+    start: 3,
+    end: 5,
+    symbol: 'reclaimLock',
+    fingerprint: sha256(lockCode),
+    excerpt: 'export function reclaimLock(path: string): boolean {',
+  })
+  const otherCitation = (): Json => ({
+    path: EXTRA_FILE,
+    start: 1,
+    end: 1,
+    symbol: 'other',
+    fingerprint: sha256(EXTRA_CODE),
+    excerpt: 'export function other(): number {',
+  })
+
+  /** The good record cut down to its lesson, which cites `citations` in the target. */
+  function lessonRecord(citations: Json[]): Json {
+    const record = fixtureRecord('good')
+    const block = record.candidateBlock as Json
+    const lesson = list(block.candidates).find(
+      (item) => item.kind === 'transferable-lesson',
+    )
+    if (lesson === undefined) throw new Error('the fixture has no lesson')
+    lesson.targetEvidence = citations
+    block.candidates = [lesson]
+    record.counts = { candidates: 1 }
+    return record
+  }
+
+  const decision = (id: string, revision: string): Json => ({
+    id,
+    status: 'rejected',
+    reason: 'checked by hand',
+    revision,
+  })
+
+  function shownRevision(world: World, id: string): unknown {
+    const shown = ok(runHelperOp('ledger-show', {}, world.deps))
+    return list(shown.entries).find((entry) => entry.id === id)?.revision
+  }
+
+  it.each([
+    {
+      name: 'a citation added',
+      before: () => [lockCitation()],
+      after: () => [lockCitation(), otherCitation()],
+    },
+    {
+      name: 'a citation removed',
+      before: () => [lockCitation(), otherCitation()],
+      after: () => [lockCitation()],
+    },
+  ])(
+    'binds a decision to the citations of the digest after $name',
+    ({ before, after }) => {
+      const world = worldWithExtraFile()
+      const first = ok(importOp(world, downloaded(lessonRecord(before()))))
+      const id = String(list(first.candidates)[0]?.id)
+      const oldRevision = digestRevisionOf(first.digestPath, id)
+      expect(oldRevision).toMatch(/^[0-9a-f]{12}$/)
+      expect(ledgerEntries(world)[0]?.revision).toBe(oldRevision)
+
+      // Other citations, so no kept run holds this candidate: it is written again.
+      const second = ok(importOp(world, downloaded(lessonRecord(after()))))
+      expect(second.imported).toBe(1)
+      expect(second.alreadyImported).toBe(0)
+      const [entry] = ledgerEntries(world)
+      const newRevision = digestRevisionOf(second.digestPath, id)
+      expect(newRevision).toMatch(/^[0-9a-f]{12}$/)
+      expect(newRevision).not.toBe(oldRevision)
+      expect(entry?.revision).toBe(newRevision)
+      expect(shownRevision(world, id)).toBe(newRevision)
+
+      expect(list(entry?.targetEvidence).map((item) => item.path)).toEqual(
+        after().map((item) => item.path),
+      )
+
+      const stale = failed(
+        runHelperOp('decide', decision(id, oldRevision), world.deps),
+      )
+      expect(stale).toMatchObject({ op: 'decide', reason: 'stale-revision' })
+      expect(ledgerEntries(world)[0]?.status).toBe('candidate')
+
+      const decided = ok(
+        runHelperOp('decide', decision(id, newRevision), world.deps),
+      )
+      expect(decided.status).toBe('decided')
+      expect(ledgerEntries(world)[0]?.status).toBe('rejected')
+    },
+  )
+
+  describe('a retained run for an open candidate', () => {
+    const A = (): Json[] => [lockCitation()]
+    const AB = (): Json[] => [lockCitation(), otherCitation()]
+
+    it('is not reused once the ledger holds other citations: A, then A+B, then A again', () => {
+      const world = worldWithExtraFile()
+      const first = ok(importOp(world, downloaded(lessonRecord(A()))))
+      const id = String(list(first.candidates)[0]?.id)
+      const second = ok(importOp(world, downloaded(lessonRecord(AB()))))
+      expect(second.imported).toBe(1)
+      const heldByB = ledgerEntries(world)[0]?.revision
+      expect(heldByB).toBe(digestRevisionOf(second.digestPath, id))
+
+      // Both runs are kept and nothing was decided. The A record is the first
+      // run's, but the ledger watches A+B, so that run's digest is not what a
+      // decision may be made from.
+      const third = ok(importOp(world, downloaded(lessonRecord(A()))))
+      expect(third.imported).toBe(1)
+      expect(third.alreadyImported).toBe(0)
+      expect(list(third.candidates)[0]?.runRecordPath).not.toBe(
+        first.runRecordPath,
+      )
+
+      const shown = digestRevisionOf(third.digestPath, id)
+      expect(shown).toMatch(/^[0-9a-f]{12}$/)
+      expect(shown).not.toBe(heldByB)
+      expect(ledgerEntries(world)[0]?.revision).toBe(shown)
+      expect(shownRevision(world, id)).toBe(shown)
+
+      expect(
+        failed(
+          runHelperOp('decide', decision(id, heldByB as string), world.deps),
+        ).reason,
+      ).toBe('stale-revision')
+      expect(
+        ok(runHelperOp('decide', decision(id, shown), world.deps)).status,
+      ).toBe('decided')
+    })
+
+    it('is reused when the ledger holds what the record cites: A, then A+B, then A+B again', () => {
+      const world = worldWithExtraFile()
+      ok(importOp(world, downloaded(lessonRecord(A()))))
+      const second = ok(importOp(world, downloaded(lessonRecord(AB()))))
+      const id = String(list(second.candidates)[0]?.id)
+
+      const again = ok(importOp(world, downloaded(lessonRecord(AB()))))
+      expect(again.imported).toBe(0)
+      expect(again.alreadyImported).toBe(1)
+      expect(list(again.candidates)[0]?.runRecordPath).toBe(
+        second.runRecordPath,
+      )
+      expect(runDirs(world)).toHaveLength(2)
+      expect(ledgerEntries(world)[0]?.revision).toBe(
+        digestRevisionOf(second.digestPath, id),
+      )
+    })
+  })
+
+  it('uses the revision of the local record, whatever revision and project keys the CI record carries', () => {
+    const world = buildWorld()
+    const record = fixtureRecord('good')
+    const lesson = list((record.candidateBlock as Json).candidates).find(
+      (item) => item.kind === 'transferable-lesson',
+    )
+    if (lesson === undefined) throw new Error('the fixture has no lesson')
+    // The import format has no revision of its own. A value sent anyway is not read.
+    lesson.revision = 'ffffffffffff'
+    const body = ok(importOp(world, downloaded(record)))
+    expect(body.imported).toBe(2)
+
+    const id = String(
+      list(body.candidates).find((item) => item.kind === 'transferable-lesson')
+        ?.id,
+    )
+    const run = JSON.parse(
+      fs.readFileSync(body.runRecordPath as string, 'utf8'),
+    ) as Json
+    const local = list((run.candidateBlock as Json).candidates).find(
+      (item) => item.id === id,
+    )
+    const expected = revisionOfCandidate(
+      toCandidateRecord({
+        ...(local as Json),
+        targetName: 'target',
+      } as never),
+    )
+    expect(expected).not.toBe('ffffffffffff')
+    expect(digestRevisionOf(body.digestPath, id)).toBe(expected)
+    expect(local?.revision).toBe(expected)
+    expect(
+      ledgerEntries(world).find((entry) => entry.id === id)?.revision,
+    ).toBe(expected)
+
+    // Sources carry the project key of the checkout they were read in. The CI
+    // record's keys name the runner's checkouts, so a revision made from them
+    // is another value, and the digest does not show it.
+    const [ciSource] = list(lesson.sources)
+    const ciKey = projectKey(String(ciSource?.project))
+    expect(ciKey).not.toBe(projectKey(world.source))
+    const fromCiKeys = revisionOfCandidate(
+      toCandidateRecord({
+        ...(local as Json),
+        sources: [{ ...list(local?.sources)[0], project: ciSource?.project }],
+      } as never),
+    )
+    expect(fromCiKeys).not.toBe(expected)
+    expect(digestRevisionOf(body.digestPath, id)).not.toBe(fromCiKeys)
   })
 })
