@@ -756,6 +756,7 @@ jobs:
       - name: Recheck visibility of failed replies
         id: replies-visibility
         continue-on-error: true
+        timeout-minutes: 2
         env:
           GH_TOKEN: ${{ github.token }}
           PROJECTS: ${{ needs.prepare.outputs.projects }}
@@ -817,7 +818,7 @@ jobs:
       - name: Upload failed replies
         if: steps.replies-visibility.outputs.public == 'true'
         continue-on-error: true
-        timeout-minutes: 5
+        timeout-minutes: 2
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: connect-failed-replies-${{ github.run_id }}-${{ github.run_attempt }}

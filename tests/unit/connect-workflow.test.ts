@@ -806,11 +806,25 @@ describe('connect workflow injection and artifacts', () => {
     it('never fails the run job, so a rejected upload cannot hold back the report, while the hand-off upload still does', () => {
       const step = stepNamed('run', NAME)
       expect(step['continue-on-error']).toBe(true)
-      expect(step['timeout-minutes']).toBe(5)
+      expect(step['timeout-minutes']).toBe(2)
       const handoff = stepNamed('run', 'Upload hand-off')
       expect(handoff['continue-on-error']).toBeUndefined()
       expect(withOf('run', 'Upload hand-off')['if-no-files-found']).toBe(
         'error',
+      )
+    })
+
+    it('bounds both diagnostic steps, so a stalled lookup or upload cannot use up the time the default agent step leaves', () => {
+      const recheck = stepNamed('run', 'Recheck visibility of failed replies')
+      expect(recheck['continue-on-error']).toBe(true)
+      expect(recheck['timeout-minutes']).toBe(2)
+      const diagnostics =
+        Number(recheck['timeout-minutes']) +
+        Number(stepNamed('run', NAME)['timeout-minutes'])
+      const agent = stepNamed('run', 'Run ce:connect')
+      expect(String(agent['timeout-minutes'])).toContain("'40'")
+      expect(40 + diagnostics).toBeLessThan(
+        Number(job('run')['timeout-minutes']),
       )
     })
 
