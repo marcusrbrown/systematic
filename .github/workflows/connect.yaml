@@ -738,7 +738,84 @@ jobs:
       # day as the hand-off. A good run saves none, hence `ignore`. Nothing screens
       # it for secret values, like the other artifacts. A diagnostic only, so a
       # failed upload never holds back the report.
+      #
+      # A reply can quote a source repository that no other artifact quotes, and an
+      # upload cannot be taken back. So the upload happens only when every
+      # repository the run read still reads as public right before it: the step
+      # before this one answers, and a repository that is not public or cannot be
+      # read holds the upload back and nothing else.
+
+      # The same repositories the other rechecks cover: the project list and every
+      # repository the state names (the payload store and the retained run
+      # records). It reads the run job's own state root, where the other rechecks
+      # read the hand-off in the render job's temp directory, and it never fails the
+      # job: any doubt answers `public=false`, with one warning that names no
+      # repository and no reply text (the render job's recheck names it and fails).
+      # No reply file means no call to GitHub. The naming and the visibility read
+      # are the same as in prepare and render, and a test compares them.
+      - name: Recheck visibility of failed replies
+        id: replies-visibility
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROJECTS: ${{ needs.prepare.outputs.projects }}
+        run: |
+          root="$GITHUB_WORKSPACE/connect/state/systematic/connect"
+          if ! compgen -G "$root/runs/*/family-*.reply.txt" > /dev/null; then
+            echo "public=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          deny() {
+            echo "::warning::The failed replies are not uploaded: $1"
+            echo "public=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          set -f
+          store="$root/ci-payloads.json"
+          shape='^[a-z0-9][a-z0-9-]{0,38}/[a-z0-9._-]{1,100}$'
+
+          named=""
+          if [ -f "$store" ] && [ ! -L "$store" ]; then
+            named=$(jq -r '
+              def slug:
+                if type == "string" and test("^[a-z0-9][a-z0-9-]{0,38}/[a-z0-9._-]{1,100}$") then . else "unresolved" end;
+              def checkout:
+                if test("^[a-z0-9][a-z0-9-]{0,38}__[a-z0-9._-]{1,100}$") then sub("__"; "/") else "unresolved" end;
+              .payloads[]?
+              | (.repo | slug), (.sources[]? | (.projectName // "") | checkout), (.evidence[]? | (.repo | slug))
+            ' "$store" 2> /dev/null) || deny "the candidate store could not be read."
+          fi
+          if [ -d "$root/runs" ]; then
+            while IFS= read -r -d '' record; do
+              found=$(jq -r '.projects | arrays | .[] | objects | .repo // empty' "$record" 2> /dev/null) ||
+                deny "a retained run record could not be read."
+              named="${named} ${found}"
+            done < <(find "$root/runs" -mindepth 2 -maxdepth 2 -type f -name run.json -print0)
+          fi
+
+          list=""
+          # The lists are space-separated and globbing is off (set -f).
+          # shellcheck disable=SC2086
+          for repo in $PROJECTS $named; do
+            [[ "$repo" =~ $shape ]] || deny "a repository could not be identified."
+            case " ${list} " in
+              *" ${repo} "*) continue ;;
+            esac
+            list="${list:+${list} }${repo}"
+          done
+          [ -n "$list" ] || deny "no repository was named."
+
+          for repo in $list; do
+            if ! visibility=$(gh api "repos/${repo}" --jq .visibility 2> /dev/null) || [ "$visibility" != public ]; then
+              deny "a repository is not confirmed public."
+            fi
+          done
+          echo "public=true" >> "$GITHUB_OUTPUT"
+
       - name: Upload failed replies
+        if: steps.replies-visibility.outputs.public == 'true'
         continue-on-error: true
         timeout-minutes: 5
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

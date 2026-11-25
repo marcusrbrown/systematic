@@ -833,6 +833,213 @@ describe('connect workflow injection and artifacts', () => {
       expect(JSON.stringify(step)).not.toMatch(/secrets\.|github\.token/)
       expect(job('run').outputs).not.toHaveProperty('failed-replies')
     })
+
+    describe('is gated on a fresh visibility recheck', () => {
+      const RECHECK = 'Recheck visibility of failed replies'
+      const PROJECTS = 'acme/target other/repo'
+      const REPLY_TEXT = 'QUOTED-SOURCE-TEXT-7f3a'
+
+      const runRoot = (box: Box) =>
+        path.join(box.ws, 'connect', 'state', 'systematic', 'connect')
+
+      function seedReply(box: Box, text = REPLY_TEXT): void {
+        const dir = path.join(runRoot(box), 'runs', '20260101T000000Z-aaaaaaaa')
+        fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(path.join(dir, 'family-1.reply.txt'), text)
+      }
+
+      const recheck = (box: Box, projects = PROJECTS) =>
+        runStep(box, 'run', RECHECK, { PROJECTS: projects })
+
+      const verdict = (box: Box, slug: string, value: string) =>
+        fs.writeFileSync(path.join(box.fixtures, `visibility-${slug}`), value)
+
+      const visibilityCalls = (box: Box) =>
+        calls(box).filter((line) => line.startsWith('gh api repos/'))
+
+      it('runs right before the upload, and the upload runs only when it answered public', () => {
+        expect(stepIndex('run', RECHECK)).toBe(stepIndex('run', NAME) - 1)
+        const id = stepNamed('run', RECHECK).id
+        expect(typeof id).toBe('string')
+        expect(stepNamed('run', NAME).if).toBe(
+          `steps.${String(id)}.outputs.public == 'true'`,
+        )
+      })
+
+      it('reads visibility with the job token and the same project list the other rechecks use, with no expression in the script', () => {
+        const step = stepNamed('run', RECHECK)
+        expect(asRecord(step.env, 'env')).toEqual({
+          GH_TOKEN: '${{ github.token }}',
+          PROJECTS: '${{ needs.prepare.outputs.projects }}',
+        })
+        expect(step['continue-on-error']).toBe(true)
+        expect(asString(step.run, 'run')).not.toContain('${{')
+      })
+
+      it('leaves the run job permissions as they were', () => {
+        expect(job('run').permissions).toEqual({ contents: 'read' })
+        expect(JSON.stringify(job('run'))).not.toContain('id-token')
+      })
+
+      it('keeps the repository naming and the visibility read the other rechecks use, so they cannot drift', () => {
+        const program = (script: string) =>
+          /named=\$\(jq -r '([\s\S]*?)' "\$store"/.exec(script)?.[1]
+        const run = asString(stepNamed('run', RECHECK).run, 'run')
+        const render = asString(
+          stepNamed('render', 'Recheck visibility').run,
+          'render',
+        )
+        expect(program(run)).toBeDefined()
+        expect(program(run)).toBe(program(render))
+        for (const shared of [
+          "shape='^[a-z0-9][a-z0-9-]{0,38}/[a-z0-9._-]{1,100}$'",
+          'find "$root/runs" -mindepth 2 -maxdepth 2 -type f -name run.json -print0',
+          '.projects | arrays | .[] | objects | .repo // empty',
+          'gh api "repos/${repo}" --jq .visibility',
+        ]) {
+          expect(render).toContain(shared)
+          expect(run).toContain(shared)
+        }
+      })
+
+      it('answers public=true, and warns of nothing, when every repository is public', () => {
+        const box = makeBox()
+        seedReply(box)
+        const result = recheck(box)
+        expect(result.exitCode).toBe(0)
+        expect(result.outputs.get('public')).toBe('true')
+        expect(result.stdout).not.toContain('::warning::')
+        expect(visibilityCalls(box)).toEqual([
+          'gh api repos/acme/target --jq .visibility',
+          'gh api repos/other/repo --jq .visibility',
+        ])
+      })
+
+      it('answers public=false with one warning that names neither content nor repository, and exits 0, when a repository went private', () => {
+        const box = makeBox()
+        seedReply(box)
+        verdict(box, 'other__repo', 'private')
+        const result = recheck(box)
+        expect(result.exitCode).toBe(0)
+        expect(result.outputs.get('public')).toBe('false')
+        const output = `${result.stdout}${result.stderr}`
+        expect(output.match(/::warning::/g)).toHaveLength(1)
+        expect(output).not.toContain(REPLY_TEXT)
+        expect(output).not.toContain('other/repo')
+        expect(output).not.toContain('::error::')
+      })
+
+      it('answers public=false, and exits 0, when a repository cannot be read', () => {
+        const box = makeBox()
+        seedReply(box)
+        verdict(box, 'acme__target', 'ERROR')
+        const result = recheck(box)
+        expect(result.exitCode).toBe(0)
+        expect(result.outputs.get('public')).toBe('false')
+        expect(result.stdout.match(/::warning::/g)).toHaveLength(1)
+      })
+
+      it('answers public=false when the answer is anything but public', () => {
+        for (const answer of ['internal', 'Public']) {
+          const box = makeBox()
+          seedReply(box)
+          verdict(box, 'acme__target', answer)
+          const result = recheck(box)
+          expect(result.exitCode, answer).toBe(0)
+          expect(result.outputs.get('public'), answer).toBe('false')
+        }
+      })
+
+      it('checks a repository only the state names, so one the list no longer holds still holds the upload back', () => {
+        const store = (box: Box, payload: Json) =>
+          writeJson(path.join(runRoot(box), 'ci-payloads.json'), {
+            payloads: [payload],
+          })
+        const holders: Array<[string, (box: Box) => void]> = [
+          ['a payload target', (box) => store(box, { repo: 'gone/project' })],
+          [
+            'a payload source checkout',
+            (box) =>
+              store(box, {
+                repo: 'acme/target',
+                sources: [{ projectName: 'gone__project' }],
+              }),
+          ],
+          [
+            'a payload evidence entry',
+            (box) =>
+              store(box, {
+                repo: 'acme/target',
+                evidence: [{ repo: 'gone/project' }],
+              }),
+          ],
+          [
+            'a run record project',
+            (box) =>
+              writeJson(
+                path.join(
+                  runRoot(box),
+                  'runs',
+                  '20260101T000000Z-bbbbbbbb',
+                  'run.json',
+                ),
+                { projects: [{ name: 'old', repo: 'gone/project' }] },
+              ),
+          ],
+        ]
+        for (const [label, hold] of holders) {
+          const box = makeBox()
+          seedReply(box)
+          hold(box)
+          verdict(box, 'gone__project', 'private')
+          const result = recheck(box)
+          expect(result.exitCode, label).toBe(0)
+          expect(result.outputs.get('public'), label).toBe('false')
+          expect(visibilityCalls(box), label).toContain(
+            'gh api repos/gone/project --jq .visibility',
+          )
+        }
+      })
+
+      it('answers public=false, and exits 0, when the state cannot be read, names something that is not a repository, or no list was given', () => {
+        const unreadable = makeBox()
+        seedReply(unreadable)
+        fs.writeFileSync(
+          path.join(runRoot(unreadable), 'ci-payloads.json'),
+          '{not json',
+        )
+        const malformed = makeBox()
+        seedReply(malformed)
+        writeJson(path.join(runRoot(malformed), 'ci-payloads.json'), {
+          payloads: [{ repo: '../../etc/passwd' }],
+        })
+        const noProjects = makeBox()
+        seedReply(noProjects)
+        for (const [box, projects] of [
+          [unreadable, PROJECTS],
+          [malformed, PROJECTS],
+          [noProjects, ''],
+        ] as const) {
+          const result = recheck(box, projects)
+          expect(result.exitCode).toBe(0)
+          expect(result.outputs.get('public')).toBe('false')
+          expect(`${result.stdout}${result.stderr}`).not.toContain('passwd')
+        }
+      })
+
+      it('makes no call to gh, and answers public=false, when there is no reply file', () => {
+        const box = makeBox()
+        fs.mkdirSync(
+          path.join(runRoot(box), 'runs', '20260101T000000Z-aaaaaaaa'),
+          { recursive: true },
+        )
+        const result = recheck(box)
+        expect(result.exitCode).toBe(0)
+        expect(result.outputs.get('public')).toBe('false')
+        expect(calls(box)).toEqual([])
+        expect(result.stdout).not.toContain('::warning::')
+      })
+    })
   })
 
   it('uploads the public run record from the render job only, as one file', () => {
