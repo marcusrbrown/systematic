@@ -1,7 +1,7 @@
 ---
 title: "feat: let other repositories call the scheduled ce:connect workflow"
 type: feat
-status: active
+status: completed
 date: 2026-11-20
 origin: docs/brainstorms/2026-11-20-reusable-ce-connect-workflow-requirements.md
 ---
@@ -54,7 +54,7 @@ Acceptance Examples AE1 to AE8 are in the origin; where each is proven:
 | AE | Proven in |
 |---|---|
 | AE1 report opens in the caller, authored by the job token | U7 live; U0 spike for the author and cache scope |
-| AE2 missing researcher model fails prepare red | U2 test; U7 live |
+| AE2 missing researcher model fails prepare red | U2 test (empty input); U7 live (malformed value) |
 | AE3 agent step uses the pinned release's action | U2 test; U7 live log |
 | AE4 named word imports only for an allow-listed checkout | U5 tests; U7 live |
 | AE5 run that did not call Systematic's workflow, or called a fork, is refused | U5 tests (the live fork-calling run in U7 is waived) |
@@ -555,7 +555,7 @@ flowchart TB
 - `bun scripts/content-integrity.ts` and the docs build (`bun run docs:build`) pass.
 - `bun run surfaces:affected --run` and `bun run surfaces:drift` pass for any touched generated reference.
 
-- [ ] U7. **fro-bot/agent pilot**
+- [x] U7. **fro-bot/agent pilot**
 
 **Target repo:** `fro-bot/agent`. This unit's PR lands there, after a Systematic release carries U1 to U6 and Renovate's bump of `SYSTEMATIC_VERSION` to it has merged.
 
@@ -580,7 +580,7 @@ flowchart TB
 - Live acceptance, in order:
   1. A dispatch run: the report issue opens in `fro-bot/agent`, authored by the job token; Systematic's report and cache are untouched (AE1). The agent log shows the model override and the shared action from the pinned release (AE3). The log shows repo skills off.
   2. A same-day second dispatch edits the report in place (R5).
-  3. A dispatch with the researcher model blanked fails prepare red and posts nothing (AE2).
+  3. A dispatch with an invalid researcher model fails prepare red and posts nothing (AE2). A repository variable cannot be empty, so the live run sets a malformed value; the empty-input branch rests on the U2 test.
   4. Local promotion: with the checkout allow-listed, the report's named fetch word imports a candidate; with the checkout removed, the same word is refused and nothing downloads (AE4).
   5. Negative on a temporary branch: a wrapper named like the real one that calls a fork of the callee is refused as not-a-connect-run (AE5). It needs a temporary fork under Marcus's account, removed afterwards, and is the only fork case in the plan. Waived: the `verify-provenance` unit tests cover the refusal, and the live run is not part of the readiness gate.
   6. A pre-cutover Systematic candidate's bare word still imports (AE7).
@@ -618,7 +618,7 @@ flowchart TB
 | A pinned commit installs a helper release older than U4 and U5 | The callee sends the new field from day one and an older helper ignores it; the pilot pins a commit whose `SYSTEMATIC_VERSION` carries U4 and U5 (U7 prerequisite) |
 | Systematic cuts over before the cross-owner proof | U0 first; first-run continuity checks; revert path leaves caches untouched |
 | Caller content reaches the agent beside the credentials | Repo skills off closes only `.agents/skills`; U0 records whether `AGENTS.md`, config and plugins still load, and the checklist names them and says the agent can read the credentials; allow-listing trusts the origin's workflows |
-| A fork or lookalike wrapper passes the fetch check | Exact repository and path match, full SHA, compare against Systematic's default branch; fail closed; the fork-calling negative runs in U7 |
+| A fork or lookalike wrapper passes the fetch check | Exact repository and path match, full SHA, compare against Systematic's default branch; fail closed; U5 tests cover the fork refusal (the live fork-calling run in U7 is waived) |
 | Renovate automerges a pin that receives secrets | Caller-side no-automerge rule, checked by a simulated bump in the pilot |
 | A format-changing bump drops open ticks in a caller | Documented operator step to settle rows first; the Systematic report format is unchanged by this plan |
 | Concurrency or cache scope behaves differently from the docs | U0 observes both; the `queue: max` fallback is named |

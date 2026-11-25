@@ -1,7 +1,7 @@
 ---
 title: "fix(connect): run the release a callee commit names, read from its own changelog"
 type: fix
-status: active
+status: completed
 date: 2026-11-24
 ---
 
@@ -358,7 +358,7 @@ Test expectation: none -- documentation only. Checks are in Verification.
 - A search of the files this unit edits finds no text that gives `SYSTEMATIC_VERSION`, the Renovate bump or a post-bump commit as the current rule for choosing a callee pin, apart from the superseded sections the banners mark.
 - `bun run surfaces:affected` lists no surface for these files. No generated output changes.
 
-- [ ] **Unit 4: Verify on a real release (manual, needs approval)**
+- [x] **Unit 4: Verify on a real release (manual, needs approval)**
 
 **Goal:** Prove R1 on a real cross-owner run of the first published release that contains this change.
 
