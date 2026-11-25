@@ -1012,6 +1012,74 @@ describe('ce:connect run protocol', () => {
     expect(skillText).toMatch(/turn limit/i)
   })
 
+  describe('the reply of a failed family', () => {
+    const stepFive = skillText.slice(
+      skillText.indexOf('## Step 5'),
+      skillText.indexOf('## Step 6'),
+    )
+    const stepSeven = skillText.slice(
+      skillText.indexOf('## Step 7'),
+      skillText.indexOf('## Final line'),
+    )
+
+    test('keeps the delegate reply of a family that got a stub, because it had no usable JSON object', () => {
+      expect(stepFive).toMatch(/keep (its|that family's|the) reply/i)
+      expect(stepFive).toMatch(/verbatim/i)
+      expect(stepFive).toMatch(/no usable JSON object/)
+    })
+
+    test('keeps whatever final text a stopped delegate returned, or nothing', () => {
+      expect(stepFive).toMatch(
+        /turn limit, was aborted or failed[\s\S]{0,200}(final text|nothing)/i,
+      )
+    })
+
+    test('keeps no reply of a family whose batch was written, a complete: false batch included', () => {
+      expect(stepFive).toMatch(
+        /(keeps?|saves?) no reply[\s\S]{0,200}`"complete": false`/i,
+      )
+    })
+
+    test('saves each kept reply as family-<n>.reply.txt in the records directory after publish, so the helper never removes it', () => {
+      expect(stepSeven).toContain('family-<n>.reply.txt')
+      expect(stepSeven).toMatch(/directory that holds `runRecordPath`/)
+      expect(stepSeven).toMatch(/file-writing tool/)
+    })
+
+    test('says the file is not a batch and the text is untrusted', () => {
+      expect(stepSeven).toMatch(/not a batch/i)
+      expect(stepSeven).toMatch(/untrusted/i)
+    })
+
+    test('never sends the reply to the helper, on stdin or through a heredoc, and never lets it into the summary', () => {
+      expect(stepSeven).toMatch(
+        /never (send|pass|put)[^.]*reply[^.]*(helper|stdin|heredoc)/i,
+      )
+      expect(stepSeven).toMatch(/heredoc/i)
+    })
+
+    test('caps the file at 65536 characters and marks the cut', () => {
+      expect(stepSeven).toMatch(/65,?536 characters/)
+      expect(stepSeven).toContain('[truncated at 65536 characters]')
+    })
+
+    test('saves nothing when publish did not commit a run, and a failed write changes nothing', () => {
+      expect(stepSeven).toMatch(/no records directory|did not commit/i)
+      expect(stepSeven).toMatch(/never changes the outcome/i)
+    })
+
+    test('is explained in the outcomes reference and the guide, with the artifact name', () => {
+      expect(outcomesText).toContain('family-<n>.reply.txt')
+      expect(outcomesText).toContain('connect-failed-replies-<run>-<attempt>')
+      expect(guideText).toContain('family-<n>.reply.txt')
+      expect(guideText).toContain('connect-failed-replies-<run>-<attempt>')
+    })
+
+    test('leaves the stub free of model text', () => {
+      expect(stepFive).toMatch(/holds no model text/)
+    })
+  })
+
   test('labels a scan with nothing to report and reads the outcome from the helper', () => {
     expect(skillText).toMatch(/no candidate in searched scope/)
     expect(skillText).toMatch(/finalLine/)

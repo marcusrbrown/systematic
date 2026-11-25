@@ -761,6 +761,69 @@ describe('connect workflow injection and artifacts', () => {
     }
   })
 
+  describe('the failed family replies artifact', () => {
+    const NAME = 'Upload failed replies'
+    const FILES = 'runs/*/family-*.reply.txt'
+
+    it('is uploaded by the run job, after the symlinks are dropped, and by no other job', () => {
+      const named = allSteps().filter(
+        ({ step }) =>
+          isRecord(step.with) &&
+          String(step.with.name ?? '').includes('connect-failed-replies'),
+      )
+      expect(named).toHaveLength(1)
+      expect(named[0]?.id).toBe('run')
+      expect(stepIndex('run', NAME)).toBeGreaterThan(
+        stepIndex('run', 'Drop symlinks from state'),
+      )
+    })
+
+    it('carries only the reply files, under a name of its own, for the same one day as the hand-off', () => {
+      const input = withOf('run', NAME)
+      expect(String(stepNamed('run', NAME).uses)).toContain(
+        'actions/upload-artifact@',
+      )
+      expect(input.name).toBe(
+        'connect-failed-replies-${{ github.run_id }}-${{ github.run_attempt }}',
+      )
+      expect(input['retention-days']).toBe(
+        withOf('run', 'Upload hand-off')['retention-days'],
+      )
+      expect(input['retention-days']).toBe(1)
+      const lines = asString(input.path, 'path')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line !== '')
+      expect(lines).toEqual([
+        `\${{ github.workspace }}/connect/state/systematic/connect/${FILES}`,
+      ])
+    })
+
+    it('does not fail the job when no family failed, since a good run leaves no reply file', () => {
+      expect(withOf('run', NAME)['if-no-files-found']).toBe('ignore')
+    })
+
+    it('keeps the replies out of the hand-off, which the render job reads against its allowlist', () => {
+      const handoff = asString(
+        withOf('run', 'Upload hand-off').path,
+        'hand-off path',
+      )
+      expect(handoff).not.toContain('reply')
+      const validate = asString(
+        stepNamed('render', 'Validate hand-off').run,
+        'validate script',
+      )
+      expect(validate).not.toContain('reply')
+    })
+
+    it('is no wider than the hand-off: the same job, the same state root, no token or secret in the step', () => {
+      const step = stepNamed('run', NAME)
+      expect(step.env).toBeUndefined()
+      expect(JSON.stringify(step)).not.toMatch(/secrets\.|github\.token/)
+      expect(job('run').outputs).not.toHaveProperty('failed-replies')
+    })
+  })
+
   it('uploads the public run record from the render job only, as one file', () => {
     const publicName =
       'connect-run-${{ github.run_id }}-${{ github.run_attempt }}'
