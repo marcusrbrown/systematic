@@ -16,6 +16,8 @@ tags: [ce-connect, github-actions, version-skew, pinned-dependency, report-ticks
 
 # A report carrier changed beside its renderer ran ahead of the renderer the workflow pins, so late ticks would have been dropped until the pin moved
 
+> **Superseded in part:** Only the old `SYSTEMATIC_VERSION` env pin and its bump-commit mechanism no longer apply. The version now comes from the callee commit's own changelog (`docs/plans/2026-11-24-001-fix-connect-version-from-callee-changelog-plan.md`). The rest still holds: test the carrier against old bodies, and settle open rows on the current report before a format-changing upgrade.
+
 ## Problem
 
 The `ce:connect` workflow runs two kinds of code. The report renderer and `apply-ticks` come from `@fro.bot/systematic@${SYSTEMATIC_VERSION}`, an exact release installed from npm (`.github/workflows/connect.yaml:73`, `SYSTEMATIC_VERSION`; `.github/workflows/connect.yaml:203-211`). The tick carrier is inline JavaScript written to disk by the `post` job from the checked-out workflow file (`.github/workflows/connect.yaml:1092-1168`, `Install tick carrier`). A change that alters the box format and the carrier together therefore merges with a new carrier reading bodies that the old, pinned renderer still writes. That window lasts until the pin moves to a release with the new renderer. When this change was written the pin was `SYSTEMATIC_VERSION: "3.35.3"` (`.github/workflows/connect.yaml:73`), a release published before the change, so its renderer writes boxes with no revision.

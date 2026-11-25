@@ -97,6 +97,12 @@ const AGENT_STEP = 'Run ce:connect'
 const CHECKOUT_STEP = 'Check out the shared agent action'
 const SHARED_ACTION_FILE = '.github/actions/fro-bot-agent/action.yml'
 const SHARED_ACTION_USES = './.github/actions/fro-bot-agent'
+const INSTALL_STEP = 'Install helper'
+const RESOLVE_STEP = 'Resolve Systematic version'
+const VALIDATE_VERSION_STEP = 'Validate Systematic version'
+/** The resolver's job output, and the same value as a later job reads it. */
+const RESOLVED_OUTPUT = '${{ steps.systematic.outputs.systematic-version }}'
+const RESOLVED_NEEDS = '${{ needs.prepare.outputs.systematic-version }}'
 const STEP_TIMEOUT_EXPRESSION =
   "${{ fromJSON(inputs.step-timeout-minutes || '40') }}"
 /** The inputs a caller supplies, and which of them it must. */
@@ -229,17 +235,33 @@ describe('connect workflow structure', () => {
     }
   })
 
-  it('uses one Systematic version for the action and both helper installs', () => {
-    const version = WORKFLOW_ENV.SYSTEMATIC_VERSION
-    expect(version).toMatch(/^\d+\.\d+\.\d+$/)
-    expect(SOURCE.split(version ?? '').length - 1).toBe(1)
-    expect(withOf('run', 'Run ce:connect')['systematic-version']).toBe(
-      '${{ env.SYSTEMATIC_VERSION }}',
-    )
+  it('holds no Systematic version of its own: one resolved value feeds the action and both helper installs', () => {
+    // The version is read from the callee commit's changelog, so no literal and
+    // no env pin names a release here.
+    expect(SOURCE).not.toContain('SYSTEMATIC_VERSION')
+    expect(WORKFLOW_ENV).not.toHaveProperty('SYSTEMATIC_VERSION')
+    expect(SOURCE).not.toMatch(/renovate:.*@fro\.bot\/systematic/)
+
+    expect(asRecord(job('prepare').outputs, 'prepare outputs')).toMatchObject({
+      'systematic-version': RESOLVED_OUTPUT,
+    })
+    expect(asRecord(stepNamed('prepare', INSTALL_STEP).env, 'env')).toEqual({
+      HELPER_VERSION: RESOLVED_OUTPUT,
+    })
+    expect(asRecord(stepNamed('render', INSTALL_STEP).env, 'env')).toEqual({
+      HELPER_VERSION: RESOLVED_NEEDS,
+    })
+    expect(withOf('run', AGENT_STEP)['systematic-version']).toBe(RESOLVED_NEEDS)
+    expect(
+      asRecord(stepNamed('run', VALIDATE_VERSION_STEP).env, 'env'),
+    ).toEqual({ RESOLVED_VERSION: RESOLVED_NEEDS })
     for (const id of ['prepare', 'render'] as const) {
-      const script = asString(stepNamed(id, 'Install helper').run, 'install')
-      expect(script).toContain('@fro.bot/systematic@${SYSTEMATIC_VERSION}')
+      const script = asString(stepNamed(id, INSTALL_STEP).run, 'install')
+      expect(script).toContain('@fro.bot/systematic@${HELPER_VERSION}')
       expect(script).toContain('--ignore-scripts')
+      expect(script).toContain(
+        '$dir/node_modules/@fro.bot/systematic/skills/ce-connect/scripts/connect.mjs',
+      )
     }
   })
 
@@ -622,8 +644,9 @@ describe('the shared fro-bot agent action', () => {
       'repo-skills': 'false',
       // The read-only job token, not the Fro Bot personal token.
       'github-token': '${{ github.token }}',
-      // The skill and the helper must be one release.
-      'systematic-version': '${{ env.SYSTEMATIC_VERSION }}',
+      // The skill and the helper must be one release: the version prepare
+      // read from the callee commit's changelog.
+      'systematic-version': RESOLVED_NEEDS,
       // Nothing is delivered to GitHub.
       'response-mode': 'none',
       // The run changes nothing, so no branch or pull request.
@@ -833,6 +856,11 @@ esac
 
 const NPM_STUB = `#!/usr/bin/env bash
 echo "npm $*" >> "$GH_LOG"
+if [ -n "\${NPM_FAIL:-}" ]; then
+  echo "npm error code E404" >&2
+  echo "npm error 404 No match found for version" >&2
+  exit 1
+fi
 prefix=""
 while [ $# -gt 0 ]; do
   if [ "$1" = --prefix ]; then prefix="$2"; fi
@@ -841,6 +869,25 @@ done
 dest="$prefix/node_modules/@fro.bot/systematic/skills/ce-connect/scripts"
 mkdir -p "$dest"
 cp "$HELPER_SRC" "$dest/connect.mjs"
+`
+
+// The callee's changelog read: the body is the `changelog.md` fixture, and no
+// fixture is a 404. Like curl with `--fail`, a 404 exits 22 and writes nothing.
+const CURL_STUB = `#!/usr/bin/env bash
+echo "curl $*" >> "$GH_LOG"
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o | --output) out="$2"; shift ;;
+    --max-time) shift ;;
+  esac
+  shift
+done
+if [ ! -f "$GH_FIXTURES/changelog.md" ]; then
+  echo "curl: (22) The requested URL returned error: 404" >&2
+  exit 22
+fi
+cp "$GH_FIXTURES/changelog.md" "$out"
 `
 
 const GIT_STUB = `#!/usr/bin/env bash
@@ -857,6 +904,12 @@ const DATE_STUB = `#!/usr/bin/env bash
 if [ -n "\${FAKE_DATE:-}" ] && [ "$1" = -u ]; then echo "$FAKE_DATE"; exit 0; fi
 exec /bin/date "$@"
 `
+
+/** The version a test's install runs for, unless the test names another. */
+const RESOLVED_FIXTURE_VERSION = '3.38.1'
+/** The called workflow's repository and commit, as the runner would bind them. */
+const CALLEE_REPOSITORY = 'marcusrbrown/systematic'
+const CALLEE_SHA = '0123456789abcdef0123456789abcdef01234567'
 
 interface Box {
   dir: string
@@ -894,11 +947,18 @@ function makeBox(): Box {
   for (const sub of [box.fixtures, box.tmp, box.ws, box.home]) {
     fs.mkdirSync(sub, { recursive: true })
   }
+  // The callee's changelog names the fixture release, so a whole prepare job
+  // can run. A test of the read itself replaces it or removes it.
+  fs.writeFileSync(
+    path.join(box.fixtures, 'changelog.md'),
+    changelogWith(`## ${RESOLVED_FIXTURE_VERSION}`),
+  )
   const bin = path.join(dir, 'bin')
   fs.mkdirSync(bin)
   const stubs: Array<[string, string]> = [
     ['gh', GH_STUB],
     ['npm', NPM_STUB],
+    ['curl', CURL_STUB],
     ['git', GIT_STUB],
     ['date', DATE_STUB],
   ]
@@ -941,6 +1001,12 @@ function runStep(
         GH_LOG: box.log,
         GH_FIXTURES: box.fixtures,
         HELPER_SRC: HELPER_SOURCE,
+        // What the runner would put in the install and validation steps' own
+        // env from `steps.systematic.outputs` or `needs.prepare.outputs`.
+        HELPER_VERSION: RESOLVED_FIXTURE_VERSION,
+        RESOLVED_VERSION: RESOLVED_FIXTURE_VERSION,
+        CALLEE_REPOSITORY,
+        CALLEE_SHA,
         ...WORKFLOW_ENV,
         ...env,
       },
@@ -2112,7 +2178,8 @@ process.exit(run.status ?? 1)
     expect(render.exitCode).toBe(1)
     const said = render.stderr + render.stdout
     expect(said).toContain('too old to name the calling repository')
-    expect(said).toContain('SYSTEMATIC_VERSION')
+    expect(said).toContain('callee commit of a published release')
+    expect(said).not.toMatch(/SYSTEMATIC_VERSION|_VERSION/)
     expect(said).toContain('named fetch words')
     expect(body).toBe('')
   })
@@ -2216,6 +2283,351 @@ process.exit(run.status ?? 1)
   })
 })
 
+// ── The version a callee commit names ──────────────────────────────────────
+
+const CHANGELOG_MARKER = '<!-- release-entries -->'
+const OLDER_ENTRY =
+  '## [3.38.0](https://github.com/marcusrbrown/systematic/compare/v3.37.0...v3.38.0) (2026-11-20)\n\n### Features\n\n* an older release\n'
+
+/** A changelog whose first entry after the marker is `heading`, with a valid older entry after it. */
+function changelogWith(heading: string, marker = CHANGELOG_MARKER): string {
+  return [
+    '# Changelog',
+    '',
+    'All notable changes are listed here, newest first.',
+    '',
+    marker,
+    '',
+    heading,
+    '',
+    '### Bug Fixes',
+    '',
+    '* a fix',
+    '',
+    OLDER_ENTRY,
+  ].join('\n')
+}
+
+function writeChangelog(box: Box, text: string): void {
+  fs.writeFileSync(path.join(box.fixtures, 'changelog.md'), text)
+}
+
+function resolveVersion(
+  box: Box,
+  env: Record<string, string> = {},
+): StepResult {
+  return runStep(box, 'prepare', RESOLVE_STEP, env)
+}
+
+function curlCalls(box: Box): string[] {
+  return calls(box).filter((line) => line.startsWith('curl '))
+}
+
+describe('prepare: the release a callee commit names', () => {
+  const LINKED =
+    '## [3.38.1](https://github.com/marcusrbrown/systematic/compare/v3.38.0...v3.38.1) (2026-11-24)'
+
+  it('resolves a linked heading with its date', () => {
+    const box = makeBox()
+    writeChangelog(box, changelogWith(LINKED))
+    const result = resolveVersion(box)
+    expect(result.exitCode).toBe(0)
+    expect(result.outputs.get('systematic-version')).toBe('3.38.1')
+  })
+
+  it('resolves an unlinked heading', () => {
+    const box = makeBox()
+    writeChangelog(box, changelogWith('## 3.38.1'))
+    const result = resolveVersion(box)
+    expect(result.exitCode).toBe(0)
+    expect(result.outputs.get('systematic-version')).toBe('3.38.1')
+  })
+
+  it.each([
+    ['a linked heading with no date', '## [3.38.1](https://example.com/c)'],
+    ['an unlinked heading with a date', '## 3.38.1 (2026-11-24)'],
+    ['a version with multi-digit parts', '## 10.0.12'],
+  ])('resolves %s', (_label, heading) => {
+    const box = makeBox()
+    writeChangelog(box, changelogWith(heading))
+    const result = resolveVersion(box)
+    expect(result.exitCode).toBe(0)
+    expect(result.outputs.get('systematic-version')).toBe(
+      /(\d+\.\d+\.\d+)/.exec(heading)?.[1],
+    )
+  })
+
+  it('logs the version with the callee commit in one line', () => {
+    const box = makeBox()
+    writeChangelog(box, changelogWith(LINKED))
+    const result = resolveVersion(box)
+    const lines = result.stdout
+      .split('\n')
+      .filter((line) => line.includes(CALLEE_SHA))
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain('3.38.1')
+  })
+
+  it('asks for the callee changelog at its commit with one anonymous request and follows no redirect', () => {
+    const box = makeBox()
+    writeChangelog(box, changelogWith(LINKED))
+    resolveVersion(box)
+    const requests = curlCalls(box)
+    expect(requests).toHaveLength(1)
+    const request = requests[0] ?? ''
+    expect(request).toContain('--fail')
+    expect(request).toContain('--max-time 20')
+    expect(request).toContain(
+      `https://raw.githubusercontent.com/${CALLEE_REPOSITORY}/${CALLEE_SHA}/CHANGELOG.md`,
+    )
+    expect(request).not.toMatch(/(^| )(-L|--location)\b/)
+    expect(request).not.toMatch(/authorization|token|-H |--header/i)
+  })
+
+  it('fails when the changelog has no marker', () => {
+    const box = makeBox()
+    writeChangelog(
+      box,
+      changelogWith(LINKED).replace(`${CHANGELOG_MARKER}\n`, ''),
+    )
+    const result = resolveVersion(box)
+    expect(result.exitCode).toBe(1)
+    expect(result.outputs.has('systematic-version')).toBe(false)
+    expect(result.stdout).toContain('::error::')
+  })
+
+  it('fails on a second marker line', () => {
+    const box = makeBox()
+    writeChangelog(
+      box,
+      changelogWith(LINKED).replace(
+        OLDER_ENTRY,
+        `${CHANGELOG_MARKER}\n\n${OLDER_ENTRY}`,
+      ),
+    )
+    const result = resolveVersion(box)
+    expect(result.exitCode).toBe(1)
+    expect(result.outputs.has('systematic-version')).toBe(false)
+  })
+
+  it('fails on a marker that is not alone on its line', () => {
+    const box = makeBox()
+    writeChangelog(
+      box,
+      changelogWith(LINKED, `${CHANGELOG_MARKER} trailing text`),
+    )
+    const result = resolveVersion(box)
+    expect(result.exitCode).toBe(1)
+    expect(result.outputs.has('systematic-version')).toBe(false)
+  })
+
+  it.each([
+    ['a prerelease', '## [3.39.0-rc.1](https://example.com/c) (2026-11-25)'],
+    ['build metadata', '## 3.39.0+build.5'],
+    ['a leading zero', '## 03.39.0'],
+    ['a v prefix', '## v3.39.0'],
+    ['an Unreleased heading', '## Unreleased'],
+    ['an indented level-2 heading', '  ## Unreleased'],
+    ['a level-3 heading', '### Bug Fixes'],
+    ['a line that is not a heading', 'Release notes follow.'],
+  ])(
+    'fails on %s as the first heading and never falls through to the older entry',
+    (_label, heading) => {
+      const box = makeBox()
+      writeChangelog(box, changelogWith(heading))
+      const result = resolveVersion(box)
+      expect(result.exitCode).toBe(1)
+      expect(result.outputs.has('systematic-version')).toBe(false)
+      expect(result.stdout + result.stderr).not.toContain('3.38.0')
+    },
+  )
+
+  it('fails on an indented first heading directly above a valid older release', () => {
+    const box = makeBox()
+    writeChangelog(
+      box,
+      `# Changelog\n\n${CHANGELOG_MARKER}\n\n  ## Unreleased\n\n${OLDER_ENTRY}`,
+    )
+    const result = resolveVersion(box)
+    expect(result.exitCode).toBe(1)
+    expect(result.outputs.has('systematic-version')).toBe(false)
+    expect(result.stdout + result.stderr).not.toContain('3.38.0')
+  })
+
+  it('fails when no heading follows the marker', () => {
+    const box = makeBox()
+    writeChangelog(box, `# Changelog\n\n${CHANGELOG_MARKER}\n`)
+    const result = resolveVersion(box)
+    expect(result.exitCode).toBe(1)
+    expect(result.outputs.has('systematic-version')).toBe(false)
+  })
+
+  it('does not read a heading above the marker', () => {
+    const box = makeBox()
+    writeChangelog(
+      box,
+      `# Changelog\n\n## 9.9.9\n\n${CHANGELOG_MARKER}\n\n## Unreleased\n\n${OLDER_ENTRY}`,
+    )
+    const result = resolveVersion(box)
+    expect(result.exitCode).toBe(1)
+    expect(result.outputs.has('systematic-version')).toBe(false)
+  })
+
+  it('fails when the request fails, as a 404 does, and writes no output', () => {
+    const box = makeBox()
+    fs.rmSync(path.join(box.fixtures, 'changelog.md'))
+    const result = resolveVersion(box)
+    expect(curlCalls(box)).toHaveLength(1)
+    expect(result.exitCode).toBe(1)
+    expect(result.outputs.has('systematic-version')).toBe(false)
+    expect(result.stdout).toContain('::error::')
+  })
+
+  it.each([
+    ['no repository', { CALLEE_REPOSITORY: '' }],
+    ['a bare repository name', { CALLEE_REPOSITORY: 'systematic' }],
+    ['a repository with a path', { CALLEE_REPOSITORY: 'a/b/c' }],
+    ['a dot-dot repository', { CALLEE_REPOSITORY: 'owner/..' }],
+    ['a repository with a query', { CALLEE_REPOSITORY: 'owner/repo?x=1' }],
+    ['a repository with a space', { CALLEE_REPOSITORY: 'owner/re po' }],
+    ['a repository with a newline', { CALLEE_REPOSITORY: 'owner/repo\nx' }],
+    ['no sha', { CALLEE_SHA: '' }],
+    ['a branch name for the sha', { CALLEE_SHA: 'main' }],
+    ['a short sha', { CALLEE_SHA: CALLEE_SHA.slice(0, 39) }],
+    ['a long sha', { CALLEE_SHA: `${CALLEE_SHA}0` }],
+    ['an uppercase sha', { CALLEE_SHA: CALLEE_SHA.toUpperCase() }],
+    ['a sha with a path', { CALLEE_SHA: `${CALLEE_SHA.slice(0, 36)}/../` }],
+  ])('fails on %s before it makes any request', (_label, env) => {
+    const box = makeBox()
+    writeChangelog(box, changelogWith(LINKED))
+    const result = resolveVersion(box, env)
+    expect(result.exitCode).toBe(1)
+    expect(curlCalls(box)).toEqual([])
+    expect(result.outputs.has('systematic-version')).toBe(false)
+  })
+
+  it('resolves the version this repository names in its own CHANGELOG.md', () => {
+    const box = makeBox()
+    const committed = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8')
+    writeChangelog(box, committed)
+    const result = resolveVersion(box)
+    expect(result.exitCode).toBe(0)
+    // Read the expected value apart from the resolver: the first release
+    // heading after the marker.
+    const afterMarker = committed.slice(
+      committed.indexOf(CHANGELOG_MARKER) + CHANGELOG_MARKER.length,
+    )
+    const first = /^## \[?(\d+\.\d+\.\d+)\b/m.exec(afterMarker)?.[1]
+    expect(first).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(result.outputs.get('systematic-version')).toBe(first)
+  })
+
+  it('runs in prepare before the helper is installed, and reads the callee context in its own env', () => {
+    const names = stepsOf('prepare').map((step) => String(step.name))
+    expect(names.indexOf(RESOLVE_STEP)).toBeGreaterThan(-1)
+    expect(names.indexOf(RESOLVE_STEP)).toBeLessThan(
+      names.indexOf(INSTALL_STEP),
+    )
+    const step = stepNamed('prepare', RESOLVE_STEP)
+    expect(step.id).toBe('systematic')
+    expect(step).not.toHaveProperty('continue-on-error')
+    expect(asRecord(step.env, 'env')).toEqual({
+      CALLEE_REPOSITORY: '${{ job.workflow_repository }}',
+      CALLEE_SHA: '${{ job.workflow_sha }}',
+    })
+    expect(asString(step.run, 'resolver script')).not.toContain('${{')
+  })
+})
+
+describe('run: the version is checked before the agent starts', () => {
+  const validate = (version: string): StepResult =>
+    runStep(makeBox(), 'run', VALIDATE_VERSION_STEP, {
+      RESOLVED_VERSION: version,
+    })
+
+  it('passes a canonical release', () => {
+    expect(validate('3.38.1').exitCode).toBe(0)
+    expect(validate('10.0.0').exitCode).toBe(0)
+  })
+
+  it.each([
+    ['empty, which the agent would turn into its own default release', ''],
+    ['latest', 'latest'],
+    ['a prerelease', '3.38.1-rc.1'],
+    ['build metadata', '3.38.1+build.5'],
+    ['a v prefix', 'v3.38.1'],
+    ['a leading zero', '03.38.1'],
+    ['a missing part', '3.38'],
+    ['trailing text', '3.38.1 extra'],
+    ['a trailing newline', '3.38.1\nextra'],
+  ])('fails on %s', (_label, version) => {
+    const result = validate(version)
+    expect(result.exitCode).toBe(1)
+    expect(result.stdout).toContain('::error::')
+  })
+
+  it('is a normal failing step that comes before the agent step', () => {
+    const step = stepNamed('run', VALIDATE_VERSION_STEP)
+    expect(step).not.toHaveProperty('continue-on-error')
+    expect(step).not.toHaveProperty('if')
+    expect(stepIndex('run', VALIDATE_VERSION_STEP)).toBeGreaterThan(-1)
+    expect(stepIndex('run', VALIDATE_VERSION_STEP)).toBeLessThan(
+      stepIndex('run', AGENT_STEP),
+    )
+    expect(asString(step.run, 'validation script')).not.toContain('${{')
+  })
+})
+
+describe('both installs: a failed install says the publish may be pending', () => {
+  const HINT =
+    'if this commit is a release tag, the publish may be pending or failed; retry after the GitHub Release exists'
+
+  it.each(['prepare', 'render'] as const)(
+    "prints the hint before npm's own error in %s, and stops",
+    (id) => {
+      const box = makeBox()
+      const result = runStep(box, id, INSTALL_STEP, { NPM_FAIL: '1' })
+      expect(result.exitCode).toBe(1)
+      const said = result.stdout + result.stderr
+      expect(said).toContain(HINT)
+      expect(said).toContain('npm error 404')
+      expect(said.indexOf(HINT)).toBeLessThan(said.indexOf('npm error 404'))
+      expect(calls(box).filter((line) => line.startsWith('npm '))).toHaveLength(
+        1,
+      )
+    },
+  )
+
+  it.each(['prepare', 'render'] as const)(
+    'installs the exact version it is given in %s, with scripts off, and prints no hint on success',
+    (id) => {
+      const box = makeBox()
+      const result = runStep(box, id, INSTALL_STEP, {
+        HELPER_VERSION: '3.39.7',
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout + result.stderr).not.toContain(HINT)
+      const install = calls(box).find((line) => line.startsWith('npm '))
+      expect(install).toContain('--ignore-scripts')
+      expect(install).toContain('@fro.bot/systematic@3.39.7')
+    },
+  )
+
+  it.each(['prepare', 'render'] as const)(
+    'refuses a version that is not x.y.z in %s before it runs npm',
+    (id) => {
+      const box = makeBox()
+      for (const version of ['', 'latest', '3.39']) {
+        const result = runStep(box, id, INSTALL_STEP, {
+          HELPER_VERSION: version,
+        })
+        expect(result.exitCode, version).toBe(1)
+      }
+      expect(calls(box).filter((line) => line.startsWith('npm '))).toEqual([])
+    },
+  )
+})
+
 describe('prepare: a pinned helper without verify-provenance', () => {
   /** A usage line whose op list carries `extraOps` (each with a leading `|`) and, after it, `prose`. */
   const usageWith = (extraOps: string, prose = ''): string =>
@@ -2264,7 +2676,7 @@ process.exit(2)
     }
   }
 
-  const MESSAGE = /Pin a newer callee commit/
+  const MESSAGE = /Pin the callee commit of a published release/
 
   it('fails red for a caller other than Systematic when the usage does not list verify-provenance', () => {
     const { check } = checkWith('acme/caller', 'without')
@@ -2272,7 +2684,7 @@ process.exit(2)
     const said = check.stderr + check.stdout
     expect(said).toContain('verify-provenance')
     expect(said).toMatch(MESSAGE)
-    expect(said).toContain('SYSTEMATIC_VERSION')
+    expect(said).not.toMatch(/SYSTEMATIC_VERSION|_VERSION/)
     expect(said).toContain('named fetch words')
   })
 
@@ -2648,14 +3060,18 @@ describe('run job: the checkout of the shared agent action', () => {
     })
   })
 
-  it('reads the called workflow context in this step only, where the job context exists', () => {
+  it('reads the called workflow context in two steps only, where the job context exists', () => {
     // `job.workflow_*` is a step-level context: a job-level key cannot read it.
+    // The checkout reads it, and so does prepare's changelog read.
     expect(SOURCE.match(/job\.workflow_[a-z_]+/g)?.sort()).toEqual([
       'job.workflow_repository',
+      'job.workflow_repository',
+      'job.workflow_sha',
       'job.workflow_sha',
     ])
+    const resolver = stepNamed('prepare', RESOLVE_STEP)
     for (const { step } of allSteps()) {
-      if (step === checkout()) continue
+      if (step === checkout() || step === resolver) continue
       expect(JSON.stringify(step)).not.toContain('job.workflow_')
     }
     for (const id of JOB_IDS) {
@@ -3398,6 +3814,54 @@ describe('artifact hand-offs when only the failed jobs are rerun', () => {
         uploaded,
       )
     }
+  })
+
+  it("hands a retried run or render job the version attempt 1 resolved, not today's changelog", () => {
+    const first = makeBox()
+    writeChangelog(first, changelogWith('## 3.41.2'))
+    const earlier = resolveVersion(first, { GITHUB_RUN_ATTEMPT: '1' })
+    const version = earlier.outputs.get('systematic-version') ?? ''
+    expect(version).toBe('3.41.2')
+    // The output is the job's own: prepare succeeded in attempt 1 and does not
+    // run again, so a changelog that has since moved on is never read.
+    expect(job('prepare').outputs).toMatchObject({
+      'systematic-version': RESOLVED_OUTPUT,
+    })
+    const needs = {
+      prepare: {
+        result: 'success',
+        outputs: { 'systematic-version': version },
+      },
+    }
+    const read = (value: unknown): string =>
+      resolveNeeds(asString(value, 'consumer value'), needs)
+    expect(read(withOf('run', AGENT_STEP)['systematic-version'])).toBe(version)
+    const validation = asRecord(
+      stepNamed('run', VALIDATE_VERSION_STEP).env,
+      'validation env',
+    )
+    expect(read(validation.RESOLVED_VERSION)).toBe(version)
+    const install = asRecord(
+      stepNamed('render', INSTALL_STEP).env,
+      'install env',
+    )
+    const retried = makeBox()
+    writeChangelog(retried, changelogWith('## 3.42.0'))
+    const result = runStep(retried, 'render', INSTALL_STEP, {
+      GITHUB_RUN_ATTEMPT: '2',
+      HELPER_VERSION: read(install.HELPER_VERSION),
+    })
+    expect(result.exitCode).toBe(0)
+    expect(calls(retried).find((line) => line.startsWith('npm '))).toContain(
+      '@fro.bot/systematic@3.41.2',
+    )
+    expect(curlCalls(retried)).toEqual([])
+    expect(
+      runStep(makeBox(), 'run', VALIDATE_VERSION_STEP, {
+        GITHUB_RUN_ATTEMPT: '2',
+        RESOLVED_VERSION: read(validation.RESOLVED_VERSION),
+      }).exitCode,
+    ).toBe(0)
   })
 
   it('keeps the public run record per attempt', () => {

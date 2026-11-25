@@ -17,6 +17,8 @@ tags: [ce-connect, reusable-workflow, version-skew, pinned-dependency, capabilit
 
 # A reusable workflow's pinned helper and each installed client move separately, so guard the helper, and state the client floor the cutover leaves
 
+> **Superseded in part:** The `SYSTEMATIC_VERSION` env pin and the Renovate-lag advice below no longer apply. The version now comes from the callee commit's own changelog (`docs/plans/2026-11-24-001-fix-connect-version-from-callee-changelog-plan.md`). The helper-capability probe and the client-floor guidance still hold.
+
 ## Problem
 
 Making `connect.yaml` callable from other repositories put three deployments behind one workflow file, and they do not move together:

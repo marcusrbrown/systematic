@@ -209,8 +209,8 @@ describe('connect-scheduled wrapper and Renovate', () => {
       .filter((pattern) => pattern.test(file))
   }
 
-  it('still matches the callee, which holds the Systematic version pin', () => {
-    expect(patternsMatching('.github/workflows/connect.yaml')).toHaveLength(1)
+  it('does not match the callee, which holds no pin: it reads its version from its own changelog', () => {
+    expect(patternsMatching('.github/workflows/connect.yaml')).toHaveLength(0)
   })
 
   it('does not match the wrapper, which holds no pin', () => {

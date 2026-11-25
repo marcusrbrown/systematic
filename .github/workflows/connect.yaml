@@ -65,12 +65,6 @@ defaults:
     shell: bash
 
 env:
-  # One Systematic version feeds the action's `systematic-version` input and
-  # both helper installs, so the skill the agent loads and the helper that
-  # reads its state are the same release. Renovate bumps it on each release
-  # through the annotation on the next line; keep that line directly above the key.
-  # renovate: datasource=npm depName=@fro.bot/systematic
-  SYSTEMATIC_VERSION: "3.38.1"
   # A report is an open issue whose whole title matches this rule and whose
   # author is one of these logins. The post job writes with the job token, so
   # the REST API shows the author as `github-actions[bot]`. The rule never
@@ -101,6 +95,8 @@ jobs:
       cache-restored: ${{ steps.state.outputs.cache-restored }}
       report: ${{ steps.report.outputs.report }}
       handoff: ${{ steps.artifact.outputs.name }}
+      # The run's one Systematic version; a rerun of a later job reuses it.
+      systematic-version: ${{ steps.systematic.outputs.systematic-version }}
     steps:
       - name: Compute UTC date
         id: date
@@ -200,15 +196,78 @@ jobs:
             echo "variant=${VARIANT}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Install helper
+      # The release this callee commit names: the first heading after the marker
+      # in its own CHANGELOG.md, fetched anonymously at the full SHA. A bad first
+      # heading fails the run; the parse never falls back to an older entry.
+      - name: Resolve Systematic version
+        id: systematic
+        env:
+          CALLEE_REPOSITORY: ${{ job.workflow_repository }}
+          CALLEE_SHA: ${{ job.workflow_sha }}
         run: |
-          if ! [[ "$SYSTEMATIC_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::SYSTEMATIC_VERSION must be an exact x.y.z version."
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+
+          [[ "$CALLEE_REPOSITORY" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$ ]] ||
+            fail "The called workflow's repository is not owner/repo."
+          case "$CALLEE_REPOSITORY" in
+            */. | */..) fail "The called workflow's repository names an unusable repository." ;;
+          esac
+          [[ "$CALLEE_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+            fail "The called workflow's commit is not a full 40-character SHA."
+
+          changelog="$RUNNER_TEMP/callee-changelog.md"
+          curl --fail --silent --show-error --max-time 20 --output "$changelog" \
+            "https://raw.githubusercontent.com/${CALLEE_REPOSITORY}/${CALLEE_SHA}/CHANGELOG.md" ||
+            fail "Could not read CHANGELOG.md of ${CALLEE_REPOSITORY} at ${CALLEE_SHA}. A private repository, a missing file and a throttled read all fail here; a rerun retries."
+
+          marker='<!-- release-entries -->'
+          count=$(grep -c -x -F -- "$marker" "$changelog" || true)
+          [ "$count" = 1 ] ||
+            fail "CHANGELOG.md must hold the ${marker} marker on a line of its own exactly once; it holds it ${count} times."
+
+          # The first nonblank line after the marker must be the release heading;
+          # nothing is skipped to reach one further down.
+          heading=$(awk -v marker="$marker" '
+            found && NF { print; exit }
+            $0 == marker { found = 1 }
+          ' "$changelog")
+          [ -n "$heading" ] || fail "CHANGELOG.md has no release heading after the ${marker} marker."
+
+          # `## [X.Y.Z](url)` or `## X.Y.Z`, each with an optional `(YYYY-MM-DD)`.
+          # The version is canonical and stable: no leading zero, prerelease,
+          # build metadata or v prefix.
+          version_re='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+          date_re='( \([0-9]{4}-[0-9]{2}-[0-9]{2}\))?'
+          linked_re='^## \[('"$version_re"')\]\([^[:space:]()]+\)'"$date_re"'$'
+          plain_re='^## ('"$version_re"')'"$date_re"'$'
+          if [[ "$heading" =~ $linked_re ]] || [[ "$heading" =~ $plain_re ]]; then
+            version="${BASH_REMATCH[1]}"
+          else
+            fail "The first release heading after the ${marker} marker is not '## [X.Y.Z](url)' or '## X.Y.Z' with a stable X.Y.Z, so no release is named."
+          fi
+
+          echo "systematic-version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Resolved Systematic ${version} from ${CALLEE_REPOSITORY} at ${CALLEE_SHA}."
+
+      - name: Install helper
+        env:
+          HELPER_VERSION: ${{ steps.systematic.outputs.systematic-version }}
+        run: |
+          if ! [[ "$HELPER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The Systematic version must be an exact x.y.z version."
             exit 1
           fi
           dir="$RUNNER_TEMP/connect-helper"
           mkdir -p "$dir"
-          npm install --prefix "$dir" --ignore-scripts --no-audit --no-fund --no-save "@fro.bot/systematic@${SYSTEMATIC_VERSION}"
+          if ! output=$(npm install --prefix "$dir" --ignore-scripts --no-audit --no-fund --no-save "@fro.bot/systematic@${HELPER_VERSION}" 2>&1); then
+            echo "::error::Could not install @fro.bot/systematic@${HELPER_VERSION}: if this commit is a release tag, the publish may be pending or failed; retry after the GitHub Release exists, or pin a published release if it never ships."
+            printf '%s\n' "$output"
+            exit 1
+          fi
+          printf '%s\n' "$output"
           if [ ! -f "$dir/node_modules/@fro.bot/systematic/skills/ce-connect/scripts/connect.mjs" ]; then
             echo "::error::The installed package has no ce:connect helper."
             exit 1
@@ -227,7 +286,7 @@ jobs:
             case "$usage" in
               *"|verify-provenance|"*) ;;
               *)
-                echo "::error::The pinned callee commit installs a Systematic release whose helper has no verify-provenance operation, so a run from this repository could not be fetched. Pin a newer callee commit whose SYSTEMATIC_VERSION carries named fetch words."
+                echo "::error::The pinned callee commit installs a Systematic release whose helper has no verify-provenance operation, so a run from this repository could not be fetched. Pin the callee commit of a published release that carries named fetch words."
                 exit 1
                 ;;
             esac
@@ -453,6 +512,17 @@ jobs:
       accepted: ${{ steps.envelope.outputs.accepted }}
       handoff: ${{ steps.artifact.outputs.name }}
     steps:
+      # An empty value would make the continue-on-error agent step run the
+      # action's default release, so check it before anything runs.
+      - name: Validate Systematic version
+        env:
+          RESOLVED_VERSION: ${{ needs.prepare.outputs.systematic-version }}
+        run: |
+          if ! [[ "$RESOLVED_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Prepare handed on no exact x.y.z Systematic version, so the agent would run its own default release."
+            exit 1
+          fi
+
       # Only the shared agent action, beside the layout and not at the workspace
       # root: a checkout there would make the workspace a repository, and the
       # helper refuses any state root inside one. Nothing else comes down, no
@@ -568,7 +638,7 @@ jobs:
           # A caller's repository skills never load into the sweep.
           repo-skills: "false"
           # The skill and the helper must be one release.
-          systematic-version: ${{ env.SYSTEMATIC_VERSION }}
+          systematic-version: ${{ needs.prepare.outputs.systematic-version }}
           # Nothing is delivered to GitHub; the next jobs post the report.
           response-mode: none
           # The run changes nothing, so no branch or pull request.
@@ -727,14 +797,21 @@ jobs:
           done < <(find "$in" -mindepth 1 -type f -print0)
 
       - name: Install helper
+        env:
+          HELPER_VERSION: ${{ needs.prepare.outputs.systematic-version }}
         run: |
-          if ! [[ "$SYSTEMATIC_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::SYSTEMATIC_VERSION must be an exact x.y.z version."
+          if ! [[ "$HELPER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The Systematic version must be an exact x.y.z version."
             exit 1
           fi
           dir="$RUNNER_TEMP/connect-helper"
           mkdir -p "$dir"
-          npm install --prefix "$dir" --ignore-scripts --no-audit --no-fund --no-save "@fro.bot/systematic@${SYSTEMATIC_VERSION}"
+          if ! output=$(npm install --prefix "$dir" --ignore-scripts --no-audit --no-fund --no-save "@fro.bot/systematic@${HELPER_VERSION}" 2>&1); then
+            echo "::error::Could not install @fro.bot/systematic@${HELPER_VERSION}: if this commit is a release tag, the publish may be pending or failed; retry after the GitHub Release exists, or pin a published release if it never ships."
+            printf '%s\n' "$output"
+            exit 1
+          fi
+          printf '%s\n' "$output"
           if [ ! -f "$dir/node_modules/@fro.bot/systematic/skills/ce-connect/scripts/connect.mjs" ]; then
             echo "::error::The installed package has no ce:connect helper."
             exit 1
@@ -805,7 +882,7 @@ jobs:
               word=$(printf '%s' "$word" | tr '[:upper:]' '[:lower:]')
               case "$word" in
                 "${caller}:"*) ;;
-                *) fail "The pinned callee commit installs a helper too old to name the calling repository, so its fetch words would resolve to Systematic. Pin a commit of the callee whose SYSTEMATIC_VERSION carries named fetch words." ;;
+                *) fail "The pinned callee commit installs a helper too old to name the calling repository, so its fetch words would resolve to Systematic. Pin the callee commit of a published release whose helper carries named fetch words." ;;
               esac
             done <<< "${words}"$'\n'"${body_words}"
           fi
