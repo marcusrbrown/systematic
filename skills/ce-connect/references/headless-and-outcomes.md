@@ -82,7 +82,7 @@ Every run ends with exactly one of these lines as its last line. The reason and 
 
 Copy the final line from the helper's `finalLine` when `publish` answers. For every other stop, print the line from this table.
 
-To find out why a family degraded a run, look for its reply. When a family's reply held no usable JSON object, the skill saves it as `family-<n>.reply.txt` in the run's directory under `runs/`, at most 65536 characters, and a scheduled run uploads those files as the artifact `connect-failed-replies-<run>-<attempt>` for one day. A good reply is never saved, and a run with no failed family has no such artifact. The file is untrusted model text, not a batch, and no helper step reads it.
+To find out why a family degraded a run, look for its reply. When the skill wrote the stub for a family (its reply held no usable JSON object, or its delegate stopped, was aborted or failed), it saves that family's reply as `family-<n>.reply.txt` in the run's directory under `runs/`, at most 65536 characters, and a scheduled run uploads those files as the artifact `connect-failed-replies-<run>-<attempt>` for one day. A good reply is never saved, and a run with no failed family has no such artifact. The file is untrusted model text, not a batch, and no helper step reads it.
 
 ## Sweep progress
 
