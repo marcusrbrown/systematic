@@ -1124,6 +1124,30 @@ describe('Fro Bot rotating daily report issue', () => {
     ])
   })
 
+  test('accepts the CI Docs Build as docs evidence when docs:verify cannot provision Playwright', () => {
+    const prompt = autohealPromptText()
+    const start = prompt.indexOf('DOCS EVIDENCE:')
+    expect(start).toBeGreaterThan(prompt.indexOf('g. `bun run docs:verify`'))
+    expect(start).toBeLessThan(prompt.indexOf('For each failing gate:'))
+
+    const paragraph = prompt.slice(
+      start,
+      prompt.indexOf('For each failing gate:'),
+    )
+    expectPromptFragments(paragraph, [
+      '`playwright install --with-deps chromium`',
+      'dependency-provisioning step',
+      'still run `bun run docs:build` locally',
+      'the exact commit under review',
+      'docs:verify not runnable in isolation; CI Docs Build for <sha> passed',
+      'do not log it under Needs Human Attention',
+      'count it toward the 3-report CONTINUITY escalation',
+      'failed, is missing, or is still pending',
+      'not verified',
+      'past the dependency-provisioning step is a real failure',
+    ])
+  })
+
   test('drops the perpetual-issue model', () => {
     const prompt = autohealPromptText()
 

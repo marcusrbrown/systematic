@@ -402,6 +402,18 @@ env:
           `node --input-type=module -e "import('./dist/index.js').then(m => console.log(Object.keys(m).sort()))"`
           — exports only `['default']` (regression contract from v2.5.2/v2.12.2;
           a named export of `SystematicPlugin` breaks OpenCode plugin loading).
+       DOCS EVIDENCE: `docs:verify` runs `playwright install --with-deps
+       chromium`, which needs root for apt; this isolated run cannot elevate.
+       When it fails at that dependency-provisioning step, still run
+       `bun run docs:build` locally, then take the `Docs Build` job in
+       `main.yaml` for the exact commit under review as the docs evidence
+       (`gh run list --workflow main.yaml --commit <sha>`). If that job
+       passed, report the gate ✅ as "docs:verify not runnable in isolation;
+       CI Docs Build for <sha> passed" with the run link, and do not log it
+       under Needs Human Attention or count it toward the 3-report CONTINUITY
+       escalation. If that job failed, is missing, or is still pending, the
+       gate is not verified: report ❌ and raise it as usual. A `docs:verify`
+       failure past the dependency-provisioning step is a real failure.
        For each failing gate: run CHECK MAIN FIRST, identify root cause; if the
        fix is minimal and safe, include it in a Developer Experience PR; if
        complex, open an issue with diagnosis.
