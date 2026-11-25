@@ -518,6 +518,9 @@ jobs:
         env:
           RESOLVED_VERSION: ${{ needs.prepare.outputs.systematic-version }}
         run: |
+          # The failed-reply diagnostics at the end of this job skip themselves
+          # when too little of the job's time is left; they measure from here.
+          echo "RUN_JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
           if ! [[ "$RESOLVED_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "::error::Prepare handed on no exact x.y.z Systematic version, so the agent would run its own default release."
             exit 1
@@ -772,6 +775,13 @@ jobs:
             echo "public=false" >> "$GITHUB_OUTPUT"
             exit 0
           }
+
+          # Both diagnostic steps get two minutes each, and a job timeout would
+          # skip render, so they run only while five minutes of the job remain.
+          job_limit=50
+          [[ "${RUN_JOB_STARTED:-}" =~ ^[0-9]+$ ]] || deny "the job start time is unknown."
+          [ $(( $(date +%s) - RUN_JOB_STARTED )) -le $(( (job_limit - 5) * 60 )) ] ||
+            deny "less than five minutes of the job remain."
 
           set -f
           store="$root/ci-payloads.json"

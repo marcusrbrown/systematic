@@ -862,14 +862,60 @@ describe('connect workflow injection and artifacts', () => {
         fs.writeFileSync(path.join(dir, 'family-1.reply.txt'), text)
       }
 
-      const recheck = (box: Box, projects = PROJECTS) =>
-        runStep(box, 'run', RECHECK, { PROJECTS: projects })
+      const nowSeconds = () => String(Math.floor(Date.now() / 1000))
+
+      const recheck = (
+        box: Box,
+        projects = PROJECTS,
+        started: string | null = nowSeconds(),
+      ) =>
+        runStep(box, 'run', RECHECK, {
+          PROJECTS: projects,
+          ...(started === null ? {} : { RUN_JOB_STARTED: started }),
+        })
 
       const verdict = (box: Box, slug: string, value: string) =>
         fs.writeFileSync(path.join(box.fixtures, `visibility-${slug}`), value)
 
       const visibilityCalls = (box: Box) =>
         calls(box).filter((line) => line.startsWith('gh api repos/'))
+
+      it('records the run job start in its first step, before anything else runs', () => {
+        const first = asString(
+          asRecord(stepsOf('run')[0], 'first run step').run,
+          'first step',
+        )
+        expect(first).toContain('RUN_JOB_STARTED=$(date +%s)')
+        expect(first).toContain('"$GITHUB_ENV"')
+      })
+
+      it('skips the upload, with no call to GitHub, when less than five minutes of the job remain', () => {
+        const box = makeBox()
+        seedReply(box)
+        const limit = Number(job('run')['timeout-minutes'])
+        const started = String(Math.floor(Date.now() / 1000) - (limit - 4) * 60)
+        const result = recheck(box, PROJECTS, started)
+        expect(result.exitCode).toBe(0)
+        expect(result.outputs.get('public')).toBe('false')
+        expect(result.stdout).toContain('::warning::')
+        expect(visibilityCalls(box)).toEqual([])
+      })
+
+      it('skips the upload when the job start is unknown', () => {
+        const box = makeBox()
+        seedReply(box)
+        const result = recheck(box, PROJECTS, null)
+        expect(result.exitCode).toBe(0)
+        expect(result.outputs.get('public')).toBe('false')
+        expect(visibilityCalls(box)).toEqual([])
+      })
+
+      it('uses the run job timeout as its deadline', () => {
+        const limit = Number(job('run')['timeout-minutes'])
+        expect(asString(stepNamed('run', RECHECK).run, 'run')).toContain(
+          `job_limit=${limit}`,
+        )
+      })
 
       it('runs right before the upload, and the upload runs only when it answered public', () => {
         expect(stepIndex('run', RECHECK)).toBe(stepIndex('run', NAME) - 1)
