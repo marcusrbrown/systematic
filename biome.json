@@ -36,12 +36,13 @@
       "!.sisyphus",
       "!.slim",
       "!**/.worktrees",
-      "!**/.context"
+      "!**/.context",
+      "!claude-code"
     ]
   },
   "overrides": [
     {
-      "includes": ["skills/**/*.mjs"],
+      "includes": ["skills/**/*.mjs", "tests/**", "docs/scripts/**"],
       "linter": {
         "rules": {
           "complexity": {

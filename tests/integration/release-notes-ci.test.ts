@@ -138,7 +138,6 @@ function runTitle(correlationId: string): string {
  * Runs the dispatch-release-notes.sh script in a temp directory with the mock-gh binary on PATH.
  * The script receives RELEASE_VERSION as its first positional argument.
  */
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Test scaffold consolidates default env-var wiring, correlation-token plumbing, log-prepending, and timeout escape hatches in one place by design — splitting into helpers would scatter related context across multiple functions.
 function runSuccessCmd(
   scriptPath: string,
   env: ScenarioEnv,
