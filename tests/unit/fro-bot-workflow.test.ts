@@ -1138,7 +1138,10 @@ describe('Fro Bot rotating daily report issue', () => {
       '`playwright install --with-deps chromium`',
       'Use CI evidence only when that install fails with a privilege or elevation denial in its output',
       'Any other install error is a real failure.',
-      'still run `bun run docs:build` locally; if it fails, report that failure as usual.',
+      'install the browser alone with `bun run --cwd docs playwright install chromium` (no `--with-deps`)',
+      'into a writable browser cache that the build also reads',
+      'then run `bun run docs:build` locally; if either fails, report that failure as usual.',
+      'If the build passes, find the `main.yaml` run',
       'find the `main.yaml` run for the exact commit under review',
       '`gh run view <run-id> --json jobs`',
       'Only a `Docs Build` job that completed with conclusion `success` counts',
@@ -1147,6 +1150,15 @@ describe('Fro Bot rotating daily report issue', () => {
       'If that job failed, is missing, or is still pending, the gate is not verified: report ❌ and raise it as usual.',
     ])
     expect(paragraph).not.toContain('dependency-provisioning step')
+    const flat = paragraph.replace(/\s+/g, ' ')
+    expect(flat.indexOf('install the browser alone')).toBeLessThan(
+      flat.indexOf('then run `bun run docs:build` locally'),
+    )
+    expect(
+      flat.indexOf('if either fails, report that failure as usual'),
+    ).toBeLessThan(
+      flat.indexOf('If the build passes, find the `main.yaml` run'),
+    )
   })
 
   test('drops the perpetual-issue model', () => {
