@@ -1136,16 +1136,17 @@ describe('Fro Bot rotating daily report issue', () => {
     )
     expectPromptFragments(paragraph, [
       '`playwright install --with-deps chromium`',
-      'dependency-provisioning step',
-      'still run `bun run docs:build` locally',
-      'the exact commit under review',
+      'Use CI evidence only when that install fails with a privilege or elevation denial in its output',
+      'Any other install error is a real failure.',
+      'still run `bun run docs:build` locally; if it fails, report that failure as usual.',
+      'find the `main.yaml` run for the exact commit under review',
+      '`gh run view <run-id> --json jobs`',
+      'Only a `Docs Build` job that completed with conclusion `success` counts',
       'docs:verify not runnable in isolation; CI Docs Build for <sha> passed',
-      'do not log it under Needs Human Attention',
-      'count it toward the 3-report CONTINUITY escalation',
-      'failed, is missing, or is still pending',
-      'not verified',
-      'past the dependency-provisioning step is a real failure',
+      'do not log it under Needs Human Attention or count it toward the 3-report CONTINUITY escalation.',
+      'If that job failed, is missing, or is still pending, the gate is not verified: report ❌ and raise it as usual.',
     ])
+    expect(paragraph).not.toContain('dependency-provisioning step')
   })
 
   test('drops the perpetual-issue model', () => {

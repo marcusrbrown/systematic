@@ -404,16 +404,19 @@ env:
           a named export of `SystematicPlugin` breaks OpenCode plugin loading).
        DOCS EVIDENCE: `docs:verify` runs `playwright install --with-deps
        chromium`, which needs root for apt; this isolated run cannot elevate.
-       When it fails at that dependency-provisioning step, still run
-       `bun run docs:build` locally, then take the `Docs Build` job in
-       `main.yaml` for the exact commit under review as the docs evidence
-       (`gh run list --workflow main.yaml --commit <sha>`). If that job
-       passed, report the gate ✅ as "docs:verify not runnable in isolation;
-       CI Docs Build for <sha> passed" with the run link, and do not log it
-       under Needs Human Attention or count it toward the 3-report CONTINUITY
+       Use CI evidence only when that install fails with a privilege or
+       elevation denial in its output, such as `no new privileges` or a
+       refused `sudo`. Any other install error is a real failure. After such a
+       denial, still run `bun run docs:build` locally; if it fails, report
+       that failure as usual. If it passes, find the `main.yaml` run for the
+       exact commit under review with `gh run list --workflow main.yaml
+       --commit <sha>`, then read its jobs with `gh run view <run-id> --json
+       jobs`. Only a `Docs Build` job that completed with conclusion `success`
+       counts: report the gate ✅ as "docs:verify not runnable in isolation; CI
+       Docs Build for <sha> passed" with the run link, and do not log it under
+       Needs Human Attention or count it toward the 3-report CONTINUITY
        escalation. If that job failed, is missing, or is still pending, the
-       gate is not verified: report ❌ and raise it as usual. A `docs:verify`
-       failure past the dependency-provisioning step is a real failure.
+       gate is not verified: report ❌ and raise it as usual.
        For each failing gate: run CHECK MAIN FIRST, identify root cause; if the
        fix is minimal and safe, include it in a Developer Experience PR; if
        complex, open an issue with diagnosis.
