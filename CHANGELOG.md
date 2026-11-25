@@ -4,6 +4,29 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.38.2](https://github.com/marcusrbrown/systematic/compare/v3.38.1...v3.38.2) (2026-11-25)
+
+### Bug Fixes
+
+* **connect:** run the release a callee commit names, read from its own changelog ([#1515](https://github.com/marcusrbrown/systematic/issues/1515)) ([7604412](https://github.com/marcusrbrown/systematic/commit/7604412bfe49f382644af3fff3624885e666e52e))
+
+### Documentation
+
+* say skills that already have a namespace keep it ([#1518](https://github.com/marcusrbrown/systematic/issues/1518)) ([4d500d7](https://github.com/marcusrbrown/systematic/commit/4d500d7304f58f4e438957179c97929f00ea8494))
+
+### Tests
+
+* check the bootstrap ReDoS guard by how it scales, not by a fixed time limit ([#1512](https://github.com/marcusrbrown/systematic/issues/1512)) ([c45f5c8](https://github.com/marcusrbrown/systematic/commit/c45f5c877cf211f2734f694b0862db4e22da4e0b))
+
+### Continuous Integration
+
+* **deps:** update Systematic to v3.38.1 ([#1511](https://github.com/marcusrbrown/systematic/issues/1511)) ([e57c2cd](https://github.com/marcusrbrown/systematic/commit/e57c2cd3eee8be19f11410d568b19419b93e49cb))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.148.0 ([#1513](https://github.com/marcusrbrown/systematic/issues/1513)) ([85c178f](https://github.com/marcusrbrown/systematic/commit/85c178fd5d5b73eaa1ecd73ea31fe0f1d38c69f9))
+* **deps:** update fro-bot/agent to v0.149.0 ([#1520](https://github.com/marcusrbrown/systematic/issues/1520)) ([4945e57](https://github.com/marcusrbrown/systematic/commit/4945e57cda0e3562d20e7ec044a25bade86abe79))
+
 ## [3.38.1](https://github.com/marcusrbrown/systematic/compare/v3.38.0...v3.38.1) (2026-11-24)
 
 ### Bug Fixes
