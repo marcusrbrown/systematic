@@ -16,7 +16,7 @@ tags: [ce-connect, github-actions, version-skew, pinned-dependency, report-ticks
 
 # A report carrier changed beside its renderer ran ahead of the renderer the workflow pins, so late ticks would have been dropped until the pin moved
 
-> **Superseded in part:** The `SYSTEMATIC_VERSION` pin and the pin-rule advice below no longer apply. The version now comes from the callee commit's own changelog (`docs/plans/2026-11-24-001-fix-connect-version-from-callee-changelog-plan.md`). The test-the-carrier-against-old-bodies guidance still holds.
+> **Superseded in part:** Only the old `SYSTEMATIC_VERSION` env pin and its bump-commit mechanism no longer apply. The version now comes from the callee commit's own changelog (`docs/plans/2026-11-24-001-fix-connect-version-from-callee-changelog-plan.md`). The rest still holds: test the carrier against old bodies, and settle open rows on the current report before a format-changing upgrade.
 
 ## Problem
 
