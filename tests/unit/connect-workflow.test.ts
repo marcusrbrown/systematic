@@ -803,6 +803,17 @@ describe('connect workflow injection and artifacts', () => {
       expect(withOf('run', NAME)['if-no-files-found']).toBe('ignore')
     })
 
+    it('never fails the run job, so a rejected upload cannot hold back the report, while the hand-off upload still does', () => {
+      const step = stepNamed('run', NAME)
+      expect(step['continue-on-error']).toBe(true)
+      expect(step['timeout-minutes']).toBe(5)
+      const handoff = stepNamed('run', 'Upload hand-off')
+      expect(handoff['continue-on-error']).toBeUndefined()
+      expect(withOf('run', 'Upload hand-off')['if-no-files-found']).toBe(
+        'error',
+      )
+    })
+
     it('keeps the replies out of the hand-off, which the render job reads against its allowlist', () => {
       const handoff = asString(
         withOf('run', 'Upload hand-off').path,
