@@ -105,7 +105,7 @@ export const applyBootstrapContent = (
 }
 ```
 
-Regression test (`tests/unit/plugin.test.ts`):
+Regression test as first written (`tests/unit/plugin.test.ts` now checks how the helper scales instead; see Prevention):
 ```ts
 test('completes in linear time on malicious input with many opening markers and no closing tag', () => {
   const malicious = `${MARKER_OPEN.repeat(10000)} trailing content with no close`
@@ -136,7 +136,7 @@ Two additional secondary benefits from dropping the regex:
 
 - **When you invert or expand a plugin's trust boundary, re-audit every regex pattern even if it was CodeQL-clean before.** A pattern's safety depends on what input reaches it, not just on its shape. Architectural changes that broaden the set of authors can reclassify a safe regex as unsafe overnight. The pattern itself never changed in this case — only the data flow around it.
 - **Prefer `indexOf`/`slice` over regex for fixed literal delimiters.** If neither side has a regex feature (alternation, character classes, anchors), regex is convenience, not requirement. The simpler tool is provably immune to a class of bug the regex isn't.
-- **Add regression tests for malformed-delimiter storms, not just happy-path replacement.** The test in `plugin.test.ts` repeats the opening marker with no closing tag and compares the helper's best-of-3 time at 1,000 and 8,000 openings. A linear helper stays near 1x (about 1.2x measured); the pre-fix regex scales about 62x. The 20x ceiling sits between them and carries no absolute time bound, so CI speed does not move it.
+- **Add regression tests for malformed-delimiter storms, not just happy-path replacement.** The test in `plugin.test.ts` repeats the opening marker with no closing tag and compares the helper's best-of-3 time at 1,000 and 8,000 openings. A linear helper stays near 1x (about 1.2x measured); the pre-fix regex scales about 62x. The 20x ceiling sits between them and carries no absolute time bound. One exception: the small sample's denominator is floored at 0.01 ms, so when the small run measures below that, the check becomes a fixed 0.20 ms ceiling for the large run.
 - **Calibrate timing guards against the pre-fix code.** On Apple M1 Pro with bun 1.4.5, the pre-fix regex takes 8.8 ms at 1,000 openings, 543 ms at 8,000, and 3,373 ms at 20,000, where the linear helper takes 0.14 ms (about 24,000x). Restoring the regex fails the test with ratio 63.
 - **Re-run CodeQL locally on architectural changes before opening a PR.** The CI catch happened post-push; the pattern was visible to local CodeQL on the branch before push if anyone had thought to run it. `gh workflow run codeql.yaml` or `codeql database analyze` against a local DB would surface it earlier.
 
