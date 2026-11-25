@@ -580,7 +580,7 @@ flowchart TB
 - Live acceptance, in order:
   1. A dispatch run: the report issue opens in `fro-bot/agent`, authored by the job token; Systematic's report and cache are untouched (AE1). The agent log shows the model override and the shared action from the pinned release (AE3). The log shows repo skills off.
   2. A same-day second dispatch edits the report in place (R5).
-  3. A dispatch with the researcher model blanked fails prepare red and posts nothing (AE2).
+  3. A dispatch with an invalid researcher model fails prepare red and posts nothing (AE2). A repository variable cannot be empty, so the live run sets a malformed value; the empty-input branch rests on the U2 test.
   4. Local promotion: with the checkout allow-listed, the report's named fetch word imports a candidate; with the checkout removed, the same word is refused and nothing downloads (AE4).
   5. Negative on a temporary branch: a wrapper named like the real one that calls a fork of the callee is refused as not-a-connect-run (AE5). It needs a temporary fork under Marcus's account, removed afterwards, and is the only fork case in the plan. Waived: the `verify-provenance` unit tests cover the refusal, and the live run is not part of the readiness gate.
   6. A pre-cutover Systematic candidate's bare word still imports (AE7).
