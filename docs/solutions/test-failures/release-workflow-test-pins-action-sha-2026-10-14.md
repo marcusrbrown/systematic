@@ -17,6 +17,8 @@ last_updated: 2026-11-16
 
 # A workflow test asserted an exact action SHA, so every Renovate bump failed the Test check
 
+> **Superseded in part:** The `SYSTEMATIC_VERSION` pin example, its Renovate regex manager and the `renovate-workflow.test.ts` block that tracked it no longer exist. The version now comes from the callee commit's own changelog (`docs/plans/2026-11-24-001-fix-connect-version-from-callee-changelog-plan.md`). The lesson about pinning wiring, not literals, still holds.
+
 ## Problem
 
 Renovate PR #1102 bumped `actions/create-github-app-token` from v3.2.0 to v3.3.0 and failed the required Test check. Nothing was wrong with the action: one test asserted the exact commit SHA that Renovate had just rotated. Fixed in #1121.

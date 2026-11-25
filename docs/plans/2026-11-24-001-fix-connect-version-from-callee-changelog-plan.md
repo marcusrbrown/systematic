@@ -248,7 +248,7 @@ Failure handling by stage:
 
 U1 and U2 land in one change. U1 adds a hard-failing resolver that nothing consumes alone, and U2 cannot remove the env pin without the resolver.
 
-- [ ] **Unit 1: Resolve the version from the callee changelog**
+- [x] **Unit 1: Resolve the version from the callee changelog**
 
 **Goal:** `prepare` resolves one validated `X.Y.Z` from the callee commit's `CHANGELOG.md` and exposes it as a step output and a job output.
 
@@ -285,7 +285,7 @@ U1 and U2 land in one change. U1 adds a hard-failing resolver that nothing consu
 - Every scenario above passes, and the resolver step precedes `Install helper` in `prepare`.
 - A failed resolution leaves the job red before the install.
 
-- [ ] **Unit 2: Feed one version to all three consumers, remove the env pin and the Renovate manager**
+- [x] **Unit 2: Feed one version to all three consumers, remove the env pin and the Renovate manager**
 
 **Goal:** Wire the resolved value into both helper installs and the agent input, validate it in run, and delete `env.SYSTEMATIC_VERSION` with its Renovate machinery.
 
@@ -328,7 +328,7 @@ U1 and U2 land in one change. U1 adds a hard-failing resolver that nothing consu
 - The existing structure and credential tests pass unchanged, which covers the four jobs and their permissions.
 - The Renovate config still parses as JSON5.
 
-- [ ] **Unit 3: Rewrite the docs and banner the superseded records**
+- [x] **Unit 3: Rewrite the docs and banner the superseded records**
 
 **Goal:** The guide and `ARCHITECTURE.md` state current behaviour. The superseded learnings and plan sections say so.
 
