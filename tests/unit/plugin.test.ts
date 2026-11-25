@@ -935,23 +935,55 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(closeTagCount).toBe(1)
   })
 
-  test('completes in linear time on malicious input with many opening markers and no closing tag', () => {
-    // Regression: the prior regex implementation was vulnerable to ReDoS on
-    // inputs starting with the opening marker repeated and missing a closing
-    // tag. The linear-scan helper is provably immune; this pins the failure
-    // mode without relying on benchmarking.
-    const openings = MARKER_OPEN.repeat(20000)
-    const malicious = `${openings} trailing content with no close`
-    const output = { system: [malicious] }
-    const startedAt = Date.now()
-    applyBootstrapContent(output, wrap('NEW CONTENT'))
-    const elapsedMs = Date.now() - startedAt
+  test('scales linearly on malicious input with many opening markers and no closing tag', () => {
+    // Regression: the prior regex (/<SYSTEMATIC_WORKFLOWS>[\s\S]*?<\/SYSTEMATIC_WORKFLOWS>/)
+    // was quadratic on inputs that repeat the opening marker with no closing
+    // tag. The linear-scan helper is not.
+    //
+    // The guard compares the helper against its own run at two input sizes, so
+    // it carries no absolute time bound. An 8x larger input costs at most ~8x
+    // for a linear helper and ~64x for a quadratic one; the 20x ceiling sits
+    // between them. Best-of-N timings drop scheduler and GC spikes.
+    //
+    // Measured on Apple M1 Pro, bun 1.4.5 (applyBootstrapContent, best of 3):
+    //   n=1000 -> 0.09 ms, n=8000 -> 0.10 ms   (ratio ~1.2)
+    // Pre-fix regex on the same inputs:
+    //   n=1000 -> 8.8 ms,  n=8000 -> 543 ms     (ratio ~62)
+    // At n=20000 the fixed helper takes 0.14 ms and the pre-fix regex 3373 ms
+    // (~24000x). Sizes stay small so a regression fails fast instead of hanging.
+    const SMALL = 1000
+    const LARGE = 8000
+    const REPS = 3
+    const MAX_RATIO = 20
+
+    const buildOutput = (openingCount: number) => ({
+      system: [
+        `${MARKER_OPEN.repeat(openingCount)} trailing content with no close`,
+      ],
+    })
+    const bestOfMs = (openingCount: number): number => {
+      let best = Number.POSITIVE_INFINITY
+      for (let i = 0; i < REPS; i++) {
+        const output = buildOutput(openingCount)
+        const startedAt = performance.now()
+        applyBootstrapContent(output, wrap('NEW CONTENT'))
+        best = Math.min(best, performance.now() - startedAt)
+      }
+      return best
+    }
+
+    const smallMs = bestOfMs(SMALL)
+    const largeMs = bestOfMs(LARGE)
+    // Clamp the denominator so a sub-timer-resolution small run cannot turn
+    // the ratio into a division by (near) zero.
+    expect(largeMs / Math.max(smallMs, 0.01)).toBeLessThan(MAX_RATIO)
+
     // No marker block matched (no closing tag), so content is appended.
+    const output = buildOutput(LARGE)
+    applyBootstrapContent(output, wrap('NEW CONTENT'))
     expect(output.system).toHaveLength(1)
     expect(output.system[0]).toContain('NEW CONTENT')
-    expect(output.system[0]).toContain(openings)
-    // Sized so the pre-fix pattern exceeds this bound; re-check if the input changes.
-    expect(elapsedMs).toBeLessThan(100)
+    expect(output.system[0]).toContain(MARKER_OPEN.repeat(LARGE))
   })
 })
 
