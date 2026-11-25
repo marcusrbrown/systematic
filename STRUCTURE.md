@@ -124,7 +124,8 @@ subdirectory of core modules.
 frontmatter (`name`, `description`) and the skill body.
 
 **Key files:** `skills/<name>/SKILL.md` — the skill definition. The `name` field determines the
-`systematic:` prefixed command name registered in OpenCode.
+command name registered in OpenCode: a name with no namespace gets the `systematic:` prefix, and a
+name that has one (`ce:plan`) keeps it.
 
 ### `agents/`
 

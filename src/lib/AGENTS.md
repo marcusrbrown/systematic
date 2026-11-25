@@ -142,7 +142,7 @@ No `src/lib` modules are intentionally excluded from these tables.
 - `parseFrontmatter` is the most-imported function across the codebase
 - `walkDir` is the foundation layer, used by all three discovery modules
 - `findSkillsInDir` is the highest-centrality discovery function across the loading layer
-- `SKILL_PREFIX` = `'systematic:'` — all skills registered with this prefix
+- `SKILL_PREFIX` = `'systematic:'` — prefixed onto a skill name with no namespace; a name that already has one (`ce:plan`) is registered as is (`formatSkillCommandName`)
 - `parseFrontmatter` is regex-based (not a YAML library for delimiter detection)
 - `formatFrontmatter` uses `js-yaml` dump with `noRefs` and core schema
 - `src/index.ts` exports one default object (`id`, `setup`, `server`). `server` is the v1 entry (`opencode-v1.ts`); `setup` is the v2 entry (`opencode-v2.ts`) and returns at once when `ctx.location` or `ctx.session` is missing, which is the reduced context a v1 host passes
