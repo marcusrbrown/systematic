@@ -61,7 +61,7 @@ runs:
   using: composite
   steps:
     - name: Run the agent
-      uses: fro-bot/agent@f68c40f188539ad64f99ae157645e1ca5c07aa31 # v0.148.0
+      uses: fro-bot/agent@7eb26710477db26fa756029283abfe33c1e60362 # v0.149.0
       env:
         OPENCODE_PROMPT_ARTIFACT: "true"
       with:
