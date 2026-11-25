@@ -228,9 +228,10 @@ jobs:
           [ "$count" = 1 ] ||
             fail "CHANGELOG.md must hold the ${marker} marker on a line of its own exactly once; it holds it ${count} times."
 
-          # The first level-2 heading after the marker, and no other.
+          # The first nonblank line after the marker must be the release heading;
+          # nothing is skipped to reach one further down.
           heading=$(awk -v marker="$marker" '
-            found && /^##/ && !/^###/ { print; exit }
+            found && NF { print; exit }
             $0 == marker { found = 1 }
           ' "$changelog")
           [ -n "$heading" ] || fail "CHANGELOG.md has no release heading after the ${marker} marker."
@@ -262,7 +263,7 @@ jobs:
           dir="$RUNNER_TEMP/connect-helper"
           mkdir -p "$dir"
           if ! output=$(npm install --prefix "$dir" --ignore-scripts --no-audit --no-fund --no-save "@fro.bot/systematic@${HELPER_VERSION}" 2>&1); then
-            echo "::error::Could not install @fro.bot/systematic@${HELPER_VERSION}: if this commit is a release tag, the publish may be pending or failed; retry after the GitHub Release exists."
+            echo "::error::Could not install @fro.bot/systematic@${HELPER_VERSION}: if this commit is a release tag, the publish may be pending or failed; retry after the GitHub Release exists, or pin a published release if it never ships."
             printf '%s\n' "$output"
             exit 1
           fi
@@ -806,7 +807,7 @@ jobs:
           dir="$RUNNER_TEMP/connect-helper"
           mkdir -p "$dir"
           if ! output=$(npm install --prefix "$dir" --ignore-scripts --no-audit --no-fund --no-save "@fro.bot/systematic@${HELPER_VERSION}" 2>&1); then
-            echo "::error::Could not install @fro.bot/systematic@${HELPER_VERSION}: if this commit is a release tag, the publish may be pending or failed; retry after the GitHub Release exists."
+            echo "::error::Could not install @fro.bot/systematic@${HELPER_VERSION}: if this commit is a release tag, the publish may be pending or failed; retry after the GitHub Release exists, or pin a published release if it never ships."
             printf '%s\n' "$output"
             exit 1
           fi

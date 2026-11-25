@@ -2427,6 +2427,9 @@ describe('prepare: the release a callee commit names', () => {
     ['a leading zero', '## 03.39.0'],
     ['a v prefix', '## v3.39.0'],
     ['an Unreleased heading', '## Unreleased'],
+    ['an indented level-2 heading', '  ## Unreleased'],
+    ['a level-3 heading', '### Bug Fixes'],
+    ['a line that is not a heading', 'Release notes follow.'],
   ])(
     'fails on %s as the first heading and never falls through to the older entry',
     (_label, heading) => {
@@ -2438,6 +2441,18 @@ describe('prepare: the release a callee commit names', () => {
       expect(result.stdout + result.stderr).not.toContain('3.38.0')
     },
   )
+
+  it('fails on an indented first heading directly above a valid older release', () => {
+    const box = makeBox()
+    writeChangelog(
+      box,
+      `# Changelog\n\n${CHANGELOG_MARKER}\n\n  ## Unreleased\n\n${OLDER_ENTRY}`,
+    )
+    const result = resolveVersion(box)
+    expect(result.exitCode).toBe(1)
+    expect(result.outputs.has('systematic-version')).toBe(false)
+    expect(result.stdout + result.stderr).not.toContain('3.38.0')
+  })
 
   it('fails when no heading follows the marker', () => {
     const box = makeBox()
