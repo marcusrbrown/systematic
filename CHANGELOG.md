@@ -4,6 +4,28 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.38.3](https://github.com/marcusrbrown/systematic/compare/v3.38.2...v3.38.3) (2026-11-26)
+
+### Bug Fixes
+
+* **connect:** keep the reply of a family the skill could not use, so a degraded run can be classified ([#1519](https://github.com/marcusrbrown/systematic/issues/1519)) ([bb8daab](https://github.com/marcusrbrown/systematic/commit/bb8daab3e1232b663a6efaaed4c669e62446d5ae))
+
+### Documentation
+
+* record the caller pin bump and version-from-changelog runs, and complete both connect plans ([#1523](https://github.com/marcusrbrown/systematic/issues/1523)) ([13e5c3b](https://github.com/marcusrbrown/systematic/commit/13e5c3bfb39e4c9c537426fc5410d4656893c7be))
+
+### Continuous Integration
+
+* **fro-bot:** take CI Docs Build as the docs evidence when docs:verify cannot run in isolation ([#1525](https://github.com/marcusrbrown/systematic/issues/1525)) ([02502fa](https://github.com/marcusrbrown/systematic/commit/02502faf746f8c5db21b0f9f854773afbfdbc7cd))
+* install the v2 OpenCode CLI from a committed lockfile so every package is hash-checked ([#1528](https://github.com/marcusrbrown/systematic/issues/1528)) ([d3665c4](https://github.com/marcusrbrown/systematic/commit/d3665c4d418b4e7a47cac37658e7731de2eabbc6))
+* send Fro Bot run traces to the collector ([#1532](https://github.com/marcusrbrown/systematic/issues/1532)) ([7ba95d3](https://github.com/marcusrbrown/systematic/commit/7ba95d36d4e85b2b6daf07555da48cb560d58547))
+
+### Miscellaneous Chores
+
+* **biome:** skip the complexity rule outside shipped code and stop linting the Claude Code build ([#1526](https://github.com/marcusrbrown/systematic/issues/1526)) ([b384bc8](https://github.com/marcusrbrown/systematic/commit/b384bc8d32e86cce79ae6be3c938cf0a8381c5be))
+* **deps:** update fro-bot/agent to v0.149.1 ([#1524](https://github.com/marcusrbrown/systematic/issues/1524)) ([bc580cb](https://github.com/marcusrbrown/systematic/commit/bc580cb9745515a38ea65bfd528b37670bc4e5f6))
+* **deps:** update fro-bot/agent to v0.149.2 ([#1527](https://github.com/marcusrbrown/systematic/issues/1527)) ([52645b0](https://github.com/marcusrbrown/systematic/commit/52645b01b646fdbb4baa54754c1a945d540a5908))
+
 ## [3.38.2](https://github.com/marcusrbrown/systematic/compare/v3.38.1...v3.38.2) (2026-11-25)
 
 ### Bug Fixes
