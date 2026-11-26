@@ -1236,25 +1236,44 @@ describe('Fro Bot autoheal strategies', () => {
       'GHSA-9qmh-m7c6-f92p',
       // zod 4.1.8 / 3.25.76
       'GHSA-mrhx-c7xc-m3w5',
-      // npm 11.18.0 embedded tar, undici, ip-address
+      // npm 11.18.0 embedded tar
       'GHSA-r292-9mhp-454m',
+      // npm-bundled glob and minimatch
+      'GHSA-3g3m-2fjr-6pw4',
+      'GHSA-g3hv-75wg-m249',
+      // dev-only js-yaml, docs-only katex, optional-peer effect
+      'GHSA-r3ph-w7gj-g6xm',
+      'GHSA-238p-pmpm-9mq7',
+      'GHSA-chp3-j5qr-2vfr',
+    ]) {
+      expect(block).toContain(id)
+    }
+    // The undici and ip-address advisories left `bun audit` and alert #28, so
+    // they are no longer accepted.
+    for (const id of [
       'GHSA-2m5v-pch6-74hx',
       'GHSA-qrxm-fqhp-jwvm',
       'GHSA-xjj6-f33q-929c',
       'GHSA-rfgv-xxqx-mfg5',
       'GHSA-mwp4-54f8-5fhr',
+      // postcss-selector-parser is fixed by a lockfile refresh, not accepted
+      'GHSA-rj75-hqrm-r3gf',
     ]) {
-      expect(block).toContain(id)
+      expect(block).not.toContain(id)
     }
+    expect(block).toContain('tar 7.5.20')
     expectPromptFragments(block, [
       'dev-only toolchain, not shipped',
       'Report these under Security as accepted',
       'Do not log them under Needs Human Attention',
       'do not open a repair PR',
-      'Escalate again only on new evidence',
+      'An accept covers only the versions and dependency paths listed; a copy of the same advisory anywhere else gets normal triage.',
+      'Resume normal triage for an accepted advisory on new evidence',
       'reaches a shipped artifact or a runtime dependency',
-      'report that advisory as resolved',
-      'a newer advisory appears',
+      'a newer advisory appears for the same package',
+      "a fixed version now fits the parents' declared ranges while the lockfile still selects an affected one",
+      'Report an advisory as resolved only once every installed copy is outside its range.',
+      'reopen it only when an installable release of the bundling package ships the fixed version, not when a patched copy merely fits its declared range.',
     ])
   })
 
