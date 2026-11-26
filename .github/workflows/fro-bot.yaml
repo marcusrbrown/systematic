@@ -227,11 +227,24 @@ env:
     - GHSA-mrhx-c7xc-m3w5 (zod 4.1.8 and 3.25.76): nested copies under
       `@opencode-ai/plugin` and gitlab-ai-provider; the shipped zod is 4.6.7,
       which is patched.
-    - GHSA-r292-9mhp-454m (tar 7.5.19), GHSA-2m5v-pch6-74hx,
-      GHSA-qrxm-fqhp-jwvm, GHSA-xjj6-f33q-929c, GHSA-rfgv-xxqx-mfg5
-      (undici 6.27.0), GHSA-mwp4-54f8-5fhr (ip-address 10.2.0): bundled inside
-      npm 11.18.0, which semantic-release uses on the release runner; dev-only
-      toolchain, not shipped.
+    - GHSA-r292-9mhp-454m (tar 7.5.20): bundled inside npm 11.18.0, which
+      semantic-release uses on the release runner; dev-only toolchain, not
+      shipped.
+    - GHSA-3g3m-2fjr-6pw4 (glob 13.0.6): inside npm 11.18's bundled tree, used
+      only by semantic-release on the release runner; the top-level glob is
+      patched.
+    - GHSA-g3hv-75wg-m249 (minimatch 10.2.x): inside npm's bundle and dev
+      tooling (`@npmcli/arborist`, `@opencode/util`); the fix is 11.x, a major
+      bump that arborist's `^10.0.3` blocks.
+    - GHSA-r3ph-w7gj-g6xm (js-yaml 5.2.2): dev-only, pinned `~5.2.1` by
+      markdownlint-cli; the shipped js-yaml is 4.3.2, outside the range.
+    - GHSA-238p-pmpm-9mq7 (katex 0.16.47): docs build and dev only; the fix
+      0.18.x is a 0.x minor that mermaid's `^0.16.45` and
+      micromark-extension-math's `^0.16.0` block. Re-check when mermaid moves
+      its katex range.
+    - GHSA-chp3-j5qr-2vfr (effect 4.0.0-beta.83): reached only through the
+      optional `@opencode-ai/plugin` host peer, which pins effect exactly; same
+      class as the toml entry. The plugin's `dist/` externalizes it.
     Report these under Security as accepted, with the advisory id. Do not log
     them under Needs Human Attention, do not count them toward the 3-report
     CONTINUITY escalation, and do not open a repair PR for them. Escalate
