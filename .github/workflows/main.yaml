@@ -253,28 +253,34 @@ jobs:
       - name: Build
         run: bun run build
 
-      # The v2 CLI needs its install scripts, so `bunx` cannot launch it. It is
-      # installed with `npm ci` from the committed lock in scripts/host-locks/,
-      # so every package is checked against an integrity hash (OpenSSF
-      # Scorecard, Pinned-Dependencies). The lock is generated from the pin file
-      # by `bun run host-locks:sync` (a generated surface that Renovate's postupgrade
-      # regenerates), and `surfaces:drift` and a unit test fail when they disagree. It goes into a local prefix and is
-      # called by absolute path: v1 and v2 both expose `opencode`, so neither is
-      # ever installed globally. npm 12 blocks install scripts unless told
-      # otherwise; an older npm runs them and does not know the flag, so the
-      # flag is passed only where it exists. A wrong or broken install fails
-      # here, with the CLI's own output, before any test.
+      # The v2 CLI is installed with `npm ci --ignore-scripts` from the lock in
+      # scripts/host-locks/ (generated from the pin file by `host-locks:sync`),
+      # so every package is hash-checked. Scripts stay off because the package's
+      # postinstall falls back to an unlocked `npm install` when the platform
+      # package is missing; the step runs the locked platform binary directly
+      # and fails if it is absent. It is called by absolute path because v1 and
+      # v2 both expose `opencode`.
       - name: Install the OpenCode v2 CLI at its pin
         id: opencode
         run: |
           pin="$(jq -r '.v2' scripts/opencode-host-pins.json)"
-          flags=(--no-audit --no-fund)
-          if (( $(npm --version | cut -d. -f1) >= 12 )); then
-            flags+=(--dangerously-allow-all-scripts)
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) platform="linux-x64" ;;
+            Linux-aarch64 | Linux-arm64) platform="linux-arm64" ;;
+            Darwin-arm64) platform="darwin-arm64" ;;
+            Darwin-x86_64) platform="darwin-x64" ;;
+            *)
+              echo "::error::No locked OpenCode v2 binary is mapped for $(uname -s)-$(uname -m)"
+              exit 1
+              ;;
+          esac
+          echo "installing the v2 CLI at ${pin} from scripts/host-locks/opencode-v2 (platform ${platform})"
+          npm ci --prefix "scripts/host-locks/opencode-v2" --ignore-scripts --no-audit --no-fund
+          bin="$PWD/scripts/host-locks/opencode-v2/node_modules/@opencode/cli-${platform}/bin/opencode"
+          if [[ ! -f "$bin" || ! -x "$bin" ]]; then
+            echo "::error::npm ci installed no executable at $bin (the locked @opencode/cli-${platform} package); nothing else is installed"
+            exit 1
           fi
-          echo "npm $(npm --version), installing the v2 CLI at ${pin} from scripts/host-locks/opencode-v2"
-          npm ci --prefix "scripts/host-locks/opencode-v2" "${flags[@]}"
-          bin="$PWD/scripts/host-locks/opencode-v2/node_modules/.bin/opencode"
           if ! reported="$("$bin" --version 2>&1)"; then
             echo "::error::$bin --version failed: $reported"
             exit 1

@@ -557,29 +557,38 @@ describe('host-contract workflow structural invariants', () => {
         expect(installRun()).toContain('echo "bin=$bin" >> "$GITHUB_OUTPUT"')
       })
 
-      test('installs from the committed lock into a local prefix with `npm ci`, never globally and never by package spec', () => {
+      test('installs from the committed lock with `npm ci --ignore-scripts`, never globally and never by package spec', () => {
         const run = installRun()
 
         expect(run).toContain("jq -r '.v2' scripts/opencode-host-pins.json")
         expect(run).toContain(
-          'npm ci --prefix "scripts/host-locks/opencode-v2"',
+          'npm ci --prefix "scripts/host-locks/opencode-v2" --ignore-scripts',
         )
         expect(run).not.toMatch(/npm (install|i|add)\b/)
         expect(run).not.toContain('@opencode/cli@')
         expect(run).not.toMatch(/npm \w+ (-g|--global)/)
         expect(run).not.toContain('bunx')
-        expect(run).not.toContain('--ignore-scripts')
+        expect(run).not.toContain('npx')
       })
 
-      test('passes the script-allowing flag only to an npm that has it', () => {
+      // The CLI's postinstall falls back to a fresh `npm install` of its platform
+      // package, outside the lock, and runs the result. Running no script keeps
+      // every executed byte tied to the lock's integrity hashes.
+      test('never lets the package postinstall run: no script-allowing flag, no version-gated flags', () => {
         const run = installRun()
 
-        expect(run).toContain('--dangerously-allow-all-scripts')
-        expect(run).toMatch(/npm --version \| cut -d\. -f1\) >= 12/)
-        const flagLine = run.indexOf('--dangerously-allow-all-scripts')
-        const guardLine = run.indexOf('>= 12')
-        expect(guardLine).toBeGreaterThan(-1)
-        expect(guardLine).toBeLessThan(flagLine)
+        expect(run).not.toContain('--dangerously-allow-all-scripts')
+        expect(run).not.toContain('npm --version')
+      })
+
+      test('runs the platform binary from the locked package, not the launcher in .bin', () => {
+        const run = installRun()
+
+        expect(run).toContain(
+          '"$PWD/scripts/host-locks/opencode-v2/node_modules/@opencode/cli-${platform}/bin/opencode"',
+        )
+        expect(run).not.toContain('.bin/opencode')
+        expect(run).not.toContain('opencode.exe')
       })
 
       test('fails with the CLI output when --version fails or differs from the pin', () => {
@@ -591,91 +600,162 @@ describe('host-contract workflow structural invariants', () => {
         expect(run).toContain('exit 1')
       })
 
-      test('its failure branches really exit non-zero (the step script run against a fake npm and CLI)', () => {
-        const jq = Bun.which('jq')
-        if (jq === null)
-          throw new Error('jq must be installed to run this test')
-        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-contract-npm-'))
-        try {
-          const binDir = path.join(dir, 'bin')
-          fs.mkdirSync(binDir)
-          // The step runs in a scratch checkout, so `npm ci` installs into its
-          // lock directory and not into this repository.
-          const cwd = fs.realpathSync(dir)
-          const lockDir = 'scripts/host-locks/opencode-v2'
-          fs.mkdirSync(path.join(cwd, 'scripts'), { recursive: true })
-          fs.copyFileSync(
-            path.join(REPO_ROOT, 'scripts/opencode-host-pins.json'),
-            path.join(cwd, 'scripts/opencode-host-pins.json'),
-          )
-          const cli = path.join(cwd, lockDir, 'node_modules/.bin/opencode')
-          const fakeNpm = [
-            '#!/bin/bash',
-            'if [[ "$1" == "--version" ]]; then echo "$FAKE_NPM_VERSION"; exit 0; fi',
-            `mkdir -p "$(dirname "${cli}")"`,
-            `cp "$FAKE_CLI_TEMPLATE" "${cli}"`,
-            `chmod +x "${cli}"`,
-            'echo "$@" > "$FAKE_NPM_ARGS"',
-          ].join('\n')
-          fs.writeFileSync(path.join(binDir, 'npm'), fakeNpm, { mode: 0o755 })
-          const pins: unknown = JSON.parse(
-            fs.readFileSync(
-              path.join(REPO_ROOT, 'scripts/opencode-host-pins.json'),
-              'utf8',
-            ),
-          )
-          const pin = String(asRecord(pins, 'pins').v2)
+      describe('the step script run against a fake npm and CLI', () => {
+        const LOCK_DIR = 'scripts/host-locks/opencode-v2'
+        /** Every platform the step maps, so the fake works on any dev host. */
+        const FAKE_PLATFORMS = [
+          'linux-x64',
+          'linux-arm64',
+          'darwin-arm64',
+          'darwin-x64',
+        ]
 
-          function install(
-            cliOutput: string,
-            cliExit: number,
-            npmVersion: string,
-          ) {
+        function hostPlatform(): string {
+          const os = process.platform
+          const arch = process.arch
+          const slug = `${os}-${arch}`
+          if (!FAKE_PLATFORMS.includes(slug)) {
+            throw new Error(`this test host (${slug}) has no platform mapping`)
+          }
+          return slug
+        }
+
+        /**
+         * Runs the install step in a scratch checkout. The fake `npm` records
+         * every call, always leaves the launcher stub the real package ships,
+         * and creates the platform binaries unless told not to.
+         */
+        function runInstall(options: {
+          cliOutput: string
+          cliExit: number
+          skipBinary?: boolean
+        }) {
+          const jq = Bun.which('jq')
+          if (jq === null)
+            throw new Error('jq must be installed to run this test')
+          const dir = fs.mkdtempSync(
+            path.join(os.tmpdir(), 'host-contract-npm-'),
+          )
+          try {
+            const binDir = path.join(dir, 'bin')
+            fs.mkdirSync(binDir)
+            const cwd = fs.realpathSync(dir)
+            fs.mkdirSync(path.join(cwd, 'scripts'), { recursive: true })
+            fs.copyFileSync(
+              path.join(REPO_ROOT, 'scripts/opencode-host-pins.json'),
+              path.join(cwd, 'scripts/opencode-host-pins.json'),
+            )
             const template = path.join(dir, 'cli-template')
             fs.writeFileSync(
               template,
-              `#!/bin/bash\necho "${cliOutput}"\nexit ${cliExit}\n`,
+              `#!/bin/bash\necho "${options.cliOutput}"\nexit ${options.cliExit}\n`,
             )
-            const npmArgs = path.join(dir, 'npm-args')
+            const npmLog = path.join(dir, 'npm-calls')
+            const fakeNpm = [
+              '#!/bin/bash',
+              'echo "$@" >> "$FAKE_NPM_LOG"',
+              `scope="$PWD/${LOCK_DIR}/node_modules/@opencode"`,
+              'mkdir -p "$scope/cli/bin"',
+              'printf \'#!/bin/bash\\necho postinstall was not run >&2\\nexit 1\\n\' > "$scope/cli/bin/opencode.exe"',
+              'chmod +x "$scope/cli/bin/opencode.exe"',
+              'if [[ -z "$FAKE_NPM_SKIP_BINARY" ]]; then',
+              `  for slug in ${FAKE_PLATFORMS.join(' ')}; do`,
+              '    mkdir -p "$scope/cli-$slug/bin"',
+              '    cp "$FAKE_CLI_TEMPLATE" "$scope/cli-$slug/bin/opencode"',
+              '    chmod +x "$scope/cli-$slug/bin/opencode"',
+              '  done',
+              'fi',
+            ].join('\n')
+            fs.writeFileSync(path.join(binDir, 'npm'), fakeNpm, {
+              mode: 0o755,
+            })
             const result = runStepScript(
               'host-contract-shard',
               INSTALL_STEP,
               {
                 RUNNER_TEMP: dir,
                 FAKE_CLI_TEMPLATE: template,
-                FAKE_NPM_VERSION: npmVersion,
-                FAKE_NPM_ARGS: npmArgs,
-                PATH: `${binDir}:${path.dirname(jq as string)}:/usr/bin:/bin`,
+                FAKE_NPM_LOG: npmLog,
+                ...(options.skipBinary ? { FAKE_NPM_SKIP_BINARY: '1' } : {}),
+                PATH: `${binDir}:${path.dirname(jq)}:/usr/bin:/bin`,
               },
               cwd,
             )
-            const args = fs.existsSync(npmArgs)
-              ? fs.readFileSync(npmArgs, 'utf8')
-              : ''
-            return { result, args }
+            const calls = fs.existsSync(npmLog)
+              ? fs.readFileSync(npmLog, 'utf8').trim().split('\n')
+              : []
+            return {
+              result,
+              calls,
+              binary: path.join(
+                cwd,
+                LOCK_DIR,
+                `node_modules/@opencode/cli-${hostPlatform()}/bin/opencode`,
+              ),
+            }
+          } finally {
+            fs.rmSync(dir, { recursive: true, force: true })
           }
-
-          const ok = install(`opencode v${pin}`, 0, '12.2.1')
-          expect(ok.result.exitCode).toBe(0)
-          expect(ok.result.outputs.bin).toBe(cli)
-          expect(ok.args).toContain('--dangerously-allow-all-scripts')
-          expect(ok.args).toContain(`ci --prefix ${lockDir}`)
-          expect(ok.args).not.toContain('@opencode/cli@')
-
-          const older = install(`opencode v${pin}`, 0, '11.4.2')
-          expect(older.result.exitCode).toBe(0)
-          expect(older.args).not.toContain('--dangerously-allow-all-scripts')
-
-          const wrong = install('opencode v0.0.0', 0, '12.2.1')
-          expect(wrong.result.exitCode).not.toBe(0)
-          expect(wrong.result.stdout).toContain('opencode v0.0.0')
-
-          const broken = install('placeholder failure text', 3, '12.2.1')
-          expect(broken.result.exitCode).not.toBe(0)
-          expect(broken.result.stdout).toContain('placeholder failure text')
-        } finally {
-          fs.rmSync(dir, { recursive: true, force: true })
         }
+
+        const pin = String(
+          asRecord(
+            JSON.parse(
+              fs.readFileSync(
+                path.join(REPO_ROOT, 'scripts/opencode-host-pins.json'),
+                'utf8',
+              ),
+            ),
+            'pins',
+          ).v2,
+        )
+
+        test('publishes the locked platform binary and makes one script-less `npm ci` call', () => {
+          const ok = runInstall({ cliOutput: `opencode v${pin}`, cliExit: 0 })
+
+          expect(ok.result.exitCode).toBe(0)
+          expect(ok.result.outputs.bin).toBe(ok.binary)
+          expect(ok.calls).toEqual([
+            `ci --prefix ${LOCK_DIR} --ignore-scripts --no-audit --no-fund`,
+          ])
+        })
+
+        test('fails, with no other install and no bin output, when npm ci installs no platform binary', () => {
+          const missing = runInstall({
+            cliOutput: `opencode v${pin}`,
+            cliExit: 0,
+            skipBinary: true,
+          })
+
+          expect(missing.result.exitCode).not.toBe(0)
+          expect(missing.result.outputs.bin).toBeUndefined()
+          expect(missing.result.stdout).toContain('::error::')
+          expect(missing.result.stdout).toContain('installed no executable')
+          expect(missing.result.stdout).toContain('@opencode/cli-')
+          // It stops on the missing binary; it never reaches the version check.
+          expect(missing.result.stdout).not.toContain('--version')
+          expect(missing.calls).toHaveLength(1)
+          expect(missing.calls[0]).toMatch(/^ci /)
+        })
+
+        test('fails when the CLI reports another version', () => {
+          const wrong = runInstall({ cliOutput: 'opencode v0.0.0', cliExit: 0 })
+
+          expect(wrong.result.exitCode).not.toBe(0)
+          expect(wrong.result.outputs.bin).toBeUndefined()
+          expect(wrong.result.stdout).toContain('opencode v0.0.0')
+        })
+
+        test('fails with the CLI output when --version exits non-zero', () => {
+          const broken = runInstall({
+            cliOutput: 'placeholder failure text',
+            cliExit: 3,
+          })
+
+          expect(broken.result.exitCode).not.toBe(0)
+          expect(broken.result.outputs.bin).toBeUndefined()
+          expect(broken.result.stdout).toContain('placeholder failure text')
+        })
       })
     })
 

@@ -21,6 +21,7 @@
 
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import {
   OPENCODE_CLI_PACKAGES,
@@ -35,6 +36,13 @@ export interface HostLock {
   readonly packageName: string
   /** The lock directory, relative to the repository root. */
   readonly dir: string
+  /**
+   * Platform binary packages the CI runners execute. The workflow runs
+   * `npm ci --ignore-scripts` and then the binary from one of these, so the
+   * lock must carry each with an integrity hash; a lock without one would
+   * leave the install with no binary. Same version as the CLI.
+   */
+  readonly platformPackages: readonly string[]
 }
 
 /**
@@ -47,6 +55,9 @@ export const HOST_LOCKS: readonly HostLock[] = [
     pinKey: 'v2',
     packageName: OPENCODE_CLI_PACKAGES.v2,
     dir: 'scripts/host-locks/opencode-v2',
+    // Every host-contract job runs on ubuntu-latest, an x64 runner. A test pins
+    // the runner and the step's platform mapping to this entry.
+    platformPackages: ['@opencode/cli-linux-x64'],
   },
 ]
 
@@ -87,6 +98,47 @@ export function renderManifest(lock: HostLock, version: string): string {
   return `${JSON.stringify(manifest, null, 2)}\n`
 }
 
+/** `sha512-` plus base64 that decodes to exactly 64 bytes, canonically encoded. */
+function isSha512Integrity(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  const match = /^sha512-([A-Za-z0-9+/]{86}==)$/.exec(value)
+  const encoded = match?.[1]
+  if (encoded === undefined) return false
+  const decoded = Buffer.from(encoded, 'base64')
+  return decoded.length === 64 && decoded.toString('base64') === encoded
+}
+
+/** What is wrong with one locked package entry, or `[]`. */
+function entryProblems(
+  where: string,
+  key: string,
+  entry: unknown,
+  expectedVersion: string | undefined,
+): string[] {
+  if (!isJsonObject(entry)) return [`${where}: ${key} is not an object`]
+  const problems: string[] = []
+  if (typeof entry.version !== 'string' || entry.version === '') {
+    problems.push(`${where}: ${key} has no version`)
+  } else if (
+    expectedVersion !== undefined &&
+    entry.version !== expectedVersion
+  ) {
+    problems.push(`${where}: ${key} must resolve to ${expectedVersion}`)
+  }
+  if (
+    typeof entry.resolved !== 'string' ||
+    !entry.resolved.startsWith(REGISTRY_PREFIX)
+  ) {
+    problems.push(`${where}: ${key} does not resolve to ${REGISTRY_PREFIX}`)
+  }
+  if (!isSha512Integrity(entry.integrity)) {
+    problems.push(
+      `${where}: ${key} has no valid sha512 integrity hash (64 bytes of base64 after "sha512-")`,
+    )
+  }
+  return problems
+}
+
 function lockProblems(lock: HostLock, version: string, content: JsonObject) {
   const problems: string[] = []
   const where = `${lock.dir}/${LOCK_FILE}`
@@ -114,27 +166,30 @@ function lockProblems(lock: HostLock, version: string, content: JsonObject) {
     )
   }
 
-  const cli = packages[`node_modules/${lock.packageName}`]
-  if (!isJsonObject(cli) || cli.version !== version) {
-    problems.push(
-      `${where}: node_modules/${lock.packageName} must resolve to ${version}`,
-    )
+  // The CLI and its runner platform packages must be present at the pin; every
+  // other entry only has to be well formed.
+  const required = new Set(
+    [lock.packageName, ...lock.platformPackages].map(
+      (name) => `node_modules/${name}`,
+    ),
+  )
+  for (const key of required) {
+    if (!(key in packages)) {
+      problems.push(
+        `${where}: ${key} is missing; the install would have no binary to run`,
+      )
+    }
   }
-
   for (const [key, entry] of Object.entries(packages)) {
-    if (key === '' || !isJsonObject(entry)) continue
-    if (
-      typeof entry.integrity !== 'string' ||
-      !entry.integrity.startsWith('sha512-')
-    ) {
-      problems.push(`${where}: ${key} has no sha512 integrity hash`)
-    }
-    if (
-      typeof entry.resolved !== 'string' ||
-      !entry.resolved.startsWith(REGISTRY_PREFIX)
-    ) {
-      problems.push(`${where}: ${key} does not resolve to ${REGISTRY_PREFIX}`)
-    }
+    if (key === '') continue
+    problems.push(
+      ...entryProblems(
+        where,
+        key,
+        entry,
+        required.has(key) ? version : undefined,
+      ),
+    )
   }
   return problems
 }
@@ -174,45 +229,70 @@ export function findLockProblems(
 }
 
 /**
- * Writes the manifest, then refreshes the lock when it no longer resolves the
- * pin. A lock that already agrees is left byte for byte, so a second run is a
- * no-op and needs no network. `--ignore-scripts` is safe here: it only
- * resolves metadata and records hashes, and the CLI's postinstall runs later,
- * in the workflow, under `npm ci`.
+ * Refreshes the manifest and lock for `version` when they disagree with it. A
+ * lock that already agrees is left alone, so a second run is a no-op and needs
+ * no network.
+ *
+ * The lock is built in a scratch directory and checked there, and only a
+ * result that passes every check replaces the committed files. A failed or
+ * incomplete npm run therefore never leaves a half-written lock behind. The
+ * scratch run starts with no lock, so a stale or malformed one cannot carry
+ * old resolutions forward; every package in this tree is pinned exactly.
+ * `--ignore-scripts` only skips the CLI's postinstall here, which resolving
+ * metadata never needed.
  */
 export function syncHostLock(
   rootDir: string,
   lock: HostLock,
   version: string,
 ): void {
-  const dir = path.join(rootDir, lock.dir)
-  fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(path.join(dir, MANIFEST_FILE), renderManifest(lock, version))
-
   if (findLockProblems(rootDir, lock, version).length === 0) return
 
-  const result = spawnSync(
-    'npm',
-    [
-      'install',
-      '--package-lock-only',
-      '--ignore-scripts',
-      '--no-audit',
-      '--no-fund',
-    ],
-    // `cwd` rather than `--prefix`: given a symlinked path (macOS /tmp), npm
-    // records the lock's paths relative to the link target and writes a lock
-    // `npm ci` rejects. The real path avoids that.
-    { cwd: fs.realpathSync(dir), stdio: 'inherit' },
+  // `realpath`: npm records a lock's paths relative to the link target when
+  // given a symlinked directory (macOS /tmp), and writes a lock `npm ci` rejects.
+  const staging = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'host-lock-')),
   )
-  if (result.status !== 0) {
-    throw new Error(`npm failed to refresh ${lock.dir}/${LOCK_FILE}`)
-  }
-  const remaining = findLockProblems(rootDir, lock, version)
-  if (remaining.length > 0) {
-    throw new Error(
-      `${lock.dir} still disagrees with the pin after npm ran:\n${remaining.join('\n')}`,
+  try {
+    const work = path.join(staging, lock.dir)
+    fs.mkdirSync(work, { recursive: true })
+    fs.writeFileSync(
+      path.join(work, MANIFEST_FILE),
+      renderManifest(lock, version),
     )
+
+    const result = spawnSync(
+      'npm',
+      [
+        'install',
+        '--package-lock-only',
+        '--ignore-scripts',
+        '--no-audit',
+        '--no-fund',
+      ],
+      { cwd: work, stdio: 'inherit' },
+    )
+    if (result.status !== 0) {
+      throw new Error(
+        `npm failed to refresh ${lock.dir}/${LOCK_FILE}; nothing was written`,
+      )
+    }
+    const problems = findLockProblems(staging, lock, version)
+    if (problems.length > 0) {
+      throw new Error(
+        `npm produced a lock that fails its checks; nothing was written:\n${problems.join('\n')}`,
+      )
+    }
+
+    const target = path.join(rootDir, lock.dir)
+    fs.mkdirSync(target, { recursive: true })
+    for (const file of [MANIFEST_FILE, LOCK_FILE]) {
+      const partial = path.join(target, `.${file}.tmp`)
+      fs.copyFileSync(path.join(work, file), partial)
+      fs.renameSync(partial, path.join(target, file))
+    }
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true })
   }
 }
 

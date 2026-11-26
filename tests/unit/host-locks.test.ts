@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -12,6 +12,7 @@ import {
   findLockProblems,
   HOST_LOCKS,
   type HostLock,
+  syncHostLock,
 } from '../../scripts/sync-host-locks.ts'
 
 /**
@@ -45,7 +46,12 @@ function copyLockDir(lock: HostLock): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'host-locks-'))
   const target = path.join(dir, lock.dir)
   fs.mkdirSync(target, { recursive: true })
-  fs.cpSync(path.join(REPO_ROOT, lock.dir), target, { recursive: true })
+  for (const file of ['package.json', 'package-lock.json']) {
+    fs.copyFileSync(
+      path.join(REPO_ROOT, lock.dir, file),
+      path.join(target, file),
+    )
+  }
   return dir
 }
 
@@ -130,6 +136,157 @@ describe.each(LOCKS)('host lock $dir', (lock) => {
       fs.rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  test('requires the platform package the host-contract runner installs', () => {
+    expect(lock.platformPackages).toContain('@opencode/cli-linux-x64')
+  })
+
+  test('is reported when only the runner platform entry is missing from the lock', () => {
+    const dir = copyLockDir(lock)
+    try {
+      const lockPath = path.join(dir, lock.dir, 'package-lock.json')
+      const content = readJson(lockPath) as {
+        packages: Record<string, unknown>
+      }
+      delete content.packages['node_modules/@opencode/cli-linux-x64']
+      fs.writeFileSync(lockPath, `${JSON.stringify(content, null, 2)}\n`)
+
+      // The manifest and the CLI entry still match the pin: only the platform
+      // entry is gone, and the offline check must say so by name.
+      const problems = findLockProblems(dir, lock, pinFor(lock))
+      expect(problems).toHaveLength(1)
+      expect(problems[0]).toContain('node_modules/@opencode/cli-linux-x64')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  const platformKey = 'node_modules/@opencode/cli-linux-x64'
+  const digest = (bytes: number) =>
+    `sha512-${Buffer.alloc(bytes, 7).toString('base64')}`
+
+  test.each([
+    ['a digest of 32 bytes', { integrity: digest(32) }],
+    ['a digest of 65 bytes', { integrity: digest(65) }],
+    [
+      'a sha1 digest',
+      { integrity: `sha1-${Buffer.alloc(20).toString('base64')}` },
+    ],
+    ['a digest that is not base64', { integrity: `sha512-${'!'.repeat(88)}` }],
+    ['a digest with trailing text', { integrity: `${digest(64)}x` }],
+    ['no integrity', { integrity: undefined }],
+    ['no resolved URL', { resolved: undefined }],
+    [
+      'a resolved URL outside the registry',
+      { resolved: 'https://example.com/x.tgz' },
+    ],
+    ['no version', { version: undefined }],
+    ['another version', { version: '9999.2.1' }],
+    ['a string instead of an object', 'oops'],
+    ['null', null],
+  ])('rejects a platform entry with %s', (_label, change) => {
+    const dir = copyLockDir(lock)
+    try {
+      const lockPath = path.join(dir, lock.dir, 'package-lock.json')
+      const content = readJson(lockPath) as {
+        packages: Record<string, unknown>
+      }
+      const entry = content.packages[platformKey]
+      content.packages[platformKey] =
+        typeof change === 'object' && change !== null
+          ? { ...(entry as object), ...change }
+          : change
+      fs.writeFileSync(lockPath, `${JSON.stringify(content, null, 2)}\n`)
+
+      const problems = findLockProblems(dir, lock, pinFor(lock))
+      expect(problems.length).toBeGreaterThan(0)
+      expect(problems.join('\n')).toContain(platformKey)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  describe('regeneration', () => {
+    let savedPath: string | undefined
+
+    function withFakeNpm(script: string): { dir: string; binDir: string } {
+      const dir = copyLockDir(lock)
+      const binDir = path.join(dir, 'fake-bin')
+      fs.mkdirSync(binDir)
+      fs.writeFileSync(path.join(binDir, 'npm'), script, { mode: 0o755 })
+      savedPath = process.env.PATH
+      process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
+      return { dir, binDir }
+    }
+
+    function snapshot(dir: string): Record<string, string> {
+      const target = path.join(dir, lock.dir)
+      return Object.fromEntries(
+        fs
+          .readdirSync(target)
+          .sort()
+          .map((name) => [
+            name,
+            fs.readFileSync(path.join(target, name), 'utf8'),
+          ]),
+      )
+    }
+
+    afterEach(() => {
+      if (savedPath !== undefined) process.env.PATH = savedPath
+      savedPath = undefined
+    })
+
+    test('leaves the existing lock untouched when npm fails', () => {
+      const { dir } = withFakeNpm('#!/bin/bash\necho boom >&2\nexit 1\n')
+      try {
+        const before = snapshot(dir)
+
+        expect(() => syncHostLock(dir, lock, '9999.2.1')).toThrow()
+        expect(snapshot(dir)).toEqual(before)
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
+    test('leaves the existing lock untouched when npm writes a lock without the platform entry', () => {
+      // A lock that resolves the CLI but lacks the runner's platform package is
+      // the incomplete result `npm ci` would turn into a launcher fallback.
+      const { dir } = withFakeNpm(
+        [
+          '#!/bin/bash',
+          'cat > package-lock.json <<EOF',
+          '{"lockfileVersion":3,"packages":{',
+          '"":{"dependencies":{"@opencode/cli":"9999.2.1"}},',
+          `"node_modules/@opencode/cli":{"version":"9999.2.1","resolved":"https://registry.npmjs.org/x.tgz","integrity":"${digest(64)}"}`,
+          '}}',
+          'EOF',
+        ].join('\n'),
+      )
+      try {
+        const before = snapshot(dir)
+
+        expect(() => syncHostLock(dir, lock, '9999.2.1')).toThrow(
+          /cli-linux-x64/,
+        )
+        expect(snapshot(dir)).toEqual(before)
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
+    test('does not call npm or write anything when the lock already agrees', () => {
+      const { dir } = withFakeNpm('#!/bin/bash\necho called >&2\nexit 1\n')
+      try {
+        const before = snapshot(dir)
+
+        expect(() => syncHostLock(dir, lock, pinFor(lock))).not.toThrow()
+        expect(snapshot(dir)).toEqual(before)
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    })
+  })
 })
 
 interface WorkflowStep {
@@ -202,7 +359,35 @@ describe('workflow installs of the host CLI', () => {
       const run = installs[0]?.run ?? ''
       expect(run).toContain(`npm ci --prefix "${lock.dir}"`)
       expect(run).not.toContain(`${lock.packageName}@`)
-      expect(run).not.toContain('--ignore-scripts')
+      expect(run).toContain('--ignore-scripts')
+      expect(run).not.toContain('--dangerously-allow-all-scripts')
+    },
+  )
+})
+
+describe('the runner platform package', () => {
+  test.each(LOCKS)(
+    'every host-contract job runs on ubuntu-latest, and the install step maps it to a package that $dir locks',
+    (lock) => {
+      const { JSON_SCHEMA } = yaml
+      const workflow = yaml.load(
+        fs.readFileSync(path.join(WORKFLOWS_DIR, 'main.yaml'), 'utf8'),
+        { schema: JSON_SCHEMA },
+      ) as { jobs: Record<string, { 'runs-on'?: string; steps?: unknown[] }> }
+      const hostJobs = Object.entries(workflow.jobs).filter(([id]) =>
+        id.startsWith('host-contract'),
+      )
+
+      expect(hostJobs.length).toBeGreaterThan(0)
+      for (const [, job] of hostJobs)
+        expect(job['runs-on']).toBe('ubuntu-latest')
+
+      const install = workflowRunSteps().find((step) =>
+        step.run.includes(lock.dir),
+      )
+      // `Linux-x86_64` is what `uname` prints on an ubuntu-latest runner.
+      expect(install?.run).toContain('Linux-x86_64) platform="linux-x64"')
+      expect(lock.platformPackages).toContain('@opencode/cli-linux-x64')
     },
   )
 })
