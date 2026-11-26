@@ -1267,10 +1267,12 @@ describe('Fro Bot autoheal strategies', () => {
       'Report these under Security as accepted',
       'Do not log them under Needs Human Attention',
       'do not open a repair PR',
-      'Escalate again only on new evidence',
+      'An accept covers only the versions and dependency paths listed; a copy of the same advisory anywhere else gets normal triage.',
+      'Resume normal triage for an accepted advisory on new evidence',
       'reaches a shipped artifact or a runtime dependency',
-      'report that advisory as resolved',
-      'a newer advisory appears',
+      'a newer advisory appears for the same package',
+      "a fixed version now fits the parents' declared ranges while the lockfile still selects an affected one",
+      'Report an advisory as resolved only once every installed copy is outside its range.',
     ])
   })
 
