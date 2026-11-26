@@ -259,8 +259,8 @@ function describeFailedRun(
 function missingBinaryReason(host: OpencodeHost, pin: string): string {
   return (
     `no ${host} binary configured: set ${opencodeBinaryEnvName(host)} to the absolute path of an installed ` +
-    `${OPENCODE_CLI_PACKAGES[host]}@${pin} (for v2: npm install --prefix <dir> ${OPENCODE_CLI_PACKAGES[host]}@${pin} --dangerously-allow-all-scripts, ` +
-    'then use <dir>/node_modules/.bin/opencode)'
+    `${OPENCODE_CLI_PACKAGES[host]}@${pin} (for v2: npm ci --prefix scripts/host-locks/opencode-v2 --ignore-scripts, ` +
+    'then use scripts/host-locks/opencode-v2/node_modules/@opencode/cli-<os>-<arch>/bin/opencode)'
   )
 }
 
