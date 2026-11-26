@@ -652,6 +652,25 @@ describe('probeOpencodeAvailability on the v2 host', () => {
     expect(classification.reason).toContain(`@opencode/cli@${SENTINEL_PIN}`)
   })
 
+  test('without a binary the v2 hint points at the locked platform binary, as CI installs it', () => {
+    const classification = probeOpencodeAvailability({
+      pin: SENTINEL_PIN,
+      host: 'v2',
+      env: { PATH: '' },
+      quiet: true,
+    })
+    expect(classification.reason).toContain(
+      'npm ci --prefix scripts/host-locks/opencode-v2 --ignore-scripts',
+    )
+    expect(classification.reason).toContain(
+      'scripts/host-locks/opencode-v2/node_modules/@opencode/cli-<os>-<arch>/bin/opencode',
+    )
+    expect(classification.reason).not.toContain(
+      '--dangerously-allow-all-scripts',
+    )
+    expect(classification.reason).not.toContain('.bin/opencode')
+  })
+
   test('a missing binary path classifies as unavailable', () => {
     const classification = probeOpencodeAvailability({
       pin: SENTINEL_PIN,
