@@ -4,7 +4,7 @@ Evidence registry: see [`HARNESSES.md`](../../../HARNESSES.md).
 
 | Capability | Mechanism | Status | Fallback |
 |---|---|---|---|
-| Subagent delegation | `subagent` tool; `agent` selects a specialist, `sessionID` continues a running or finished child; before 2.3.0, `background: true` runs it asynchronously | supported; from 2.3.0 every dispatch returns a handle and the answer arrives later as a `<subagent>` message; before that, foreground by default | Dispatch serially or in small batches |
+| Subagent delegation | `subagent` tool; `agent` selects a specialist, `sessionID` continues a running or finished child; before 2.3.0, `background: true` runs it asynchronously | supported; from 2.3.0 every dispatch returns a handle and the answer arrives later as a report (below); before that, foreground by default | Dispatch serially or in small batches |
 | Blocking user interaction | `question` tool | supported | Present numbered options in chat and wait |
 | Task tracking | `todowrite` tool | conditional: only offered when the host's experimental `todo` option is on | Maintain a visible task list in responses |
 | Skill loading | `systematic_skill` for bundled skills, with arguments; `skill` tool (by `id`) for non-Systematic skills | supported | Read the skill instructions listed by the active harness |
@@ -43,7 +43,7 @@ unless the user names a model.
 
 ### Dispatch results and continuation
 
-From 2.3.0, `subagent` returns immediately with a handle, not the child's answer: a `sessionID` and `status: "running"`. Record the `sessionID` at dispatch, against the task it was given. The answer arrives later as a report message that starts a new parent turn: `<background-result kind="subagent" sessionID="…" state="…">` from 2.4, `<subagent sessionID="…" state="…">` before, and the message body is the child's answer. Do not poll, sleep or dispatch the same work again while the child runs.
+From 2.3.0, `subagent` returns immediately with a handle, not the child's answer: a `sessionID` and `status: "running"`. Record the `sessionID` at dispatch, against the task it was given. The answer arrives later as a report message that starts a new parent turn: `<background-result kind="subagent" sessionID="…" state="…" …>` from 2.4, `<subagent sessionID="…" state="…" …>` before, and the message body is the child's answer. Do not poll, sleep or dispatch the same work again while the child runs.
 
 - `state="completed"` ends that round of work. `error` and `cancelled` are final failures. `state="running"` means the child went idle with background work still going: it is not final, so wait for the next report.
 - To follow up a running or finished child, call `subagent` again with its `sessionID`, plus `agent` (the specialist it was dispatched as), `description` and `prompt` (the follow-up only; the child keeps its context). The call returns a handle again and the reply arrives as another report. The `sessionID` must name a child of the current session.
