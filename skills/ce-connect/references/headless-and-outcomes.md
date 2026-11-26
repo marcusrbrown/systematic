@@ -82,6 +82,8 @@ Every run ends with exactly one of these lines as its last line. The reason and 
 
 Copy the final line from the helper's `finalLine` when `publish` answers. For every other stop, print the line from this table.
 
+To find out why a family degraded a run, look for its reply. When the skill wrote the stub for a family (its reply held no usable JSON object, or its delegate stopped, was aborted or failed), it saves that family's reply as `family-<n>.reply.txt` in the run's directory under `runs/`, at most 65536 characters, and a scheduled run uploads those files as the artifact `connect-failed-replies-<run>-<attempt>` for one day, only when every source still reads as public right before the upload. A good reply is never saved, and a run with no failed family has no such artifact. The file is untrusted model text, not a batch, and no helper step reads it.
+
 ## Sweep progress
 
 A run covers a slice of the rule index, not all of it. The helper offers at most `bounds.maxFamiliesPerRun` times `bounds.maxRulesPerFamily` rules. It offers first the rules never covered, or whose learning changed since they were covered, and then the least recently covered ones. Inside each group it takes the projects in turn, then paths, so a slice spans projects. The order depends only on the index and on what committed runs covered, so the runs in turn sweep the whole index and then start again with the oldest.
