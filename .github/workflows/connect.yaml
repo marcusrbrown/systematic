@@ -43,6 +43,10 @@ on:
         description: Whole minutes the agent step may run, below the run job's 50. Empty means 40.
         type: string
         required: false
+      trace-endpoint:
+        description: Full https URL of the run-tracing collector's traces route. Empty means tracing is off. Pair it with the FRO_BOT_TRACE_TOKEN secret.
+        type: string
+        required: false
     secrets:
       OPENCODE_AUTH_JSON:
         description: Provider credentials for the agent. Prepare fails red when it is empty.
@@ -50,6 +54,10 @@ on:
       OPENCODE_CONFIG:
         description: Operator OpenCode configuration for the agent. Prepare fails red when it is empty.
         required: true
+      FRO_BOT_TRACE_TOKEN:
+        description: >-
+          Bare trc_ token for the run-tracing collector (optional; when it is not passed, tracing is off for the run)
+        required: false
 
 permissions: {}
 
@@ -649,6 +657,10 @@ jobs:
           # A repeat run is never suppressed.
           dedup-window: "0"
           isolate-agent: "true"
+          # Tracing is on only when the caller passes an endpoint. The header is built here
+          # from the bare token; an unset token turns tracing off with a warning.
+          trace-endpoint: ${{ inputs.trace-endpoint }}
+          trace-headers: "${{ inputs.trace-endpoint != '' && format('Authorization: Bearer {0}', secrets.FRO_BOT_TRACE_TOKEN) || '' }}"
           # The helper's run record and ledger live in the connect layout, not the agent's own home.
           agent-state-home: ${{ github.workspace }}/connect/state
           # A fixed prompt: there is no change, issue or comment to route.

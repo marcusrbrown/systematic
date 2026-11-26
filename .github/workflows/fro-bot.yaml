@@ -61,6 +61,11 @@ on:
           same name.
         required: false
         type: string
+    secrets:
+      FRO_BOT_TRACE_TOKEN:
+        description: >-
+          Bare trc_ token for the run-tracing collector (optional; when it is not passed, tracing is off for the run)
+        required: false
 
 permissions:
   contents: read
@@ -923,6 +928,8 @@ jobs:
             }}
         with:
           isolate-agent: "true"
+          trace-endpoint: https://traces.fro.bot/marcusrbrown/v1/traces
+          trace-headers: "Authorization: Bearer ${{ secrets.FRO_BOT_TRACE_TOKEN }}"
           auth-json: ${{ secrets.OPENCODE_AUTH_JSON }}
           github-token: ${{ secrets.FRO_BOT_PAT }}
           trusted-head-sha: ${{ steps.prehead.outputs.sha }}
