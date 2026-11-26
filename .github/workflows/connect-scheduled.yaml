@@ -33,6 +33,8 @@ jobs:
       researcher-model: ${{ vars.FRO_BOT_CONNECT_MODEL }}
       variant: ${{ vars.FRO_BOT_CONNECT_VARIANT }}
       step-timeout-minutes: ${{ vars.FRO_BOT_CONNECT_STEP_TIMEOUT }}
+      trace-endpoint: https://traces.fro.bot/marcusrbrown/v1/traces
     secrets:
       OPENCODE_AUTH_JSON: ${{ secrets.OPENCODE_AUTH_JSON }}
       OPENCODE_CONFIG: ${{ secrets.OPENCODE_CONFIG }}
+      FRO_BOT_TRACE_TOKEN: ${{ secrets.FRO_BOT_TRACE_TOKEN }}

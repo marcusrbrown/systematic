@@ -274,6 +274,8 @@ describe('Fro Bot workflow contracts', () => {
       'opencode-config': `${EXPRESSION_PREFIX}{{ secrets.OPENCODE_CONFIG }}`,
       'github-token': `${EXPRESSION_PREFIX}{{ secrets.FRO_BOT_PAT }}`,
       prompt: `${EXPRESSION_PREFIX}{{ env.PROMPT }}`,
+      'trace-endpoint': 'https://traces.fro.bot/marcusrbrown/v1/traces',
+      'trace-headers': `Authorization: Bearer ${EXPRESSION_PREFIX}{{ secrets.FRO_BOT_TRACE_TOKEN }}`,
     })
     expect(asRecord(step.with, 'with')).not.toHaveProperty('timeout')
     expect(asRecord(step.env, 'env')).not.toHaveProperty(
