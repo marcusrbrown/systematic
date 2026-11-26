@@ -253,24 +253,28 @@ jobs:
       - name: Build
         run: bun run build
 
-      # The v2 CLI needs its install scripts, so `bunx` cannot launch it. It goes
-      # into a local prefix and is called by absolute path: v1 and v2 both
-      # expose `opencode`, so neither is ever installed globally. npm 12 blocks
-      # install scripts unless told otherwise; an older npm runs them and does
-      # not know the flag, so the flag is passed only where it exists. A wrong or
-      # broken install fails here, with the CLI's own output, before any test.
+      # The v2 CLI needs its install scripts, so `bunx` cannot launch it. It is
+      # installed with `npm ci` from the committed lock in scripts/host-locks/,
+      # so every package is checked against an integrity hash (OpenSSF
+      # Scorecard, Pinned-Dependencies). The lock is generated from the pin file
+      # by `bun run host-locks:sync` (a generated surface that Renovate's postupgrade
+      # regenerates), and `surfaces:drift` and a unit test fail when they disagree. It goes into a local prefix and is
+      # called by absolute path: v1 and v2 both expose `opencode`, so neither is
+      # ever installed globally. npm 12 blocks install scripts unless told
+      # otherwise; an older npm runs them and does not know the flag, so the
+      # flag is passed only where it exists. A wrong or broken install fails
+      # here, with the CLI's own output, before any test.
       - name: Install the OpenCode v2 CLI at its pin
         id: opencode
         run: |
           pin="$(jq -r '.v2' scripts/opencode-host-pins.json)"
-          prefix="$RUNNER_TEMP/opencode-v2"
           flags=(--no-audit --no-fund)
           if (( $(npm --version | cut -d. -f1) >= 12 )); then
             flags+=(--dangerously-allow-all-scripts)
           fi
-          echo "npm $(npm --version), installing @opencode/cli@${pin} into $prefix"
-          npm install --prefix "$prefix" "@opencode/cli@${pin}" "${flags[@]}"
-          bin="$prefix/node_modules/.bin/opencode"
+          echo "npm $(npm --version), installing the v2 CLI at ${pin} from scripts/host-locks/opencode-v2"
+          npm ci --prefix "scripts/host-locks/opencode-v2" "${flags[@]}"
+          bin="$PWD/scripts/host-locks/opencode-v2/node_modules/.bin/opencode"
           if ! reported="$("$bin" --version 2>&1)"; then
             echo "::error::$bin --version failed: $reported"
             exit 1

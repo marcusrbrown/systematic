@@ -211,6 +211,22 @@ export const GENERATED_SURFACES: readonly GeneratedSurface[] = [
       'agents/**/*.md',
     ],
   },
+  {
+    // The npm lock the host-contract job installs the v2 CLI from. The pin file
+    // is the only input; a stale lock is the failure `npm ci` would hit.
+    name: 'host-locks',
+    regenScript: 'host-locks:sync',
+    checkScript: 'host-locks:check',
+    outputs: [
+      'scripts/host-locks/opencode-v2/package.json',
+      'scripts/host-locks/opencode-v2/package-lock.json',
+    ],
+    triggers: [
+      'scripts/sync-host-locks.ts',
+      'scripts/lib/opencode-pin.ts',
+      'scripts/opencode-host-pins.json',
+    ],
+  },
 ]
 
 // ── Globs ───────────────────────────────────────────────────────────────────

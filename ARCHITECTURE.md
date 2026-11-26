@@ -800,3 +800,6 @@ Refresh the timings file from the final green run's shard JUnit times when the f
 status check in the `main` ruleset and classic branch protection, so a red run blocks the merge;
 evidence gathered at one pinned OpenCode version is not evidence at another, so a Renovate OpenCode
 bump is only complete when this check is green on that bump.
+The v2 CLI is installed with `npm ci` from the committed lock in `scripts/host-locks/opencode-v2/`, which
+`scripts/sync-host-locks.ts` generates from the v2 pin (the `host-locks` generated surface, which Renovate's postupgrade regenerates); the v1 jobs launch
+through `bunx` and have no lock. `tests/unit/host-locks.test.ts` fails when a lock and the pin file disagree.

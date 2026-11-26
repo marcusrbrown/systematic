@@ -224,6 +224,8 @@ const HOST_CONTRACT_RUNTIME_INPUTS: readonly string[] = [
   'scripts/host-contract-guard.ts',
   'scripts/build-pi-package-agents.ts',
   'scripts/opencode-host-pins.json',
+  'scripts/host-locks/opencode-v2/package.json',
+  'scripts/host-locks/opencode-v2/package-lock.json',
   'scripts/dispatch-release-notes.sh',
   'scripts/validate-release-target.sh',
   'tests/setup.ts',
@@ -555,13 +557,16 @@ describe('host-contract workflow structural invariants', () => {
         expect(installRun()).toContain('echo "bin=$bin" >> "$GITHUB_OUTPUT"')
       })
 
-      test('installs the pinned version from the pin file into a local prefix, never globally', () => {
+      test('installs from the committed lock into a local prefix with `npm ci`, never globally and never by package spec', () => {
         const run = installRun()
 
         expect(run).toContain("jq -r '.v2' scripts/opencode-host-pins.json")
-        expect(run).toContain('npm install --prefix "$prefix"')
-        expect(run).toContain(`"@opencode/cli@${shVar('pin')}"`)
-        expect(run).not.toMatch(/npm (install|i) (-g|--global)/)
+        expect(run).toContain(
+          'npm ci --prefix "scripts/host-locks/opencode-v2"',
+        )
+        expect(run).not.toMatch(/npm (install|i|add)\b/)
+        expect(run).not.toContain('@opencode/cli@')
+        expect(run).not.toMatch(/npm \w+ (-g|--global)/)
         expect(run).not.toContain('bunx')
         expect(run).not.toContain('--ignore-scripts')
       })
@@ -594,7 +599,16 @@ describe('host-contract workflow structural invariants', () => {
         try {
           const binDir = path.join(dir, 'bin')
           fs.mkdirSync(binDir)
-          const cli = path.join(dir, 'opencode-v2/node_modules/.bin/opencode')
+          // The step runs in a scratch checkout, so `npm ci` installs into its
+          // lock directory and not into this repository.
+          const cwd = fs.realpathSync(dir)
+          const lockDir = 'scripts/host-locks/opencode-v2'
+          fs.mkdirSync(path.join(cwd, 'scripts'), { recursive: true })
+          fs.copyFileSync(
+            path.join(REPO_ROOT, 'scripts/opencode-host-pins.json'),
+            path.join(cwd, 'scripts/opencode-host-pins.json'),
+          )
+          const cli = path.join(cwd, lockDir, 'node_modules/.bin/opencode')
           const fakeNpm = [
             '#!/bin/bash',
             'if [[ "$1" == "--version" ]]; then echo "$FAKE_NPM_VERSION"; exit 0; fi',
@@ -633,7 +647,7 @@ describe('host-contract workflow structural invariants', () => {
                 FAKE_NPM_ARGS: npmArgs,
                 PATH: `${binDir}:${path.dirname(jq as string)}:/usr/bin:/bin`,
               },
-              REPO_ROOT,
+              cwd,
             )
             const args = fs.existsSync(npmArgs)
               ? fs.readFileSync(npmArgs, 'utf8')
@@ -645,7 +659,8 @@ describe('host-contract workflow structural invariants', () => {
           expect(ok.result.exitCode).toBe(0)
           expect(ok.result.outputs.bin).toBe(cli)
           expect(ok.args).toContain('--dangerously-allow-all-scripts')
-          expect(ok.args).toContain(`@opencode/cli@${pin}`)
+          expect(ok.args).toContain(`ci --prefix ${lockDir}`)
+          expect(ok.args).not.toContain('@opencode/cli@')
 
           const older = install(`opencode v${pin}`, 0, '11.4.2')
           expect(older.result.exitCode).toBe(0)

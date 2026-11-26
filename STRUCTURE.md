@@ -172,6 +172,10 @@ checks behind `bun run surfaces:drift`.
   unexpected test skip, a listed exempt skip that went missing, a listed integration suite file
   that produced no results in any shard, an unreadable report, or a summed pass count under
   `PASS_FLOOR`; invoked directly in `.github/workflows/main.yaml`, not via a `bun run` script
+- `scripts/sync-host-locks.ts` — keeps the npm lockfile under `scripts/host-locks/opencode-v2/` in step with the
+  v2 pin in `scripts/opencode-host-pins.json`, so the host-contract job installs the v2 CLI with a hash-pinned
+  `npm ci` (OpenSSF Scorecard, Pinned-Dependencies); `bun run host-locks:sync` rewrites the lock (the `host-locks` generated surface, so
+  `bun run postupgrade` runs it on every Renovate bump), and `--check` (`bun run host-locks:check`) is the offline drift check
 - `scripts/generate-registry.ts` — regenerates `registry/registry.jsonc` from skill/agent frontmatter
   (source of truth); pass `--check` for drift detection (`bun run registry:drift`)
 - `scripts/build-registry.ts` — builds the OCX registry output packument from `registry/registry.jsonc`;
@@ -204,7 +208,7 @@ checks behind `bun run surfaces:drift`.
 - `scripts/generated-surfaces.ts` — CLI behind `bun run surfaces:regen`, `surfaces:drift` and
   `surfaces:affected` (`--run` regenerates the matched surfaces, then checks them); CI runs
   `surfaces:drift` as its one drift step
-- `scripts/lib/generated-surfaces.ts` — the ordered list of the eight committed generated surfaces
+- `scripts/lib/generated-surfaces.ts` — the ordered list of the nine committed generated surfaces
   (outputs, triggers, regenerate and check scripts) plus the closure, glob and git change-set logic
 - `scripts/lib/`, `scripts/eval-cases/` — shared helpers and eval case definitions consumed by
   `run-evals.ts`
