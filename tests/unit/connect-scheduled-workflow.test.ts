@@ -82,6 +82,11 @@ const EXPECTED_INPUT_VARIABLES: Readonly<Record<string, string>> = {
   'step-timeout-minutes': 'FRO_BOT_CONNECT_STEP_TIMEOUT',
 }
 
+/** Inputs the wrapper sets to a fixed value: the collector's route for this repository's group. */
+const EXPECTED_LITERAL_INPUTS: Readonly<Record<string, string>> = {
+  'trace-endpoint': 'https://traces.fro.bot/marcusrbrown/v1/traces',
+}
+
 describe('connect-scheduled wrapper triggers', () => {
   it('runs on the one daily cron and on manual dispatch, and on nothing else', () => {
     const on = asRecord(WRAPPER.on, 'on')
@@ -133,10 +138,16 @@ describe('connect-scheduled wrapper call', () => {
   it('reads each input from its repository variable as a bare reference', () => {
     const inputs = asRecord(callJob().with, 'with')
     expect(Object.keys(inputs).sort()).toEqual(
-      Object.keys(EXPECTED_INPUT_VARIABLES).sort(),
+      [
+        ...Object.keys(EXPECTED_INPUT_VARIABLES),
+        ...Object.keys(EXPECTED_LITERAL_INPUTS),
+      ].sort(),
     )
     for (const [input, variable] of Object.entries(EXPECTED_INPUT_VARIABLES)) {
       expect(inputs[input]).toBe(`\${{ vars.${variable} }}`)
+    }
+    for (const [input, value] of Object.entries(EXPECTED_LITERAL_INPUTS)) {
+      expect(inputs[input]).toBe(value)
     }
   })
 

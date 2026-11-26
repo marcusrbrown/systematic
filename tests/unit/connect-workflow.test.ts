@@ -107,8 +107,16 @@ const STEP_TIMEOUT_EXPRESSION =
   "${{ fromJSON(inputs.step-timeout-minutes || '40') }}"
 /** The inputs a caller supplies, and which of them it must. */
 const REQUIRED_INPUTS = ['parent-model', 'projects', 'researcher-model']
-const OPTIONAL_INPUTS = ['step-timeout-minutes', 'variant']
-const SECRET_NAMES = ['OPENCODE_AUTH_JSON', 'OPENCODE_CONFIG']
+const OPTIONAL_INPUTS = ['step-timeout-minutes', 'trace-endpoint', 'variant']
+const SECRET_NAMES = [
+  'FRO_BOT_TRACE_TOKEN',
+  'OPENCODE_AUTH_JSON',
+  'OPENCODE_CONFIG',
+]
+/** Optional secret: without it tracing is off for the run. */
+const OPTIONAL_SECRETS = ['FRO_BOT_TRACE_TOKEN']
+/** Read only by the agent step, which builds the tracing settings from it. */
+const AGENT_ONLY_INPUTS = ['trace-endpoint']
 
 // ── Structure ───────────────────────────────────────────────────────────────
 
@@ -118,7 +126,7 @@ describe('connect workflow structure', () => {
     expect(Object.keys(on)).toEqual(['workflow_call'])
   })
 
-  it('declares the caller inputs as strings: three required, two optional', () => {
+  it('declares the caller inputs as strings: three required, three optional', () => {
     const call = asRecord(asRecord(WORKFLOW.on, 'on').workflow_call, 'call')
     const inputs = asRecord(call.inputs, 'inputs')
     expect(Object.keys(inputs).sort()).toEqual(
@@ -135,12 +143,14 @@ describe('connect workflow structure', () => {
     }
   })
 
-  it('declares the two provider secrets by name and no other', () => {
+  it('declares the two provider secrets and the optional trace token by name and no other', () => {
     const call = asRecord(asRecord(WORKFLOW.on, 'on').workflow_call, 'call')
     const secrets = asRecord(call.secrets, 'secrets')
     expect(Object.keys(secrets).sort()).toEqual([...SECRET_NAMES].sort())
     for (const [name, value] of Object.entries(secrets)) {
-      expect(asRecord(value, name).required).toBe(true)
+      expect(asRecord(value, name).required).toBe(
+        !OPTIONAL_SECRETS.includes(name),
+      )
     }
   })
 
@@ -281,7 +291,11 @@ describe('connect workflow structure', () => {
       'config env',
     )
     expect(Object.values(env)).toEqual(
-      expect.arrayContaining(declared.map((name) => `\${{ inputs.${name} }}`)),
+      expect.arrayContaining(
+        declared
+          .filter((name) => !AGENT_ONLY_INPUTS.includes(name))
+          .map((name) => `\${{ inputs.${name} }}`),
+      ),
     )
     const agentOnly = stepsOf('run')
       .filter((step) => step.name !== 'Run ce:connect')
@@ -337,6 +351,8 @@ describe('connect workflow credentials', () => {
     expect(action['auth-json']).toBe('${{ secrets.OPENCODE_AUTH_JSON }}')
     expect(action['opencode-config']).toBe('${{ secrets.OPENCODE_CONFIG }}')
     expect(SOURCE.match(/secrets\.[A-Z_]+[^}]*/g)?.sort()).toEqual([
+      // Only a bare token, and only inside the trace header the step builds.
+      "secrets.FRO_BOT_TRACE_TOKEN) || '' ",
       'secrets.OPENCODE_AUTH_JSON ',
       "secrets.OPENCODE_AUTH_JSON != '' ",
       'secrets.OPENCODE_CONFIG ',
@@ -478,6 +494,8 @@ const SHARED_OPTIONAL_DEFAULTS: Readonly<Record<string, string>> = {
   'repo-skills': 'true',
   'response-mode': 'github',
   'systematic-version': '',
+  'trace-endpoint': '',
+  'trace-headers': '',
   'trusted-head-sha': '',
 }
 
@@ -656,6 +674,11 @@ describe('the shared fro-bot agent action', () => {
       'isolate-agent': 'true',
       // The helper's run record and ledger live in the connect layout.
       'agent-state-home': '${{ github.workspace }}/connect/state',
+      // Tracing is on only when the caller passes an endpoint; the header
+      // is built from the bare token and is empty without an endpoint.
+      'trace-endpoint': '${{ inputs.trace-endpoint }}',
+      'trace-headers':
+        "${{ inputs.trace-endpoint != '' && format('Authorization: Bearer {0}', secrets.FRO_BOT_TRACE_TOKEN) || '' }}",
     })
     expect(connectStep()).not.toHaveProperty('env')
   })
@@ -730,7 +753,9 @@ describe('connect workflow injection and artifacts', () => {
       stepNamed('prepare', 'Validate configuration').env,
       'config env',
     )
-    for (const name of [...REQUIRED_INPUTS, ...OPTIONAL_INPUTS]) {
+    for (const name of [...REQUIRED_INPUTS, ...OPTIONAL_INPUTS].filter(
+      (input) => !AGENT_ONLY_INPUTS.includes(input),
+    )) {
       expect(Object.values(config)).toContain(`\${{ inputs.${name} }}`)
     }
   })

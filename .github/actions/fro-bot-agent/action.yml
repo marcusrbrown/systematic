@@ -56,6 +56,14 @@ inputs:
     description: Load the repository's .agents/skills from the default branch on trusted runs, true or false.
     required: false
     default: "true"
+  trace-endpoint:
+    description: Full https URL of the run-tracing collector's traces route. Empty leaves tracing off.
+    required: false
+    default: ""
+  trace-headers:
+    description: "Collector credential for trace-endpoint, one Name: value header per line. Empty sends spans with no credential."
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -79,6 +87,8 @@ runs:
         isolate-agent: ${{ inputs.isolate-agent }}
         agent-state-home: ${{ inputs.agent-state-home }}
         repo-skills: ${{ inputs.repo-skills }}
+        trace-endpoint: ${{ inputs.trace-endpoint }}
+        trace-headers: ${{ inputs.trace-headers }}
         # The action's own runtime is unbounded; each caller bounds the step or
         # the job instead.
         timeout: 0

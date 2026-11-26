@@ -600,8 +600,9 @@ Work through this list once.
    | `researcher-model` | Yes | None. `provider/model` for `connections-researcher`. |
    | `variant` | No | Empty, which means none. |
    | `step-timeout-minutes` | No | Empty, which means 40. A whole number below 50. |
+   | `trace-endpoint` | No | Empty, which means run tracing is off. The full `https` URL of your OTLP collector's traces route. |
 
-   Both secrets are required: `OPENCODE_AUTH_JSON` and `OPENCODE_CONFIG`. The first job fails red when either is empty.
+   Both secrets are required: `OPENCODE_AUTH_JSON` and `OPENCODE_CONFIG`. The first job fails red when either is empty. A third, `FRO_BOT_TRACE_TOKEN`, is optional: the bare token for the collector in `trace-endpoint`. When the endpoint is set without the token, tracing is off for the run.
 7. **Renovate, in the calling repository.** Renovate's `github-actions` manager bumps a SHA pin and its `# vX.Y.Z` comment on its own. The pinned workflow runs with your provider credential, so a person should review each bump, and merge it only after that release's GitHub Release exists. Disable automerge for it, and put the rule after any preset that sets automerge for that manager, because a later rule wins:
 
    ```json5
