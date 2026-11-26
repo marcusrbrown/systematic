@@ -1124,6 +1124,43 @@ describe('Fro Bot rotating daily report issue', () => {
     ])
   })
 
+  test('accepts the CI Docs Build as docs evidence when docs:verify cannot provision Playwright', () => {
+    const prompt = autohealPromptText()
+    const start = prompt.indexOf('DOCS EVIDENCE:')
+    expect(start).toBeGreaterThan(prompt.indexOf('g. `bun run docs:verify`'))
+    expect(start).toBeLessThan(prompt.indexOf('For each failing gate:'))
+
+    const paragraph = prompt.slice(
+      start,
+      prompt.indexOf('For each failing gate:'),
+    )
+    expectPromptFragments(paragraph, [
+      '`playwright install --with-deps chromium`',
+      'Use CI evidence only when that install fails with a privilege or elevation denial in its output',
+      'Any other install error is a real failure.',
+      'install the browser alone with `bun run --cwd docs playwright install chromium` (no `--with-deps`)',
+      'into a writable browser cache that the build also reads',
+      'then run `bun run docs:build` locally; if either fails, report that failure as usual.',
+      'If the build passes, find the `main.yaml` run',
+      'find the `main.yaml` run for the exact commit under review',
+      '`gh run view <run-id> --json jobs`',
+      'Only a `Docs Build` job that completed with conclusion `success` counts',
+      'docs:verify not runnable in isolation; CI Docs Build for <sha> passed',
+      'do not log it under Needs Human Attention or count it toward the 3-report CONTINUITY escalation.',
+      'If that job failed, is missing, or is still pending, the gate is not verified: report ❌ and raise it as usual.',
+    ])
+    expect(paragraph).not.toContain('dependency-provisioning step')
+    const flat = paragraph.replace(/\s+/g, ' ')
+    expect(flat.indexOf('install the browser alone')).toBeLessThan(
+      flat.indexOf('then run `bun run docs:build` locally'),
+    )
+    expect(
+      flat.indexOf('if either fails, report that failure as usual'),
+    ).toBeLessThan(
+      flat.indexOf('If the build passes, find the `main.yaml` run'),
+    )
+  })
+
   test('drops the perpetual-issue model', () => {
     const prompt = autohealPromptText()
 
