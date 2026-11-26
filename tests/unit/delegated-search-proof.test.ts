@@ -16,6 +16,7 @@ import {
   evaluateDelegatedSearchProof,
   hasResearcherSystemMarker,
   isSubagentLaunch,
+  isSubagentReport,
   PARENT_FINAL_MARKER,
   parentResultTextOf,
   plantDelegatedExternalFixture,
@@ -948,6 +949,41 @@ describe('background subagent readers', () => {
       'working in the background',
     )
     expect(parentResultTextOf(parentFirst())).toBeUndefined()
+  })
+
+  // 2.4 renders the same report as a `<background-result kind="subagent">`
+  // block (anomalyco/opencode `session/background-result.ts`), and the launch
+  // handle names it. The block is how a parent is woken on a 2.4 host.
+  test('a 2.4 <background-result kind="subagent"> report is the result that woke the parent', () => {
+    const report = `<background-result kind="subagent" sessionID="ses_child" state="completed" description="Search past solutions">\nCHILD-FOUND x\n</background-result>`
+    const woken = request(
+      [
+        { role: 'system', content: 'You are the host.' },
+        { role: 'user', content: 'dispatch' },
+        { role: 'assistant', content: '' },
+        { role: 'tool', content: LAUNCH_HANDLE },
+        { role: 'assistant', content: 'PARENT-WAITING' },
+        { role: 'user', content: report },
+      ],
+      ['subagent', SEARCH_TOOL],
+    )
+
+    expect(parentResultTextOf(woken)).toBe(report)
+    expect(isSubagentReport(report)).toBe(true)
+    expect(
+      isSubagentReport(report, { sessionID: 'ses_child', state: 'completed' }),
+    ).toBe(true)
+    expect(isSubagentReport(report, { sessionID: 'ses_other' })).toBe(false)
+    expect(isSubagentReport(report, { state: 'error' })).toBe(false)
+    expect(isSubagentReport(subagentReport('x'))).toBe(true)
+  })
+
+  test('another background-result kind is not a subagent report', () => {
+    expect(
+      isSubagentReport(
+        '<background-result kind="shell" id="job_1" state="completed">\nx\n</background-result>',
+      ),
+    ).toBe(false)
   })
 
   test('a user message that only mentions <subagent> is not a report', () => {

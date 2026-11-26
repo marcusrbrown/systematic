@@ -53,6 +53,7 @@ import {
   evaluateDelegatedSearchProof,
   hasResearcherSystemMarker,
   isSubagentLaunch,
+  isSubagentReport,
   lastUserTextOf,
   PARENT_FINAL_MARKER,
   plantDelegatedExternalFixture,
@@ -2976,7 +2977,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
                 messageText(message).includes('@@TOOL'),
             )
           const isReportTurn = (turn: ChatRequestBody) =>
-            lastUserText(turn).trimStart().startsWith('<subagent')
+            isSubagentReport(lastUserText(turn))
           const afterToolResult = () =>
             toolModel.turns.find(
               (turn) => roleOf(turn.messages?.at(-1)) === 'tool',
@@ -3104,8 +3105,11 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
             occurrences(systemText(second), '<SYSTEMATIC_WORKFLOWS>'),
           ).toBe(1)
           // The same value put again is no change: no update notice anywhere.
+          // A notice is a `<system-update>` block, the tag followed by a newline.
+          // The host's own system prompt names the tag in prose from 2.4 ("`<system-update>` blocks are
+          // harness instructions"), so the bare tag text is not a notice.
           for (const message of second.messages ?? []) {
-            expect(messageText(message)).not.toContain('<system-update>')
+            expect(messageText(message)).not.toMatch(/<system-update>\r?\n/)
           }
           expect(await entryKeys(host, sessionID)).toEqual([BOOTSTRAP_KEY])
         } finally {
@@ -3131,7 +3135,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       'Session reuse is disabled in this environment. Start a new task and include the context it needs.'
     const SESSION_ID_IN_TEXT = /sessionID[=:"\s]+(ses_[A-Za-z0-9]+)/
 
-    /** The text of every `<subagent>` report the host put in the parent's context. */
+    /** The text of every subagent report the host put in the parent's context. */
     function reportTexts(
       messages: readonly { type: string; text?: unknown }[],
     ): string[] {
@@ -3300,7 +3304,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           expect(history).toContain(CHILD_ANSWER_ONE)
           expect(lastUserText(roundTwo ?? {})).toContain(CHILD_ROUND_TWO)
 
-          // Its new reply reached the parent as one final `<subagent>` report
+          // Its new reply reached the parent as one final subagent report
           // from the same child session. The recorded child id, the
           // `completed` state and the second answer sit in that one message:
           // round one's completed report carries the same id and state, so
@@ -3312,9 +3316,13 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           const secondReport = reports.find((text) =>
             text.includes(CHILD_ANSWER_TWO),
           )
-          expect(secondReport).toStartWith(
-            `<subagent sessionID="${followUp?.sessionID}" state="completed"`,
-          )
+          expect(
+            isSubagentReport(secondReport ?? '', {
+              sessionID: String(followUp?.sessionID),
+              state: 'completed',
+            }),
+            `the second answer is in a completed report of ${followUp?.sessionID}: ${secondReport}`,
+          ).toBe(true)
         } finally {
           model.stop()
           await host.server.stop()

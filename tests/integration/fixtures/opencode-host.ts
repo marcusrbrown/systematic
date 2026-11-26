@@ -1269,6 +1269,21 @@ const SERVER_READINESS_PATH = {
   v2: '/api/info',
 } as const satisfies Record<OpencodeHost, string>
 
+/** The startup error for a server that is not ready: the reason and the redacted tail of its output. */
+function serverStartError(
+  reason: string,
+  announcement: ServerAnnouncement,
+  output: () => string,
+): Error {
+  let tail = redactSensitive(output().slice(-500))
+  if (announcement.password !== undefined) {
+    tail = tail.replaceAll(announcement.password, '[REDACTED]')
+  }
+  return new Error(
+    `OpenCode server did not become ready: ${reason}\n--- output (tail) ---\n${tail}`,
+  )
+}
+
 /**
  * Resolves once the announced server answers one real request, and rejects with
  * a startup error that carries the server's captured output when it does not.
@@ -1284,15 +1299,8 @@ export async function awaitServerReady(options: {
   fetchImpl?: typeof fetch
 }): Promise<void> {
   const { announcement, host, budgetMs, output, fetchImpl = fetch } = options
-  const fail = (reason: string): Error => {
-    let tail = redactSensitive(output().slice(-500))
-    if (announcement.password !== undefined) {
-      tail = tail.replaceAll(announcement.password, '[REDACTED]')
-    }
-    return new Error(
-      `OpenCode server did not become ready: ${reason}\n--- output (tail) ---\n${tail}`,
-    )
-  }
+  const fail = (reason: string): Error =>
+    serverStartError(reason, announcement, output)
 
   if (budgetMs <= 0) {
     throw fail('the startup budget ended before the readiness request')
@@ -1317,15 +1325,182 @@ export async function awaitServerReady(options: {
   }
 }
 
+/** A plugin's activation state as `GET /api/plugin` reports it. */
+type PluginActivation = 'active' | 'failed' | 'pending' | 'absent'
+
+const PLUGIN_POLL_INTERVAL_MS = 50
+// One plugin request may not eat the whole budget; the loop retries within it.
+const PLUGIN_REQUEST_TIMEOUT_MS = 5_000
+
+/**
+ * Reads the plugin list out of a `GET /api/plugin` body, `{ data: Plugin.Info[] }`
+ * with each entry's state under `state.status`. Null when the body has no list.
+ * Ids and statuses only: a failed plugin's `state.error` carries paths and a
+ * stack, and never leaves this function.
+ */
+function parsePluginActivations(
+  body: unknown,
+): Map<string, PluginActivation> | null {
+  if (typeof body !== 'object' || body === null) return null
+  const data = (body as { data?: unknown }).data
+  if (!Array.isArray(data)) return null
+  const activations = new Map<string, PluginActivation>()
+  for (const entry of data as unknown[]) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const { id, state } = entry as { id?: unknown; state?: unknown }
+    if (typeof id !== 'string') continue
+    const status =
+      typeof state === 'object' && state !== null
+        ? (state as { status?: unknown }).status
+        : undefined
+    activations.set(
+      id,
+      status === 'active' || status === 'failed' ? status : 'pending',
+    )
+  }
+  return activations
+}
+
+/**
+ * Resolves once a v2 server has finished activating its plugins, and rejects
+ * with the same startup error as `awaitServerReady` when it does not.
+ *
+ * A v2 server answers `/api/info` as soon as it listens and loads plugins in the
+ * background. Until activation lands, `/api/plugin` lists nothing and the agent
+ * and provider lists are empty or partial; since 2.4 ("plugins load in the
+ * background again") `/api/agent` and `provider.list` no longer wait for it, so
+ * `/api/info` alone does not prove a plugin's agents, config transform and
+ * hooks are registered. This waits for a non-empty plugin list (a server lists
+ * every plugin at once, when activation ends) in which every expected id is
+ * active. An expected plugin listed `failed` ends the wait at once, because
+ * waiting does not turn it active. A failure names ids and statuses only.
+ * `fetchImpl` is a seam for unit tests.
+ */
+export async function awaitPluginsActive(options: {
+  announcement: ServerAnnouncement
+  expectedPluginIds: readonly string[]
+  /**
+   * The location the plugins load for. A v2 server activates plugins per
+   * location, on a location's first request, and a client names its location
+   * as `location[directory]`. A gate that asks about another location than the
+   * client later uses proves nothing: on macOS the server's own cwd and the
+   * client's literal path differ by `/var` and `/private/var`. Unset asks the
+   * server's default location.
+   */
+  location?: { directory: string }
+  budgetMs: number
+  output: () => string
+  fetchImpl?: typeof fetch
+  pollIntervalMs?: number
+}): Promise<void> {
+  const {
+    announcement,
+    expectedPluginIds,
+    location,
+    budgetMs,
+    output,
+    fetchImpl = fetch,
+    pollIntervalMs = PLUGIN_POLL_INTERVAL_MS,
+  } = options
+  const fail = (reason: string): Error =>
+    serverStartError(reason, announcement, output)
+
+  if (budgetMs <= 0) {
+    throw fail('the startup budget ended before the plugin request')
+  }
+  const deadline = Date.now() + budgetMs
+  const pluginUrl = new URL('/api/plugin', announcement.url)
+  if (location !== undefined) {
+    pluginUrl.searchParams.set('location[directory]', location.directory)
+  }
+  const url = pluginUrl.href
+  let lastNote = 'no response to the plugin request'
+  for (;;) {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      throw fail(
+        `the plugins were not active within ${budgetMs}ms (${lastNote})`,
+      )
+    }
+    const signal = AbortSignal.timeout(
+      Math.min(remaining, PLUGIN_REQUEST_TIMEOUT_MS),
+    )
+    let activations: Map<string, PluginActivation> | null = null
+    let rejected = false
+    try {
+      const response = await fetchImpl(url, {
+        headers: opencodeServerAuthHeaders(announcement),
+        signal,
+      })
+      rejected = response.status === 401
+      if (rejected) {
+        await response.body?.cancel()
+      } else if (response.ok) {
+        activations = parsePluginActivations(await response.json())
+      } else {
+        await response.body?.cancel()
+      }
+      if (activations === null) {
+        lastNote = `the plugin request returned status ${response.status}`
+      }
+    } catch (error) {
+      lastNote = signal.aborted
+        ? 'the plugin request timed out'
+        : `the plugin request failed: ${String(error)}`
+    }
+
+    // Every 401 has the same body and a retry cannot fix the credentials.
+    if (rejected) throw fail('the plugin request was rejected with status 401')
+    if (activations !== null) {
+      const states = expectedPluginIds.map((id): [string, PluginActivation] => [
+        id,
+        activations.get(id) ?? 'absent',
+      ])
+      const describeStates = states
+        .map(([id, state]) => `${id}: ${state}`)
+        .join(', ')
+      if (states.some(([, state]) => state === 'failed')) {
+        throw fail(`an expected plugin failed to load (${describeStates})`)
+      }
+      if (
+        activations.size > 0 &&
+        states.every(([, state]) => state === 'active')
+      ) {
+        return
+      }
+      lastNote =
+        activations.size === 0
+          ? 'no plugin was listed yet'
+          : `${describeStates || 'no expected plugin'}`
+    }
+    await Bun.sleep(Math.min(pollIntervalMs, Math.max(0, remaining)))
+  }
+}
+
 export async function startOpencodeProcess(
   fixture: IsolatedFixture,
   command: string,
   args: readonly string[],
   env: Record<string, string>,
-  options: { host?: OpencodeHost; timeoutMs?: number } = {},
+  options: {
+    host?: OpencodeHost
+    timeoutMs?: number
+    /**
+     * v2 only. When set, the start also waits for the plugin list to show these
+     * ids active (an empty list waits for activation alone). Unset skips the
+     * wait, for a caller that has no plugin to load.
+     */
+    expectedPluginIds?: readonly string[]
+    /** The location the plugins load for; see `awaitPluginsActive`. */
+    location?: { directory: string }
+  } = {},
 ): Promise<OpencodeServer> {
-  const { host: hostLine = TARGET_OPENCODE_HOST, timeoutMs = TIMEOUT_MS } =
-    options
+  const {
+    host: hostLine = TARGET_OPENCODE_HOST,
+    timeoutMs = TIMEOUT_MS,
+    expectedPluginIds,
+    location,
+  } = options
   const awaitPassword = hostLine === 'v2'
   const startedAt = Date.now()
   const server = spawn(
@@ -1382,6 +1557,16 @@ export async function startOpencodeProcess(
       budgetMs: timeoutMs - (Date.now() - startedAt),
       output: () => buffer,
     })
+    // `/api/info` answers while plugins are still loading (see awaitPluginsActive).
+    if (hostLine === 'v2' && expectedPluginIds !== undefined) {
+      await awaitPluginsActive({
+        announcement,
+        expectedPluginIds,
+        ...(location === undefined ? {} : { location }),
+        budgetMs: timeoutMs - (Date.now() - startedAt),
+        output: () => buffer,
+      })
+    }
   } catch (error) {
     await stopOpencodeProcess(server)
     throw error
@@ -1420,6 +1605,34 @@ export async function startOpencodeProcess(
   return host
 }
 
+const SYSTEMATIC_PLUGIN_ID = 'systematic'
+const SYSTEMATIC_PACKAGE_SPEC = /(?:^|[\\/])@fro\.bot[\\/]systematic(?:[\\/]|$)/
+
+/**
+ * The plugin ids a v2 config makes a server load that a test depends on: the
+ * packaged Systematic plugin, when the config's `plugins` lists it. Anything
+ * else a test loads is not named, so a start still waits for activation to land
+ * but does not wait for that plugin by id.
+ */
+function expectedV2PluginIds(configContent: string): string[] {
+  let plugins: unknown
+  try {
+    plugins = (JSON.parse(configContent) as { plugins?: unknown }).plugins
+  } catch {
+    return []
+  }
+  if (!Array.isArray(plugins)) return []
+  // An entry is a spec string, or a `[spec, options]` tuple.
+  const specs = (plugins as unknown[]).map((entry) =>
+    Array.isArray(entry) ? entry[0] : entry,
+  )
+  return specs.some(
+    (spec) => typeof spec === 'string' && SYSTEMATIC_PACKAGE_SPEC.test(spec),
+  )
+    ? [SYSTEMATIC_PLUGIN_ID]
+    : []
+}
+
 export async function startOpencodeServer(
   fixture: IsolatedFixture,
   configContent: string,
@@ -1434,7 +1647,15 @@ export async function startOpencodeServer(
     command,
     args,
     buildIsolatedOpencodeEnv(fixture, configContent, extraEnv, host),
-    { host },
+    {
+      host,
+      ...(host === 'v2'
+        ? {
+            expectedPluginIds: expectedV2PluginIds(configContent),
+            location: { directory: fixture.projectDir },
+          }
+        : {}),
+    },
   )
 }
 

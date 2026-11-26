@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import {
+  awaitPluginsActive,
   awaitServerReady,
   buildChildEnv,
   createIsolatedFixture,
@@ -166,6 +167,273 @@ describe('awaitServerReady', () => {
     await failure.catch((error: unknown) => {
       expect(String(error)).not.toContain('tOp-s3cret')
     })
+  })
+})
+
+interface PluginRow {
+  id: string
+  status: 'active' | 'failed'
+  error?: string
+}
+
+/** A `GET /api/plugin` body: `{ data: Plugin.Info[] }`, the state on each entry. */
+function pluginListResponse(rows: PluginRow[]): Response {
+  return new Response(
+    JSON.stringify({
+      data: rows.map((row) => ({
+        id: row.id,
+        state:
+          row.error === undefined
+            ? { status: row.status }
+            : { status: row.status, error: row.error },
+      })),
+    }),
+  )
+}
+
+/** A fetch that answers with the next scripted response, repeating the last. */
+function sequencedFetch(responses: Array<() => Response>): {
+  fetchImpl: FakeFetch
+  requests: RecordedRequest[]
+} {
+  let index = 0
+  return recordingFetch(() => {
+    const respond = responses[Math.min(index, responses.length - 1)]
+    index += 1
+    if (respond === undefined) throw new Error('no scripted response')
+    return respond()
+  })
+}
+
+const V2_ANNOUNCEMENT = { url: 'http://127.0.0.1:4096', password: 'pw-9' }
+
+// A v2 server answers `/api/info` as soon as it listens and loads plugins in
+// the background. `/api/plugin` lists nothing until activation lands, and
+// `/api/agent` and `provider.list` do not wait for it (2.4), so only this gate
+// proves a plugin's agents, config transform and hooks are registered.
+describe('awaitPluginsActive', () => {
+  test('polls /api/plugin with the password until the expected plugin is active', async () => {
+    const { fetchImpl, requests } = sequencedFetch([
+      () => pluginListResponse([]),
+      () => pluginListResponse([{ id: 'opencode.agent', status: 'active' }]),
+      () =>
+        pluginListResponse([
+          { id: 'opencode.agent', status: 'active' },
+          { id: 'systematic', status: 'active' },
+        ]),
+    ])
+
+    await awaitPluginsActive({
+      announcement: V2_ANNOUNCEMENT,
+      expectedPluginIds: ['systematic'],
+      budgetMs: 5_000,
+      output: () => BANNER,
+      fetchImpl,
+      pollIntervalMs: 1,
+    })
+
+    expect(requests).toHaveLength(3)
+    for (const request of requests) {
+      expect(request.url).toBe('http://127.0.0.1:4096/api/plugin')
+      expect(request.headers.authorization).toBe(
+        `Basic ${Buffer.from('opencode:pw-9').toString('base64')}`,
+      )
+      expect(request.hasSignal).toBe(true)
+    }
+  })
+
+  test('asks about the location a client will query, as location[directory]', async () => {
+    const { fetchImpl, requests } = sequencedFetch([
+      () => pluginListResponse([{ id: 'systematic', status: 'active' }]),
+    ])
+
+    await awaitPluginsActive({
+      announcement: V2_ANNOUNCEMENT,
+      expectedPluginIds: ['systematic'],
+      location: { directory: '/tmp/work dir/project' },
+      budgetMs: 5_000,
+      output: () => BANNER,
+      fetchImpl,
+      pollIntervalMs: 1,
+    })
+
+    const url = new URL(requests[0]?.url ?? '')
+    expect(url.pathname).toBe('/api/plugin')
+    expect(url.searchParams.get('location[directory]')).toBe(
+      '/tmp/work dir/project',
+    )
+  })
+
+  test('with no expected plugin it still waits for activation to land', async () => {
+    const { fetchImpl, requests } = sequencedFetch([
+      () => pluginListResponse([]),
+      () => pluginListResponse([{ id: 'opencode.agent', status: 'active' }]),
+    ])
+
+    await awaitPluginsActive({
+      announcement: V2_ANNOUNCEMENT,
+      expectedPluginIds: [],
+      budgetMs: 5_000,
+      output: () => BANNER,
+      fetchImpl,
+      pollIntervalMs: 1,
+    })
+
+    expect(requests).toHaveLength(2)
+  })
+
+  test('a failed unrelated plugin does not fail a start whose expected plugin is active', async () => {
+    const { fetchImpl } = sequencedFetch([
+      () =>
+        pluginListResponse([
+          { id: 'third-party', status: 'failed', error: 'boom' },
+          { id: 'systematic', status: 'active' },
+        ]),
+    ])
+
+    await awaitPluginsActive({
+      announcement: V2_ANNOUNCEMENT,
+      expectedPluginIds: ['systematic'],
+      budgetMs: 5_000,
+      output: () => BANNER,
+      fetchImpl,
+      pollIntervalMs: 1,
+    })
+  })
+
+  test('an expected plugin listed failed fails at once, with ids and statuses only', async () => {
+    const { fetchImpl, requests } = sequencedFetch([
+      () =>
+        pluginListResponse([
+          {
+            id: 'systematic',
+            status: 'failed',
+            error: 'Invalid Systematic config at /home/dev/secret/path',
+          },
+        ]),
+    ])
+    const started = Date.now()
+
+    const failure = awaitPluginsActive({
+      announcement: V2_ANNOUNCEMENT,
+      expectedPluginIds: ['systematic'],
+      budgetMs: 60_000,
+      output: () => `${BANNER}\nplugin trace`,
+      fetchImpl,
+      pollIntervalMs: 1,
+    })
+
+    await expect(failure).rejects.toThrow(/did not become ready/)
+    await expect(failure).rejects.toThrow(/systematic: failed/)
+    await expect(failure).rejects.toThrow(/plugin trace/)
+    await failure.catch((error: unknown) => {
+      expect(String(error)).not.toContain('/home/dev/secret/path')
+      expect(String(error)).not.toContain('pw-9')
+    })
+    expect(requests).toHaveLength(1)
+    expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  test('a plugin that never becomes active fails within the budget, naming what was missing', async () => {
+    const { fetchImpl } = sequencedFetch([
+      () => pluginListResponse([{ id: 'opencode.agent', status: 'active' }]),
+    ])
+    const started = Date.now()
+
+    const failure = awaitPluginsActive({
+      announcement: V2_ANNOUNCEMENT,
+      expectedPluginIds: ['systematic'],
+      budgetMs: 150,
+      output: () => `${BANNER}\nloading plugins`,
+      fetchImpl,
+      pollIntervalMs: 5,
+    })
+
+    await expect(failure).rejects.toThrow(/did not become ready/)
+    await expect(failure).rejects.toThrow(/systematic: absent/)
+    await expect(failure).rejects.toThrow(/loading plugins/)
+    expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  test('an empty list that never fills fails within the budget', async () => {
+    const { fetchImpl } = sequencedFetch([() => pluginListResponse([])])
+
+    const failure = awaitPluginsActive({
+      announcement: V2_ANNOUNCEMENT,
+      expectedPluginIds: [],
+      budgetMs: 100,
+      output: () => BANNER,
+      fetchImpl,
+      pollIntervalMs: 5,
+    })
+
+    await expect(failure).rejects.toThrow(/did not become ready/)
+    await expect(failure).rejects.toThrow(/no plugin was listed/)
+  })
+
+  test('a server that stalls on the plugin request fails within the budget', async () => {
+    const started = Date.now()
+
+    const failure = awaitPluginsActive({
+      announcement: V2_ANNOUNCEMENT,
+      expectedPluginIds: ['systematic'],
+      budgetMs: 100,
+      output: () => BANNER,
+      fetchImpl: stalledFetch(),
+      pollIntervalMs: 5,
+    })
+
+    await expect(failure).rejects.toThrow(/did not become ready/)
+    expect(Date.now() - started).toBeLessThan(5_000)
+  })
+
+  test('a transient error status is retried and a 401 is not', async () => {
+    const retried = sequencedFetch([
+      () => new Response('starting', { status: 503 }),
+      () => pluginListResponse([{ id: 'systematic', status: 'active' }]),
+    ])
+    await awaitPluginsActive({
+      announcement: V2_ANNOUNCEMENT,
+      expectedPluginIds: ['systematic'],
+      budgetMs: 5_000,
+      output: () => BANNER,
+      fetchImpl: retried.fetchImpl,
+      pollIntervalMs: 1,
+    })
+    expect(retried.requests).toHaveLength(2)
+
+    const denied = sequencedFetch([
+      () => new Response('denied', { status: 401 }),
+    ])
+    await expect(
+      awaitPluginsActive({
+        announcement: V2_ANNOUNCEMENT,
+        expectedPluginIds: ['systematic'],
+        budgetMs: 5_000,
+        output: () => BANNER,
+        fetchImpl: denied.fetchImpl,
+        pollIntervalMs: 1,
+      }),
+    ).rejects.toThrow(/401/)
+    expect(denied.requests).toHaveLength(1)
+  })
+
+  test('an exhausted budget fails without making a request', async () => {
+    const { fetchImpl, requests } = sequencedFetch([
+      () => pluginListResponse([{ id: 'systematic', status: 'active' }]),
+    ])
+
+    await expect(
+      awaitPluginsActive({
+        announcement: V2_ANNOUNCEMENT,
+        expectedPluginIds: ['systematic'],
+        budgetMs: 0,
+        output: () => BANNER,
+        fetchImpl,
+        pollIntervalMs: 1,
+      }),
+    ).rejects.toThrow(/did not become ready/)
+    expect(requests).toHaveLength(0)
   })
 })
 
@@ -377,6 +645,83 @@ describe.skipIf(process.platform === 'win32')(
       } finally {
         await host.stop()
       }
+    })
+
+    function writeV2Launcher(fixture: IsolatedFixture, url: string): string {
+      const scriptPath = path.join(fixture.tempRoot, 'fake-v2-launcher.sh')
+      fs.writeFileSync(
+        scriptPath,
+        [
+          '#!/bin/sh',
+          `printf '%s\\n' ${JSON.stringify(`server listening on ${url}`)}`,
+          `printf '%s\\n' 'server password pw-123'`,
+          'sleep 300',
+          '',
+        ].join('\n'),
+      )
+      return scriptPath
+    }
+
+    test('a v2 start with an expected plugin resolves only once /api/plugin lists it active', async () => {
+      const fixture = makeFixture()
+      let pluginPolls = 0
+      const seen: string[] = []
+      const locations: Array<string | null> = []
+      const url = startServer((request) => {
+        const { pathname, searchParams } = new URL(request.url)
+        seen.push(pathname)
+        if (pathname === '/api/plugin') {
+          locations.push(searchParams.get('location[directory]'))
+        }
+        if (pathname === '/api/info') return new Response('{"version":"x"}')
+        pluginPolls += 1
+        return pluginPolls < 3
+          ? pluginListResponse([])
+          : pluginListResponse([{ id: 'systematic', status: 'active' }])
+      })
+
+      const host = await startOpencodeProcess(
+        fixture,
+        '/bin/sh',
+        [writeV2Launcher(fixture, url)],
+        buildChildEnv({}, 'v2'),
+        {
+          host: 'v2',
+          timeoutMs: 10_000,
+          expectedPluginIds: ['systematic'],
+          location: { directory: fixture.projectDir },
+        },
+      )
+      try {
+        expect(seen[0]).toBe('/api/info')
+        expect(locations).toEqual(
+          Array.from({ length: 3 }, () => fixture.projectDir),
+        )
+        expect(pluginPolls).toBe(3)
+      } finally {
+        await host.stop()
+      }
+    })
+
+    test('a v2 start whose expected plugin failed rejects with the output', async () => {
+      const fixture = makeFixture()
+      const url = startServer((request) =>
+        new URL(request.url).pathname === '/api/info'
+          ? new Response('{"version":"x"}')
+          : pluginListResponse([{ id: 'systematic', status: 'failed' }]),
+      )
+
+      const failure = startOpencodeProcess(
+        fixture,
+        '/bin/sh',
+        [writeV2Launcher(fixture, url)],
+        buildChildEnv({}, 'v2'),
+        { host: 'v2', timeoutMs: 10_000, expectedPluginIds: ['systematic'] },
+      )
+
+      await expect(failure).rejects.toThrow(/did not become ready/)
+      await expect(failure).rejects.toThrow(/systematic: failed/)
+      await expect(failure).rejects.toThrow(/listening on/)
     })
   },
 )
