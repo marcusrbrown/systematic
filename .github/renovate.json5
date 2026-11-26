@@ -10,7 +10,11 @@
   // intentionally-fixed dependency versions and are never shipped or installed
   // in CI — Renovate must not try to manage them. Preserves Renovate's default
   // node_modules/bower ignores since setting this key replaces the default.
-  ignorePaths: ['**/node_modules/**', '**/bower_components/**', 'tests/**'],
+  // scripts/host-locks/** holds the generated manifests and lockfiles that `npm ci`
+  // installs the host CLIs from. They derive from scripts/opencode-host-pins.json, so
+  // Renovate must not track them as a second source for the same pin. The postupgrade
+  // script (`surfaces:regen`, which runs `host-locks:sync`) regenerates them in the bump PR.
+  ignorePaths: ['**/node_modules/**', '**/bower_components/**', 'tests/**', 'scripts/host-locks/**'],
   customManagers: [
     {
       // scripts/opencode-host-pins.json is the single home of the CLI pins the

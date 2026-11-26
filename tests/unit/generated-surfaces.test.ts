@@ -82,7 +82,7 @@ const names = (surfaces: readonly GeneratedSurface[]) =>
 // ── The real list ───────────────────────────────────────────────────────────
 
 describe('GENERATED_SURFACES', () => {
-  test('holds the eight surfaces in regeneration order', () => {
+  test('holds the nine surfaces in regeneration order', () => {
     expect(names(GENERATED_SURFACES)).toEqual([
       'agent-browser',
       'schema',
@@ -92,6 +92,7 @@ describe('GENERATED_SURFACES', () => {
       'connect-helper',
       'registry',
       'pi-personas',
+      'host-locks',
     ])
   })
 
@@ -268,11 +269,11 @@ function r17Diff(rootDir: string, surfaces: readonly GeneratedSurface[]) {
 }
 
 describe('R17 generators with a check mode', () => {
-  test('the real repo: both directions agree, and there are eight', () => {
+  test('the real repo: both directions agree, and there are nine', () => {
     const diff = r17Diff(ROOT_DIR, GENERATED_SURFACES)
     expect(diff.unregistered).toEqual([])
     expect(diff.noLiteral).toEqual([])
-    expect(diff.withLiteral).toHaveLength(8)
+    expect(diff.withLiteral).toHaveLength(9)
   })
 
   function tempProject(files: Record<string, string>, scripts: object) {
