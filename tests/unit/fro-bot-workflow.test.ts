@@ -1273,6 +1273,7 @@ describe('Fro Bot autoheal strategies', () => {
       'a newer advisory appears for the same package',
       "a fixed version now fits the parents' declared ranges while the lockfile still selects an affected one",
       'Report an advisory as resolved only once every installed copy is outside its range.',
+      'reopen it only when an installable release of the bundling package ships the fixed version, not when a patched copy merely fits its declared range.',
     ])
   })
 

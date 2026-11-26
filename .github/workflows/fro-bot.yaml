@@ -255,8 +255,11 @@ env:
     accepted advisory on new evidence: the package reaches a shipped artifact
     or a runtime dependency, a newer advisory appears for the same package, or
     a fixed version now fits the parents' declared ranges while the lockfile
-    still selects an affected one. Report an advisory as resolved only once
-    every installed copy is outside its range.
+    still selects an affected one. A copy bundled inside another package (such
+    as npm's own tree) is replaced only by that package: reopen it only when an
+    installable release of the bundling package ships the fixed version, not
+    when a patched copy merely fits its declared range. Report an advisory as
+    resolved only once every installed copy is outside its range.
 
     SELF-CLEANUP (own PRs only)
     You may close your own open repair PR only when a newer Fro Bot PR fixes
