@@ -217,6 +217,8 @@ Then continue to Phase 1 without a blocking question.
 
 **Headless mode**: internal draft is composed but stage 2 (chat-time call-outs) is skipped — no synchronous user to confirm to. Continue to Phase 1 research as normal. At plan-write time (Phase 5.2), Inferred bets from the internal draft route to a `## Assumptions` section in the plan instead of Key Technical Decisions. See `references/synthesis-summary.md` Headless mode for the full routing.
 
+Before research, state the minimal change in one or two sentences, and size the plan to it.
+
 ### Phase 1: Gather Context
 
 #### 1.1 Local Research (Always Runs)
@@ -316,6 +318,7 @@ Summarize:
 - External references and best practices, if gathered
 - Related issues, PRs, or prior art
 - Any constraints that should materially shape the plan
+- Admit a hazard only if it bites at the current pin and no existing backstop covers it; otherwise decline it and name the backstop.
 
 #### 1.4b Reclassify Depth When Research Reveals External Contract Surfaces
 
@@ -339,6 +342,7 @@ Use the output to:
 - Identify missing edge cases, state transitions, or handoff gaps
 - Tighten requirements trace or verification strategy
 - Add only the flow details that materially improve the plan
+- Admit a hazard only if it bites at the current pin and no existing backstop covers it; otherwise decline it and name the backstop. A declined hazard goes in the plan's Risks table, with the backstop as its mitigation.
 
 ### Phase 2: Resolve Planning Questions
 

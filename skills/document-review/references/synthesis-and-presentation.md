@@ -91,6 +91,8 @@ Specific conflict patterns:
 
 Every merged finding carries exactly one `recommended_action` field consumed by the walk-through (`references/walkthrough.md`) to mark the `(recommended)` option, by the best-judgment path (`references/bulk-preview.md`) to choose what to execute in bulk, and by the stem's yes/no framing. When a merged finding was flagged by multiple personas who implied different actions, synthesis picks the recommended action deterministically so identical review artifacts produce identical walk-through and best-judgment behavior across runs.
 
+**Admission test.** Before choosing an action, apply this to every finding whose fix adds a mitigation (a new mechanism, unit, requirement or test), whatever its autofix class: Admit a hazard only if it bites at the current pin and no existing backstop covers it; otherwise decline it and name the backstop. A finding that fails gets `recommended_action: Skip` with its backstop named, and never takes the silent `safe_auto` path. Mechanical fixes, such as wrong counts or stale references, are not hazards. An explicit user choice still wins.
+
 **Tie-break order (most conservative first):** `Skip > Defer > Apply`. The first action that at least one contributing persona implied wins, scanning in that order.
 
 - If any contributing persona implied Skip → `recommended_action: Skip`

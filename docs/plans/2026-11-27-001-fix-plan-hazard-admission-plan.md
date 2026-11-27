@@ -106,7 +106,7 @@ The minimal change is a short admission rule at the four places where planning a
 
 ## Implementation Units
 
-- [ ] **Unit 1: Rule text at the four sites**
+- [x] **Unit 1: Rule text at the four sites**
 
 **Goal:** Add the admission rule where lane output enters a plan.
 

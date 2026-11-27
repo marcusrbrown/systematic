@@ -351,7 +351,7 @@ Allowed changes:
 - Tighten requirements trace or origin fidelity
 - Reorder or split implementation units when sequencing is weak
 - Add missing pattern references, file/test paths, or verification outcomes
-- Expand system-wide impact, risks, or rollout treatment where justified
+- Expand system-wide impact, risks, or rollout treatment where justified: Admit a hazard only if it bites at the current pin and no existing backstop covers it; otherwise decline it and name the backstop.
 - Reclassify open questions between `Resolved During Planning` and `Deferred to Implementation` when evidence supports the change
 - Strengthen, replace, or add a High-Level Technical Design section when the work warrants it and the current representation is weak, uses the wrong medium, or is absent where it would help. Preserve the non-prescriptive framing
 - Strengthen or add per-unit technical design fields where the unit's approach is non-obvious and the current approach notes are thin

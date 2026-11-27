@@ -232,7 +232,7 @@ Allowed changes:
 - Tighten requirements trace or origin fidelity
 - Reorder or split implementation units when sequencing is weak — but **never renumber existing U-IDs**. Reordering preserves U-IDs in their new order (e.g., U1, U3, U5 reordered is correct; renumbering to U1, U2, U3 is not). Splitting keeps the original U-ID on the original concept and assigns the next unused number to the new unit. Renumbering breaks ce:work blocker and verification references that were written against the original IDs
 - Add missing pattern references, file/test paths, or verification outcomes
-- Expand system-wide impact, risks, or rollout treatment where justified
+- Expand system-wide impact, risks, or rollout treatment where justified: Admit a hazard only if it bites at the current pin and no existing backstop covers it; otherwise decline it and name the backstop. In auto mode, the same test decides whether to integrate each finding.
 - Reclassify open questions between `Resolved During Planning` and `Deferred to Implementation` when evidence supports the change
 - Strengthen, replace, or add a High-Level Technical Design section when the work warrants it and the current representation is weak
 - Strengthen or add per-unit technical design fields where the unit's approach is non-obvious
