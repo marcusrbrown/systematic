@@ -91,6 +91,8 @@ Specific conflict patterns:
 
 Every merged finding carries exactly one `recommended_action` field consumed by the walk-through (`references/walkthrough.md`) to mark the `(recommended)` option, by the best-judgment path (`references/bulk-preview.md`) to choose what to execute in bulk, and by the stem's yes/no framing. When a merged finding was flagged by multiple personas who implied different actions, synthesis picks the recommended action deterministically so identical review artifacts produce identical walk-through and best-judgment behavior across runs.
 
+**Admission test.** Before choosing an action, apply this to every finding whose fix adds a mitigation (a new mechanism, unit, requirement or test), whatever its autofix class: Admit a hazard only if it bites at the current pin and no existing backstop covers it; otherwise decline it and name the backstop. On failed admission, record the covering backstop or `not established at the current pin`, set `recommended_action: Skip`, and bypass the persona tie-break. Later routing must preserve this recommendation. Mechanical fixes, such as wrong counts or stale references, are not hazards. An explicit user choice still wins.
+
 **Tie-break order (most conservative first):** `Skip > Defer > Apply`. The first action that at least one contributing persona implied wins, scanning in that order.
 
 - If any contributing persona implied Skip → `recommended_action: Skip`
@@ -207,13 +209,15 @@ Do not promote if the finding involves scope or priority changes where the autho
 
 Findings reaching 3.7 have already been gated to anchors `50`, `75`, or `100` by 3.2 (anchors `0` and `25` were dropped).
 
+Never queue an admission failure for silent apply. In interactive mode, route failures at anchors 75/100 as Proposed fixes with Skip recommended, reclassifying a `safe_auto` failure to `gated_auto` so it reaches the walk-through; apply only if the user explicitly chooses Apply for that finding. Anchor 50 remains non-actionable.
+
 | Anchor | Autofix Class | Route |
 |--------|---------------|-------|
 | `100`  | `safe_auto`   | Apply silently in Phase 4. Requires `suggested_fix`. Demote to `gated_auto` if missing. |
-| `100`  | `gated_auto`  | Enter the per-finding walk-through with Apply marked (recommended). Requires `suggested_fix`. Demote to `manual` if missing. |
+| `100`  | `gated_auto`  | Enter the per-finding walk-through with the 3.5b recommendation marked (recommended). Requires `suggested_fix`. Demote to `manual` if missing. |
 | `100`  | `manual`      | Enter the per-finding walk-through with user-judgment framing. `suggested_fix` is optional. |
-| `75`   | `safe_auto`   | Demote to `gated_auto` before routing — silent apply is reserved for anchor `100` findings where evidence directly confirms the fix. Enter the walk-through with Apply marked (recommended). |
-| `75`   | `gated_auto`  | Enter the per-finding walk-through with Apply marked (recommended). Requires `suggested_fix`. Demote to `manual` if missing. |
+| `75`   | `safe_auto`   | Demote to `gated_auto` before routing — silent apply is reserved for anchor `100` findings where evidence directly confirms the fix. Enter the walk-through with the 3.5b recommendation marked (recommended). |
+| `75`   | `gated_auto`  | Enter the per-finding walk-through with the 3.5b recommendation marked (recommended). Requires `suggested_fix`. Demote to `manual` if missing. |
 | `75`   | `manual`      | Enter the per-finding walk-through with user-judgment framing. `suggested_fix` is optional. |
 | `50`   | any           | Surface in the FYI subsection regardless of `autofix_class`. Do not enter the walk-through or any bulk action. These are observations, not decisions. |
 
@@ -244,7 +248,7 @@ Run this pass on the merged set across all personas. Record the count dropped as
 
 ### Apply safe_auto fixes
 
-Apply only `safe_auto` findings **at confidence anchor `100`** to the document in a single pass. This matches the 3.7 routing table: anchor `100` + `safe_auto` silent-applies; anchor `75` + `safe_auto` was demoted to `gated_auto` in 3.7 and enters the walk-through instead; anchor `50` + any `autofix_class` routes to FYI and must never auto-apply.
+Apply only the findings 3.7 queued for silent apply (`safe_auto` findings **at confidence anchor `100`**) to the document in a single pass. This matches the 3.7 routing table: anchor `100` + `safe_auto` silent-applies; anchor `75` + `safe_auto` was demoted to `gated_auto` in 3.7 and enters the walk-through instead; anchor `50` + any `autofix_class` routes to FYI and must never auto-apply.
 
 - Edit the document inline using the platform's edit tool
 - Track what was changed for the "Applied fixes" section in the rendered output (`safe_auto` is the internal enum; the rendered section header reads "Applied fixes")
@@ -257,7 +261,7 @@ List every applied fix in the output summary so the user can see what changed. U
 
 After safe_auto fixes apply, remaining findings split into buckets:
 
-- `gated_auto` and `manual` findings at confidence anchor `75` or `100` → enter the routing question (see Unit 5 / `references/walkthrough.md`)
+- `gated_auto` and `manual` findings at confidence anchor `75` or `100`, including admission failures 3.7 reclassified to `gated_auto` → enter the routing question (see Unit 5 / `references/walkthrough.md`)
 - FYI-subsection findings → surface in the presentation only, no routing
 - Zero actionable findings remaining → skip the routing question; flow directly to Phase 5 terminal question
 
@@ -293,6 +297,9 @@ FYI observations (anchor 50, no decision required):
 [P3] Section: <section> — <title> (<reviewer>, confidence <anchor>)
   Why: <why_it_matters>
 
+Declined:
+- <section>: <title> — <covering backstop or "not established at the current pin"> (<reviewer>)
+
 Residual concerns:
 - <concern> (<source>)
 
@@ -306,7 +313,7 @@ Restated: N (residual/deferred items suppressed as duplicates of actionable find
 Review complete
 ```
 
-Omit any section with zero items. The section headers reflect user-facing vocabulary: the "Proposed fixes" bucket carries `gated_auto` findings at anchor `75` or `100` (the persona has a concrete fix; the user confirms), "Decisions" carries `manual` findings at anchor `75` or `100` (judgment calls), and "FYI observations" carries any finding at anchor `50` regardless of `autofix_class`. When a root has dependents, render the root at its normal position in the severity-sorted list and nest its dependents as an indented `Dependents (...)` sub-block immediately below. Do not re-list dependents at their own severity position — they appear only under their root. End with "Review complete" as the terminal signal so callers can detect completion.
+Omit any section with zero items. The section headers reflect user-facing vocabulary: the "Proposed fixes" bucket carries `gated_auto` findings at anchor `75` or `100` (the persona has a concrete fix; the user confirms), "Decisions" carries `manual` findings at anchor `75` or `100` (judgment calls), and "FYI observations" carries any finding at anchor `50` regardless of `autofix_class`. When a root has dependents, render the root at its normal position in the severity-sorted list and nest its dependents as an indented `Dependents (...)` sub-block immediately below. Do not re-list dependents at their own severity position — they appear only under their root. End with "Review complete" as the terminal signal so callers can detect completion. Render admission failures only under `Declined:`, with the recorded reason and no suggested fix. Do not nest a failed finding under an actionable root. Dependents of a declined root are non-actionable in this run.
 
 **Compact rendering for FYI observations, residual concerns, and deferred questions (high-count mode).** When the combined count of these three buckets is 5 or more, collapse each to a one-line count followed by a tight bullet list without per-item `Why` expansion. Actionable buckets (Proposed fixes / Decisions) remain fully rendered regardless. This mirrors the interactive-mode rule in `references/review-output-template.md` so both modes produce the same shape.
 
