@@ -382,7 +382,13 @@ describe('harness profiles carry the dispatch and continuation facts', () => {
     const text = profileSection('opencode-v2-profile.md')
     expect(text).toMatch(/`subagent` returns immediately with a handle/)
     expect(text).toMatch(/Record the `sessionID`/)
-    expect(text).toMatch(/<subagent sessionID="…" state="…">`? message/)
+    expect(text).toMatch(
+      /`<background-result kind="subagent" sessionID="…" state="…" …>` from 2\.4, `<subagent sessionID="…" state="…" …>` before/,
+    )
+    // Only that clause names a wrapper; everywhere else, the capability table included, it is "the report".
+    const whole = read(`${PROFILE_DIR}/opencode-v2-profile.md`)
+    expect(whole.match(/<subagent\b/g)).toHaveLength(1)
+    expect(whole.match(/<background-result\b/g)).toHaveLength(1)
     expect(text).toMatch(/`state="running"`[^.]*is not final/)
     expect(text).toMatch(/the message body is the child's answer/)
     expect(text).toMatch(
