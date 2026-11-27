@@ -4,6 +4,32 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.38.4](https://github.com/marcusrbrown/systematic/compare/v3.38.3...v3.38.4) (2026-11-27)
+
+### Bug Fixes
+
+* **opencode-v2:** name the 2.4 background-result report a subagent answer arrives in ([#1537](https://github.com/marcusrbrown/systematic/issues/1537)) ([50ad731](https://github.com/marcusrbrown/systematic/commit/50ad731f254244c35e1109f7a512778062599beb))
+
+### Build System
+
+* **dev:** refresh npm to patch bundled advisories ([#1539](https://github.com/marcusrbrown/systematic/issues/1539)) ([6f8fccf](https://github.com/marcusrbrown/systematic/commit/6f8fccfe041b63ea2836e53f1ed9ea784d3cdbaf))
+* **dev:** update OpenCode v2 to v2.4.0 ([#1534](https://github.com/marcusrbrown/systematic/issues/1534)) ([e618ee6](https://github.com/marcusrbrown/systematic/commit/e618ee6c51e579e15dbea3b39084e29bd8d30cc4))
+
+### Tests
+
+* point the missing v2 binary hint at the locked platform binary CI installs ([#1535](https://github.com/marcusrbrown/systematic/issues/1535)) ([0e12877](https://github.com/marcusrbrown/systematic/commit/0e12877024dd86e2017505b6bd024b1dae9961c3))
+* wait for the plugin and accept the 2.4 subagent report in the v2 host tests ([#1536](https://github.com/marcusrbrown/systematic/issues/1536)) ([2ef2cc0](https://github.com/marcusrbrown/systematic/commit/2ef2cc01abe1d7ccd56d126fe5fa2fc295ca9ec9))
+
+### Continuous Integration
+
+* **fro-bot:** accept the remaining unshippable advisories and drop the ones that left the scan ([#1531](https://github.com/marcusrbrown/systematic/issues/1531)) ([bd15105](https://github.com/marcusrbrown/systematic/commit/bd151050ee9b93ed7904b712063ed835af223f6f))
+
+### Miscellaneous Chores
+
+* **deps:** clear the docs and dev-tool advisories that newer in-range releases fix ([#1530](https://github.com/marcusrbrown/systematic/issues/1530)) ([bd6c501](https://github.com/marcusrbrown/systematic/commit/bd6c501815986a586001c08a2a8b2f6663cb9992))
+* **deps:** update dependency dompurify to ~3.5.0 ([#1521](https://github.com/marcusrbrown/systematic/issues/1521)) ([00965bf](https://github.com/marcusrbrown/systematic/commit/00965bf0c0e0db0d8072a22e0bbf58894f135c93))
+* **deps:** update fro-bot/agent to v0.150.0 ([#1538](https://github.com/marcusrbrown/systematic/issues/1538)) ([a6ba364](https://github.com/marcusrbrown/systematic/commit/a6ba364a1e93082cd03b5ede0702bf0da7536606))
+
 ## [3.38.3](https://github.com/marcusrbrown/systematic/compare/v3.38.2...v3.38.3) (2026-11-26)
 
 ### Bug Fixes
