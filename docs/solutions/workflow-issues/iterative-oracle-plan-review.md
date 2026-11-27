@@ -1,6 +1,7 @@
 ---
 title: Iterative Oracle Plan Review Loop
 date: 2026-02-12
+last_updated: 2026-11-27
 module: workflow-system
 problem_type: workflow_issue
 category: workflow-issues
@@ -73,7 +74,7 @@ task(
 
 If YELLOW or RED:
 1. Create a todo item per issue raised
-2. Fix each issue directly in the plan document
+2. Fix each issue that [passes the hazard-admission check](./admit-a-research-hazard-only-if-it-bites-at-the-pin-2026-11-27.md); decline the rest and name the backstop where there is one.
 3. Mark todos complete as fixes are applied
 
 ### Step 4: Re-submit using session_id
