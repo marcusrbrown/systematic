@@ -22,11 +22,26 @@ const RULE =
 const MINIMAL_CHANGE =
   'Before research, state the minimal change in one or two sentences, and size the plan to it.'
 
-const RISKS_CLAUSE =
-  "A declined hazard goes in the plan's Risks table, with the backstop as its mitigation."
+const RECORD_DECLINED =
+  'When writing the plan, record each distinct hazard declined in 1.4 or 1.5 in Risks & Dependencies, even for Lightweight plans. Write `Declined — covered by <backstop>` or `Declined — not established at the current pin`. Neither creates implementation work.'
 
-const AUTO_MODE_CLAUSE =
-  'In auto mode, the same test decides whether to integrate each finding.'
+const HAZARD_SCOPE =
+  'This applies to proposed hazard mitigations anywhere in the list below.'
+
+const AUTO_OR_INTERACTIVE =
+  "Use this test in auto mode. In interactive mode, honor the user's final Accept or Reject in 5.3.6b, subject to the existing edit limits."
+
+const FAILED_ADMISSION =
+  'On failed admission, record the covering backstop or `not established at the current pin`, set `recommended_action: Skip`, and bypass the persona tie-break. Later routing must preserve this recommendation.'
+
+const NEVER_QUEUE =
+  'Never queue an admission failure for silent apply. In interactive mode, route failures at anchors 75/100 as Proposed fixes with Skip recommended; apply only if the user explicitly chooses Apply for that finding. Anchor 50 remains non-actionable.'
+
+const DECLINED_RENDER =
+  'Render admission failures only under `Declined:`, with the recorded reason and no suggested fix. Do not nest a failed finding under an actionable root. Dependents of a declined root are non-actionable in this run.'
+
+const HANDOFF_CONSUMES =
+  'address P0/P1 items in Proposed fixes and Decisions only; do not act on Declined or FYI observations.'
 
 /** Index of `needle`, failing the test if it is missing or appears twice. */
 function once(haystack: string, needle: string): number {
@@ -71,6 +86,33 @@ const review35b = section(
   '### 3.5b Deterministic Recommended-Action Tie-Break',
   '### 3.5c Premise-Dependency Chain Linking',
 )
+const review37 = section(
+  SYNTHESIS,
+  '### 3.7 Route by Autofix Class',
+  '### 3.8 Sort',
+)
+const applyStep = section(
+  SYNTHESIS,
+  '### Apply safe_auto fixes',
+  '### Route Remaining Findings',
+)
+const envelope = section(
+  SYNTHESIS,
+  '**Headless mode:** Do not use interactive question tools.',
+  '**Interactive mode:**\n',
+)
+const HANDOFF = read('skills/ce-plan/references/plan-handoff.md')
+const handoff538 = section(
+  HANDOFF,
+  '## 5.3.8 Document Review',
+  '## 5.3.9 Final Checks and Cleanup',
+)
+const REVIEW_SKILL = read('skills/document-review/SKILL.md')
+const reviewPhase0 = section(
+  REVIEW_SKILL,
+  '**Headless mode** changes the interaction model',
+  'Callers invoke headless mode by including',
+)
 
 describe('the admission rule appears once at each of five sites', () => {
   const sites = [
@@ -109,12 +151,12 @@ describe('ce:plan placement', () => {
     expect(text).toBeLessThan(phase1)
   })
 
-  test('the rule closes 1.4, with nothing after it', () => {
-    expect(plan14.trimEnd().endsWith(RULE)).toBe(true)
-  })
-
-  test('the rule closes 1.5 with the Risks-table clause', () => {
-    expect(plan15.trimEnd().endsWith(`${RULE} ${RISKS_CLAUSE}`)).toBe(true)
+  test('1.4 records declined hazards from both 1.4 and 1.5, with no Risks clause in 1.5', () => {
+    once(plan14, RECORD_DECLINED)
+    expect(plan14.indexOf(RECORD_DECLINED)).toBeGreaterThan(
+      plan14.indexOf(RULE),
+    )
+    expect(plan15).not.toContain('Risks')
   })
 
   test('the rule follows the last 1.4 research bullet', () => {
@@ -126,76 +168,98 @@ describe('ce:plan placement', () => {
   })
 })
 
-describe('deepening treats the rule as the meaning of "where justified"', () => {
-  test('deepening-workflow 5.3.7 extends the item and gates auto mode', () => {
-    const item = once(
-      deepening537,
-      '- Expand system-wide impact, risks, or rollout treatment where justified',
-    )
-    const rule = once(deepening537, RULE)
-    const auto = once(deepening537, AUTO_MODE_CLAUSE)
-    const next = once(
-      deepening537,
-      '- Reclassify open questions between `Resolved During Planning`',
-    )
-    expect(ordered(item, rule, auto)).toBe(true)
-    expect(auto).toBeLessThan(next)
+describe('deepening applies the rule to proposed hazard mitigations', () => {
+  test('deepening-workflow 5.3.7 puts the gate before Allowed changes, after the interactive-mode line', () => {
+    const interactive = once(deepening537, '**In interactive mode:**')
+    const gate = once(deepening537, `**Admission test.** ${RULE}`)
+    const allowed = once(deepening537, 'Allowed changes:')
+    expect(ordered(interactive, gate, allowed)).toBe(true)
+    const para = deepening537.slice(gate, allowed)
+    expect(para).toContain(HAZARD_SCOPE)
+    expect(para).toContain(AUTO_OR_INTERACTIVE)
+    expect(para).not.toContain('governs every change')
   })
 
-  test('deepen-plan Phase 5 extends the item', () => {
-    const item = once(
-      deepenPlanPhase5,
-      '- Expand system-wide impact, risks, or rollout treatment where justified',
-    )
-    const rule = once(deepenPlanPhase5, RULE)
-    const next = once(
-      deepenPlanPhase5,
-      '- Reclassify open questions between `Resolved During Planning`',
-    )
-    expect(ordered(item, rule, next)).toBe(true)
+  test('deepen-plan Phase 5 puts the gate before Allowed changes', () => {
+    const gate = once(deepenPlanPhase5, `**Admission test.** ${RULE}`)
+    const allowed = once(deepenPlanPhase5, 'Allowed changes:')
+    expect(gate).toBeLessThan(allowed)
+    const para = deepenPlanPhase5.slice(gate, allowed)
+    expect(para).toContain(HAZARD_SCOPE)
+    expect(para).not.toContain('governs every change')
   })
 })
 
 describe('document-review 3.5b applies the rule before action selection', () => {
   const mapping = once(review35b, '**Persona-to-action mapping.**')
   const tieBreak = once(review35b, '**Tie-break order')
+  const admissionStart = once(review35b, '**Admission test.**')
+  const admission = review35b.slice(admissionStart, tieBreak)
 
   test('the rule sits ahead of the tie-break order and the persona-to-action mapping', () => {
     const rule = once(review35b, RULE)
+    expect(rule).toBeGreaterThan(admissionStart)
     expect(rule).toBeLessThan(tieBreak)
     expect(tieBreak).toBeLessThan(mapping)
   })
 
   test('scopes the rule to any finding whose fix adds a mitigation, whatever its autofix class', () => {
-    const before = review35b.slice(0, mapping)
-    expect(before).toContain('every finding whose fix adds a mitigation')
-    expect(before).toContain(
+    expect(admission).toContain('every finding whose fix adds a mitigation')
+    expect(admission).toContain(
       '(a new mechanism, unit, requirement or test), whatever its autofix class',
     )
   })
 
-  test('routes a failing finding to Skip with the backstop named, never silent safe_auto', () => {
-    const before = review35b.slice(0, mapping)
-    expect(before).toContain('`recommended_action: Skip`')
-    expect(before).toContain('its backstop named')
-    expect(before).toMatch(/never takes the silent `safe_auto` path/)
+  test('records the backstop, sets Skip, and bypasses the persona tie-break', () => {
+    once(admission, FAILED_ADMISSION)
+    expect(admission).toContain('`recommended_action: Skip`')
   })
 
   test('excludes mechanical fixes and keeps an explicit user choice on top', () => {
-    const before = review35b.slice(0, mapping)
-    expect(before).toContain(
+    expect(admission).toContain(
       'Mechanical fixes, such as wrong counts or stale references, are not hazards.',
     )
-    expect(before).toContain('An explicit user choice still wins.')
+    expect(admission).toContain('An explicit user choice still wins.')
   })
 })
 
-describe('the rule text adds no harness tool syntax or banned strings', () => {
-  test('rule and clauses hold none of the neutral-v1 forbidden identifiers or content-integrity banned strings', () => {
-    const banned =
-      /task\(|subagent_type|todowrite|TodoWrite|request_user_input|ask_user|AskUserQuestion|update_plan|`question`|Claude Code|TaskCreate|compound-engineering:|CLAUDE\.md|CLAUDE_PLUGIN_ROOT|\.claude\//
-    for (const text of [RULE, MINIMAL_CHANGE, RISKS_CLAUSE, AUTO_MODE_CLAUSE]) {
-      expect(text).not.toMatch(banned)
-    }
+describe('document-review routes an admission failure away from silent apply', () => {
+  test('3.7 never queues a failure for silent apply and keeps explicit Apply', () => {
+    once(review37, NEVER_QUEUE)
+  })
+
+  test('the 3.7 table no longer hardcodes Apply as the recommendation', () => {
+    expect(review37).not.toContain('Apply marked (recommended)')
+    expect(review37).toContain('the 3.5b recommendation')
+  })
+
+  test('Phase 4 applies only what 3.7 queued, with one authority for the exclusion', () => {
+    expect(applyStep).toContain(
+      'Apply only the findings 3.7 queued for silent apply',
+    )
+    expect(applyStep).not.toContain('failed the admission test')
+  })
+
+  test('the no-fix downgrade only turns Apply into Defer, never touching Skip', () => {
+    expect(review35b).toContain(
+      'if the winning action is `Apply` but the merged finding has no `suggested_fix`',
+    )
+  })
+})
+
+describe('headless output lists admission failures as Declined, not as findings to address', () => {
+  test('the envelope has a Declined: label and renders failures only there', () => {
+    expect(envelope).toContain('\nDeclined:\n')
+    once(envelope, DECLINED_RENDER)
+  })
+
+  test('document-review Phase 0 qualifies silent apply and lists Declined: as non-actionable', () => {
+    expect(reviewPhase0).toContain('eligible under 3.7')
+    expect(reviewPhase0).toContain('`Declined:`')
+  })
+
+  test('the ce:plan handoff consumes only Proposed fixes and Decisions', () => {
+    once(handoff538, HANDOFF_CONSUMES)
+    expect(handoff538).not.toContain('Address any P0/P1 findings')
   })
 })

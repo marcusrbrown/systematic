@@ -227,12 +227,14 @@ Strengthen only the selected sections. Keep the plan coherent and preserve its o
 
 **In interactive mode:** Only integrate findings the user accepted in 5.3.6b. If some findings from different agents touch the same section, reconcile them coherently but do not reintroduce rejected findings.
 
+**Admission test.** Admit a hazard only if it bites at the current pin and no existing backstop covers it; otherwise decline it and name the backstop. This applies to proposed hazard mitigations anywhere in the list below. Use this test in auto mode. In interactive mode, honor the user's final Accept or Reject in 5.3.6b, subject to the existing edit limits.
+
 Allowed changes:
 - Clarify or strengthen decision rationale
 - Tighten requirements trace or origin fidelity
 - Reorder or split implementation units when sequencing is weak — but **never renumber existing U-IDs**. Reordering preserves U-IDs in their new order (e.g., U1, U3, U5 reordered is correct; renumbering to U1, U2, U3 is not). Splitting keeps the original U-ID on the original concept and assigns the next unused number to the new unit. Renumbering breaks ce:work blocker and verification references that were written against the original IDs
 - Add missing pattern references, file/test paths, or verification outcomes
-- Expand system-wide impact, risks, or rollout treatment where justified: Admit a hazard only if it bites at the current pin and no existing backstop covers it; otherwise decline it and name the backstop. In auto mode, the same test decides whether to integrate each finding.
+- Expand system-wide impact, risks, or rollout treatment where justified
 - Reclassify open questions between `Resolved During Planning` and `Deferred to Implementation` when evidence supports the change
 - Strengthen, replace, or add a High-Level Technical Design section when the work warrants it and the current representation is weak
 - Strengthen or add per-unit technical design fields where the unit's approach is non-obvious

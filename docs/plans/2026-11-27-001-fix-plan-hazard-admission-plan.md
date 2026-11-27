@@ -1,7 +1,7 @@
 ---
 title: "fix(skills): admit a lane hazard into a plan only if it bites at the current pin"
 type: fix
-status: active
+status: completed
 date: 2026-11-27
 ---
 

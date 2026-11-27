@@ -318,7 +318,7 @@ Summarize:
 - External references and best practices, if gathered
 - Related issues, PRs, or prior art
 - Any constraints that should materially shape the plan
-- Admit a hazard only if it bites at the current pin and no existing backstop covers it; otherwise decline it and name the backstop.
+- Admit a hazard only if it bites at the current pin and no existing backstop covers it; otherwise decline it and name the backstop. When writing the plan, record each distinct hazard declined in 1.4 or 1.5 in Risks & Dependencies, even for Lightweight plans. Write `Declined — covered by <backstop>` or `Declined — not established at the current pin`. Neither creates implementation work.
 
 #### 1.4b Reclassify Depth When Research Reveals External Contract Surfaces
 
@@ -342,7 +342,7 @@ Use the output to:
 - Identify missing edge cases, state transitions, or handoff gaps
 - Tighten requirements trace or verification strategy
 - Add only the flow details that materially improve the plan
-- Admit a hazard only if it bites at the current pin and no existing backstop covers it; otherwise decline it and name the backstop. A declined hazard goes in the plan's Risks table, with the backstop as its mitigation.
+- Admit a hazard only if it bites at the current pin and no existing backstop covers it; otherwise decline it and name the backstop.
 
 ### Phase 2: Resolve Planning Questions
 
