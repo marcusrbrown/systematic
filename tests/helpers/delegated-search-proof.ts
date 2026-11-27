@@ -263,13 +263,35 @@ function lastToolText(request: ChatRequest): string | undefined {
 /**
  * An OpenCode v2 host that runs every subagent in the background
  * (anomalyco/opencode#63382) has the `subagent` tool return this handle at
- * once, and the child's answer reaches the parent later, as a `<subagent>` user
- * message that starts a new parent turn. A v2 host that runs a subagent in the
+ * once, and the child's answer reaches the parent later, as a user message
+ * that starts a new parent turn. A v2 host that runs a subagent in the
  * foreground, and v1, hand the answer back inline as the tool result.
+ *
+ * That message is `<subagent sessionID=… state=…>` up to 2.3 and
+ * `<background-result kind="subagent" sessionID=… state=…>` from 2.4
+ * (`session/background-result.ts`); the handle is the same text on both.
  */
 const SUBAGENT_LAUNCH_PATTERN =
   /^The subagent is working in the background \(sessionID: /
-const SUBAGENT_REPORT_PATTERN = /^<subagent sessionID="[^"]*" state="[^"]*"/
+const SUBAGENT_REPORT_HEAD =
+  /^<(?:subagent|background-result kind="subagent") sessionID="([^"]*)" state="([^"]*)"/
+
+/**
+ * True when `text` opens with a subagent report, in either host form. The
+ * optional `sessionID` and `state` must match the report's own attributes. A
+ * message that only mentions the tag, or another background kind, is not one.
+ */
+export function isSubagentReport(
+  text: string,
+  expected: { sessionID?: string; state?: string } = {},
+): boolean {
+  const head = SUBAGENT_REPORT_HEAD.exec(text.trimStart())
+  if (head === null) return false
+  return (
+    (expected.sessionID === undefined || head[1] === expected.sessionID) &&
+    (expected.state === undefined || head[2] === expected.state)
+  )
+}
 
 /** True when the request's last message is the handle of a child that is still running. */
 export function isSubagentLaunch(request: ChatRequest): boolean {
@@ -281,7 +303,7 @@ export function isSubagentLaunch(request: ChatRequest): boolean {
 
 /**
  * What the child handed the parent in this request: the tool result as an
- * inline host returns it, or the `<subagent>` report that woke the parent on a
+ * inline host returns it, or the subagent report that woke the parent on a
  * background host. A launch handle is returned as is; use `isSubagentLaunch`
  * to tell it from an answer. `undefined` when the request carries neither.
  */
@@ -289,8 +311,7 @@ export function parentResultTextOf(request: ChatRequest): string | undefined {
   const last = (request.messages ?? []).at(-1)
   const text = messageText(last)
   if (roleOf(last) === 'tool') return text
-  if (roleOf(last) === 'user' && SUBAGENT_REPORT_PATTERN.test(text.trimStart()))
-    return text
+  if (roleOf(last) === 'user' && isSubagentReport(text)) return text
   return undefined
 }
 
