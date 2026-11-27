@@ -46,7 +46,8 @@ on:
           scanning early log output. The release-notes-narrative automation uses
           this to match its dispatch against gh run list output. Unused by all
           other entry points; the value is informational only and Fro Bot does
-          not act on it directly.
+          not act on it directly. A prompt dispatch that carries one stays
+          comment-only; without one, it is delivered as a branch and pull request.
         required: false
   workflow_call:
     inputs:
@@ -961,16 +962,19 @@ jobs:
           brokered-push-extra-paths: skills,agents,tests,registry
           model: ${{ vars.FRO_BOT_MODEL }}
           opencode-config: ${{ secrets.OPENCODE_CONFIG }}
-          # branch-pr only for the daily autoheal schedule and autoheal-mode
-          # dispatch runs, so the agent's file changes land on a branch instead
-          # of being discarded. Prompt-only dispatches (release-notes-narrative
-          # automation via scripts/dispatch-release-notes.sh) carry inputs.prompt
-          # and must stay comment-only, so this uses the same `inputs.prompt ==
-          # ''` guard and cron predicate as the PROMPT ladder above. PR-review
+          # branch-pr for the daily autoheal schedule and autoheal-mode dispatch
+          # runs, so the agent's file changes land on a branch instead of being
+          # discarded. That includes an ordinary dispatched prompt (a program ask
+          # from Fro Bot's cross-repo dispatch, which sends `prompt` alone).
+          # A dispatch that carries a correlation-id stays comment-only: the
+          # release-notes-narrative automation (scripts/dispatch-release-notes.sh)
+          # always sends one with its prompt and must stay comment-only. The
+          # correlation-id is a declared input, not prompt prose, so this routing
+          # does not depend on the prompt text. review mode never matches. PR-review
           # and comment-triggered runs never match either branch, so the ''
           # fallback there is defensive only: the action consults output-mode
           # solely on schedule/workflow_dispatch runs.
-          output-mode: ${{ ((github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || (github.event_name == 'workflow_dispatch' && inputs.prompt == '' && inputs.mode == 'autoheal')) && 'branch-pr' || '' }}
+          output-mode: ${{ ((github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'autoheal' && (inputs.prompt == '' || inputs.correlation-id == ''))) && 'branch-pr' || '' }}
           prompt: ${{ env.PROMPT }}
 
   # Deterministic backstop for R23: whatever the agent did, a fro-bot APPROVED
