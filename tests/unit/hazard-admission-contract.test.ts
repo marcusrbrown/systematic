@@ -35,7 +35,10 @@ const FAILED_ADMISSION =
   'On failed admission, record the covering backstop or `not established at the current pin`, set `recommended_action: Skip`, and bypass the persona tie-break. Later routing must preserve this recommendation.'
 
 const NEVER_QUEUE =
-  'Never queue an admission failure for silent apply. In interactive mode, route failures at anchors 75/100 as Proposed fixes with Skip recommended; apply only if the user explicitly chooses Apply for that finding. Anchor 50 remains non-actionable.'
+  'Never queue an admission failure for silent apply. In interactive mode, route failures at anchors 75/100 as Proposed fixes with Skip recommended, reclassifying a `safe_auto` failure to `gated_auto` so it reaches the walk-through; apply only if the user explicitly chooses Apply for that finding. Anchor 50 remains non-actionable.'
+
+const RECORD_IN_DEEPENING =
+  'Record each hazard declined here in Risks & Dependencies as `Declined — covered by <backstop>` or `Declined — not established at the current pin`.'
 
 const DECLINED_RENDER =
   'Render admission failures only under `Declined:`, with the recorded reason and no suggested fix. Do not nest a failed finding under an actionable root. Dependents of a declined root are non-actionable in this run.'
@@ -95,6 +98,11 @@ const applyStep = section(
   SYNTHESIS,
   '### Apply safe_auto fixes',
   '### Route Remaining Findings',
+)
+const routeRemaining = section(
+  SYNTHESIS,
+  '### Route Remaining Findings',
+  '**Headless mode:** Do not use interactive question tools.',
 )
 const envelope = section(
   SYNTHESIS,
@@ -177,6 +185,7 @@ describe('deepening applies the rule to proposed hazard mitigations', () => {
     const para = deepening537.slice(gate, allowed)
     expect(para).toContain(HAZARD_SCOPE)
     expect(para).toContain(AUTO_OR_INTERACTIVE)
+    expect(para).toContain(RECORD_IN_DEEPENING)
     expect(para).not.toContain('governs every change')
   })
 
@@ -186,6 +195,7 @@ describe('deepening applies the rule to proposed hazard mitigations', () => {
     expect(gate).toBeLessThan(allowed)
     const para = deepenPlanPhase5.slice(gate, allowed)
     expect(para).toContain(HAZARD_SCOPE)
+    expect(para).toContain(RECORD_IN_DEEPENING)
     expect(para).not.toContain('governs every change')
   })
 })
@@ -226,6 +236,12 @@ describe('document-review 3.5b applies the rule before action selection', () => 
 describe('document-review routes an admission failure away from silent apply', () => {
   test('3.7 never queues a failure for silent apply and keeps explicit Apply', () => {
     once(review37, NEVER_QUEUE)
+  })
+
+  test('a reclassified admission failure reaches the Phase 4 routing question', () => {
+    expect(routeRemaining).toContain(
+      'including admission failures 3.7 reclassified to `gated_auto` → enter the routing question',
+    )
   })
 
   test('the 3.7 table no longer hardcodes Apply as the recommendation', () => {

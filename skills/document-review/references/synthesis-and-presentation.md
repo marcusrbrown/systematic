@@ -209,7 +209,7 @@ Do not promote if the finding involves scope or priority changes where the autho
 
 Findings reaching 3.7 have already been gated to anchors `50`, `75`, or `100` by 3.2 (anchors `0` and `25` were dropped).
 
-Never queue an admission failure for silent apply. In interactive mode, route failures at anchors 75/100 as Proposed fixes with Skip recommended; apply only if the user explicitly chooses Apply for that finding. Anchor 50 remains non-actionable.
+Never queue an admission failure for silent apply. In interactive mode, route failures at anchors 75/100 as Proposed fixes with Skip recommended, reclassifying a `safe_auto` failure to `gated_auto` so it reaches the walk-through; apply only if the user explicitly chooses Apply for that finding. Anchor 50 remains non-actionable.
 
 | Anchor | Autofix Class | Route |
 |--------|---------------|-------|
@@ -261,7 +261,7 @@ List every applied fix in the output summary so the user can see what changed. U
 
 After safe_auto fixes apply, remaining findings split into buckets:
 
-- `gated_auto` and `manual` findings at confidence anchor `75` or `100` → enter the routing question (see Unit 5 / `references/walkthrough.md`)
+- `gated_auto` and `manual` findings at confidence anchor `75` or `100`, including admission failures 3.7 reclassified to `gated_auto` → enter the routing question (see Unit 5 / `references/walkthrough.md`)
 - FYI-subsection findings → surface in the presentation only, no routing
 - Zero actionable findings remaining → skip the routing question; flow directly to Phase 5 terminal question
 
