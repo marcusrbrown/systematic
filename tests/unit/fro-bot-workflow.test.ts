@@ -67,6 +67,44 @@ function promptRouting(source: string): string {
   return source.slice(start, end)
 }
 
+interface RoutingInputs {
+  mode: string
+  prompt: string
+  'correlation-id': string
+}
+
+/**
+ * Evaluates a `${{ ... }}` expression limited to the operators the routing
+ * expressions use (`&&`, `||`, `==`, `!=`, parentheses, string literals and
+ * `github.event_name` / `github.event.schedule` / `inputs.<name>` lookups).
+ * Inputs a dispatch does not carry resolve to the empty string, as in Actions;
+ * `mode` defaults to `autoheal`, as declared on workflow_dispatch.
+ */
+function compileExpression(
+  expression: string,
+): (
+  github: { event_name: string; schedule: string },
+  inputs: Partial<RoutingInputs>,
+) => string {
+  const body = expression
+    .trim()
+    .replace(/^\$\{\{/, '')
+    .replace(/\}\}$/, '')
+    .replace(/github\.event\.schedule/g, 'github.schedule')
+    .replace(/inputs\.correlation-id/g, "inputs['correlation-id']")
+    .replace(/([=!])=/g, '$1==')
+  const evaluate = new Function('github', 'inputs', `return (${body});`)
+  return (github, inputs) => {
+    const result: unknown = evaluate(github, {
+      mode: 'autoheal',
+      prompt: '',
+      'correlation-id': '',
+      ...inputs,
+    })
+    return typeof result === 'string' ? result : String(result)
+  }
+}
+
 /**
  * Autoheal prompt branches append the workflow-computed run context (today's
  * UTC date and the Sunday flag). The action hands the agent's shell only
@@ -283,6 +321,63 @@ describe('Fro Bot workflow contracts', () => {
     )
   })
 
+  test('routes output-mode by trigger, mode, prompt and correlation-id', () => {
+    const { workflow } = readWorkflow()
+    const jobs = asRecord(workflow.jobs, 'jobs')
+    const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
+    const steps = asArray(froBot.steps, 'fro-bot steps')
+    const runFroBot = findStep(steps, 'Run Fro Bot')
+    const runFroBotWith = asRecord(runFroBot.with, 'Run Fro Bot with')
+    const resolve = compileExpression(
+      asString(runFroBotWith['output-mode'], 'Run Fro Bot with.output-mode'),
+    )
+    const dispatch = (inputs: Partial<RoutingInputs>): string =>
+      resolve({ event_name: 'workflow_dispatch', schedule: '' }, inputs)
+
+    // Release-notes dispatch (scripts/dispatch-release-notes.sh): prompt plus
+    // correlation-id, mode left at its default. Must stay comment-only.
+    expect(
+      dispatch({ prompt: 'narrate v1.2.3', 'correlation-id': 'abc-123' }),
+    ).toBe('')
+
+    // A Fro Bot program ask: prompt only, mode defaulted, no correlation-id.
+    expect(dispatch({ prompt: 'do the program task' })).toBe('branch-pr')
+
+    // Existing contract: a prompt-less autoheal dispatch.
+    expect(dispatch({})).toBe('branch-pr')
+    expect(dispatch({ 'correlation-id': 'abc-123' })).toBe('branch-pr')
+
+    // Review mode is comment-only whether or not it carries a correlation-id.
+    expect(dispatch({ mode: 'review', prompt: 'review this' })).toBe('')
+    expect(
+      dispatch({
+        mode: 'review',
+        prompt: 'review this',
+        'correlation-id': 'abc-123',
+      }),
+    ).toBe('')
+
+    // Scheduled runs: only the daily autoheal cron.
+    expect(
+      resolve({ event_name: 'schedule', schedule: '30 3 * * *' }, {}),
+    ).toBe('branch-pr')
+    expect(resolve({ event_name: 'schedule', schedule: '0 9 * * 1' }, {})).toBe(
+      '',
+    )
+
+    // Events the action does not consult output-mode for stay empty.
+    for (const event_name of [
+      'pull_request',
+      'issues',
+      'issue_comment',
+      'workflow_call',
+    ]) {
+      expect(
+        resolve({ event_name, schedule: '' }, { prompt: 'a prompt' }),
+      ).toBe('')
+    }
+  })
+
   test('requests branch-pr output only for schedule and autoheal-mode dispatch runs', () => {
     const { workflow } = readWorkflow()
     const jobs = asRecord(workflow.jobs, 'jobs')
@@ -300,10 +395,11 @@ describe('Fro Bot workflow contracts', () => {
     expect(outputMode).toContain("inputs.mode == 'autoheal'")
     expect(outputMode).toContain("|| ''")
     expect(outputMode).toContain("inputs.prompt == ''")
+    expect(outputMode).toContain("inputs.correlation-id == ''")
     expect(outputMode).toContain("github.event.schedule == '30 3 * * *'")
   })
 
-  test('agrees with the PROMPT ladder that prompt-only dispatches stay comment-only', () => {
+  test('keeps dispatches that carry a correlation-id comment-only, as the PROMPT ladder routes their prompt', () => {
     const { workflow } = readWorkflow()
     const jobs = asRecord(workflow.jobs, 'jobs')
     const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
@@ -322,6 +418,10 @@ describe('Fro Bot workflow contracts', () => {
 
     expect(promptExpression).toContain("inputs.prompt != ''")
     expect(outputMode).toContain("inputs.prompt == ''")
+    // The release-notes dispatcher always sends a correlation-id with its
+    // prompt; that input, not the prompt text, is what keeps it comment-only.
+    expect(outputMode).toContain("inputs.correlation-id == ''")
+    expect(outputMode).not.toContain('release')
   })
 
   test('retains the exact issue_comment pull_request fork guard', () => {
