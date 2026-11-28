@@ -4,6 +4,24 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.38.6](https://github.com/marcusrbrown/systematic/compare/v3.38.5...v3.38.6) (2026-11-28)
+
+### Bug Fixes
+
+* **skills:** state the reviewer return's closed values once, next to the example ([#1554](https://github.com/marcusrbrown/systematic/issues/1554)) ([969ad70](https://github.com/marcusrbrown/systematic/commit/969ad706f6b294e32d1698e100418c341437ba3b))
+
+### Documentation
+
+* add a repo-local skill for auditing agent traces ([#1552](https://github.com/marcusrbrown/systematic/issues/1552)) ([1623b5f](https://github.com/marcusrbrown/systematic/commit/1623b5f0fe108b426c0998861c85235e31d77f47))
+
+### Continuous Integration
+
+* **fro-bot:** align local workflows with harness-tools parity ([#1551](https://github.com/marcusrbrown/systematic/issues/1551)) ([386838a](https://github.com/marcusrbrown/systematic/commit/386838a08683fc69527606d430404092befc9666))
+
+### Miscellaneous Chores
+
+* **deps:** update fro-bot/agent to v0.152.0 ([#1555](https://github.com/marcusrbrown/systematic/issues/1555)) ([6d0d2ab](https://github.com/marcusrbrown/systematic/commit/6d0d2abac1359019beb8ccad165994faecee5af3))
+
 ## [3.38.5](https://github.com/marcusrbrown/systematic/compare/v3.38.4...v3.38.5) (2026-11-28)
 
 ### Bug Fixes
