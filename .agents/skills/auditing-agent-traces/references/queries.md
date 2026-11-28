@@ -121,7 +121,9 @@ days into several calls.
 
 Add `"timeDimension": {"granularity": "day"}`. Rows come back per day and type: `TOOL` (tool calls), `GENERATION`
 (model calls), `AGENT` (agent runs). Query Tempo first for the days that hold the type you need. A day L0 shows
-without that type, or as one zero-count row with a blank type, is *empty*. A day you never queried is *not checked*.
+without that type, or as one zero-count row with a blank type, is *empty in Langfuse*. L0 says nothing about
+Tempo: a day you did not query there is *not checked in Tempo*, and the totals cover only the days you queried
+in both stores.
 
 ```json
 {
@@ -152,8 +154,8 @@ get the figures per day, which shows which slice a gap is in:
 
 Rows come back as `input`, `output`, `input_cached_tokens`, `input_cache_creation`, `output_reasoning_tokens` and
 `total`. `input_cached_tokens` is cache read. `total` already includes the other rows, so never add it to them.
-Drop the metadata filter for the fleet total. The fleet total minus the per-agent totals is usage with no agent
-name: report it. L2 sums what was reported. It can't show how many calls reported nothing; T4's two counts can.
+Drop the metadata filter for the fleet total. The fleet total minus the per-agent totals you ran is usage
+*outside the queried agents*. Call it usage with no agent name only when you queried every agent T3 lists. L2 sums what was reported. It can't show how many calls reported nothing; T4's two counts can.
 
 ```json
 {
@@ -171,7 +173,8 @@ name: report it. L2 sums what was reported. It can't show how many calls reporte
 
 One row per offered tool, with the number of model calls that offered it. Compare with the tools T1 shows the agent
 calling. Unequal counts mean the offered list changed between runs. A name missing here is a lead, not proof the
-tool was never offered: confirm on one model call (L6).
+tool was never offered. For one failed call, read the model call that asked for it (L6). For a claim about the
+whole window, compare each tool's count with the agent's model-call count (T3).
 
 ```json
 {
@@ -208,7 +211,7 @@ states what went wrong with the child's earlier answer.
 **L5. Skill loads**
 
 L4 with `name: "systematic_skill"` (bundled skills) or `name: "skill"`. The `input` is `{"name":"[skill]"}`. Count
-by paging to the end. These are load attempts; `level` says whether an error was recorded.
+by paging to the end, in slices of at most 14 days. These are load attempts; `level` says whether an error was recorded.
 
 **L6. Read one run**
 
