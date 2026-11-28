@@ -860,20 +860,25 @@ esac
     describe('Fro Bot-authored PR', () => {
       const BASE = 'a'.repeat(40)
       const HEAD = 'b'.repeat(40)
-      const selfRule = (extraEnv: Record<string, string> = {}) => {
-        const box = sandbox({ pr: { user: { login: 'fro-bot' } } })
+      const SHAS = { BASE_SHA: BASE, HEAD_SHA: HEAD }
+      const selfRule = (
+        extraEnv: Record<string, string> = {},
+        fixtures: { pr?: unknown; commits?: unknown } = {
+          pr: { user: { login: 'fro-bot' } },
+        },
+      ) => {
+        const box = sandbox(fixtures)
         const result = runStep(APPROVAL_RULE_STEP, box, {
           PR: '42',
           ...extraEnv,
         })
         expect(result.exitCode).toBe(0)
         expect(result.outputs.get('allowed')).toBe('false')
-        expect(calls(box)).toHaveLength(1)
-        return result.outputs.get('rule') ?? ''
+        return { rule: result.outputs.get('rule') ?? '', box }
       }
 
       it('keeps the verdict frontmatter and leaves the review event to the action', () => {
-        const rule = selfRule({ BASE_SHA: BASE, HEAD_SHA: HEAD })
+        const { rule } = selfRule({ EVENT_AUTHOR: 'fro-bot', ...SHAS })
         expect(rule).toContain('opened by Fro Bot')
         expect(rule).toContain('keep the verdict frontmatter')
         expect(rule).toContain('blocking issues in the review body')
@@ -884,28 +889,66 @@ esac
         expect(rule).not.toContain('never APPROVE')
       })
 
-      it('names the exact base and head and asks for a read-only comparison before a verdict', () => {
-        const rule = selfRule({ BASE_SHA: BASE, HEAD_SHA: HEAD })
-        expect(rule).toContain(`base ${BASE}`)
+      it('points at the SHA-pinned local git comparison, never gh', () => {
+        const { rule } = selfRule({ EVENT_AUTHOR: 'fro-bot', ...SHAS })
+        expect(rule).toContain(`checkout is the base commit ${BASE}`)
         expect(rule).toContain(`head ${HEAD}`)
-        expect(rule).toContain('read-only comparison')
-        expect(rule).toContain('gh pr diff 42')
-        expect(rule).toContain(
-          `repos/marcusrbrown/systematic/compare/${BASE}...${HEAD}`,
-        )
+        expect(rule).toContain(`git diff ${BASE}...${HEAD}`)
+        expect(rule).toContain(`git diff ${BASE} ${HEAD}`)
+        expect(rule).toContain('no merge base')
         expect(rule).toContain('before issuing a verdict')
-        expect(rule).toContain('checkout is the base')
-      })
-
-      it('still asks for the comparison when the event carries no SHAs', () => {
-        const rule = selfRule()
-        expect(rule).toContain('read-only comparison')
-        expect(rule).toContain('gh pr diff 42')
+        expect(rule).toContain('read-only')
+        // The pinned action withholds gh from a PR review run.
+        expect(rule).not.toMatch(/gh (?:pr|api)\b/)
         expect(rule).not.toContain('/compare/')
-        expect(rule).not.toMatch(/(?:base|head) [0-9a-f]{40}/)
       })
 
-      it('passes the event base and head SHAs into the rule step', () => {
+      it('requires the review to say so and withholds a passing verdict when the patch cannot be read', () => {
+        const { rule } = selfRule({ EVENT_AUTHOR: 'fro-bot', ...SHAS })
+        expect(rule).toContain(
+          'If the patch cannot be read, say so in the review body',
+        )
+        expect(rule).toContain('do not issue a passing verdict')
+      })
+
+      it('selects the self-review rule from the event author when the author lookup fails', () => {
+        const { rule, box } = selfRule(
+          { EVENT_AUTHOR: 'fro-bot', GH_FAIL: '1', ...SHAS },
+          { pr: { user: { login: 'fro-bot' } } },
+        )
+        expect(rule).toContain(`git diff ${BASE}...${HEAD}`)
+        expect(calls(box).every((c) => !c.includes('/commits'))).toBe(true)
+      })
+
+      it('never allows approval for an event author of fro-bot, even if the API disagrees', () => {
+        const { rule } = selfRule(
+          { EVENT_AUTHOR: 'fro-bot', ...SHAS },
+          {
+            pr: { user: { login: 'marcusrbrown' } },
+            commits: [commit('marcusrbrown', 'marcusrbrown')],
+          },
+        )
+        expect(rule).toContain(`git diff ${BASE}...${HEAD}`)
+        expect(rule).not.toBe(ALLOWED_RULE)
+      })
+
+      it('keeps approval fail-closed with the generic rule when another event author lookup fails', () => {
+        const { rule } = selfRule(
+          { EVENT_AUTHOR: 'marcusrbrown', GH_FAIL: '1', ...SHAS },
+          { pr: { user: { login: 'marcusrbrown' } } },
+        )
+        expect(rule).toBe(DENIED_RULE)
+      })
+
+      it('gives frontmatter guidance without git instructions when no event author or SHAs are available', () => {
+        // issue_comment and review-comment runs: the checkout is the PR head.
+        const { rule } = selfRule({})
+        expect(rule).toContain('keep the verdict frontmatter')
+        expect(rule).not.toContain('git diff')
+        expect(rule).not.toMatch(/[0-9a-f]{40}/)
+      })
+
+      it('passes the event author and SHAs into the rule step', () => {
         const env = asRecord(
           findStep(froBotSteps(), APPROVAL_RULE_STEP).env,
           'approval-rule env',
@@ -916,6 +959,102 @@ esac
         expect(env.HEAD_SHA).toBe(
           `${EXPRESSION_PREFIX}{{ github.event.pull_request.head.sha }}`,
         )
+        expect(env.EVENT_AUTHOR).toBe(
+          `${EXPRESSION_PREFIX}{{ github.event_name == 'pull_request' && github.event.pull_request.user.login || '' }}`,
+        )
+      })
+
+      it('keys the base checkout and the rule on the same event author', () => {
+        const checkout = asRecord(
+          stepNamed('Checkout repository').with,
+          'checkout with',
+        )
+        expect(asString(checkout.ref, 'checkout ref')).toContain(
+          "github.event.pull_request.user.login == 'fro-bot'",
+        )
+        const env = asRecord(
+          findStep(froBotSteps(), APPROVAL_RULE_STEP).env,
+          'approval-rule env',
+        )
+        expect(String(env.EVENT_AUTHOR)).toContain(
+          'github.event.pull_request.user.login',
+        )
+      })
+    })
+
+    describe('head fetch for the Fro Bot-authored PR review', () => {
+      const FETCH_STEP = 'Fetch the Fro Bot pull request head for review'
+      const BASE = 'a'.repeat(40)
+      const HEAD = 'b'.repeat(40)
+
+      function runFetch(failFetch: boolean) {
+        const box = sandbox({})
+        const gitLog = path.join(box.dir, 'git.log')
+        fs.writeFileSync(
+          path.join(box.dir, 'bin', 'git'),
+          `#!/usr/bin/env bash
+echo "$*" >> "${gitLog}"
+[ -z "\${GIT_FAIL:-}" ] || exit 1
+`,
+          { mode: 0o755 },
+        )
+        const result = runStep(FETCH_STEP, box, {
+          BASE_SHA: BASE,
+          HEAD_SHA: HEAD,
+          ...(failFetch ? { GIT_FAIL: '1' } : {}),
+        })
+        const seen = fs.existsSync(gitLog)
+          ? fs.readFileSync(gitLog, 'utf8').split('\n').filter(Boolean)
+          : []
+        return { result, seen }
+      }
+
+      it('runs only for a Fro Bot-authored pull request, right after the base checkout', () => {
+        const steps = froBotSteps()
+        const step = findStep(steps, FETCH_STEP)
+        expect(step.if).toBe(
+          "github.event_name == 'pull_request' && github.event.pull_request.user.login == 'fro-bot'",
+        )
+        expect(stepIndex(steps, FETCH_STEP)).toBe(
+          stepIndex(steps, 'Checkout repository') + 1,
+        )
+        expect(stepIndex(steps, FETCH_STEP)).toBeLessThan(
+          stepIndex(steps, 'Install dependencies'),
+        )
+      })
+
+      it('takes the SHAs from the event and carries no credentials or PR code', () => {
+        const step = findStep(froBotSteps(), FETCH_STEP)
+        const env = asRecord(step.env, 'fetch env')
+        const run = asString(step.run, 'fetch run')
+        expect(env).toEqual({
+          BASE_SHA: `${EXPRESSION_PREFIX}{{ github.event.pull_request.base.sha }}`,
+          HEAD_SHA: `${EXPRESSION_PREFIX}{{ github.event.pull_request.head.sha }}`,
+        })
+        // SHAs come in through env, never interpolated into the script.
+        expect(run).not.toContain(`${EXPRESSION_PREFIX}{{`)
+        expect(JSON.stringify(step)).not.toMatch(/secrets\.|GH_TOKEN|token/i)
+        // The checkout persists no credential, so this fetch is anonymous and
+        // relies on the repository being public.
+        const checkout = asRecord(
+          findStep(froBotSteps(), 'Checkout repository').with,
+          'checkout with',
+        )
+        expect(checkout['persist-credentials']).toBe(false)
+        // Fetching and diffing run no checked-out code.
+        expect(run).not.toMatch(/\b(?:bun|npm|node|sh|make)\b/)
+      })
+
+      it('fetches the head and base objects by SHA without tags', () => {
+        const { result, seen } = runFetch(false)
+        expect(result.exitCode).toBe(0)
+        expect(seen).toEqual([`fetch --no-tags origin ${HEAD} ${BASE}`])
+      })
+
+      it('warns instead of failing the job when the fetch fails, leaving the rule to report an unreadable patch', () => {
+        const { result } = runFetch(true)
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).toContain('::warning::')
       })
     })
 

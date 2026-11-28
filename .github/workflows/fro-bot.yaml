@@ -869,6 +869,11 @@ jobs:
 
       # R23: Fro Bot may APPROVE only marcusrbrown's PRs with no fro-bot commit.
       # Any API error yields allowed=false (fail closed).
+      #
+      # On an automatic pull_request review the event author, which also selects the
+      # base checkout below, decides the self-review rule, so a failed author lookup
+      # cannot drop the diff guidance. A fro-bot event author never reaches the
+      # lookup and is never allowed approval.
       - name: Decide whether Fro Bot may approve
         id: approval-rule
         if: >-
@@ -880,6 +885,7 @@ jobs:
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_AUTHOR: ${{ github.event_name == 'pull_request' && github.event.pull_request.user.login || '' }}
         # `shell: bash` runs with pipefail; the default shell does not, and a failed
         # `gh` inside a pipeline would read as an empty (allowing) result.
         shell: bash
@@ -889,13 +895,17 @@ jobs:
           # The agent action rejects a pull request review without a verdict, and posts
           # either verdict as a COMMENT review on a PR the posting account authored.
           # The prompt keeps the verdict frontmatter and leaves the review event to the action.
-          # The checkout is the base and the action's diff context lists only file names
-          # and counts, so the reviewer must read the change itself, read-only.
-          deny_self="This pull request was opened by Fro Bot: keep the verdict frontmatter and put any blocking issues in the review body; the action chooses the GitHub review event. The checkout is the base, not the head, and the action's diff context lists only file names and counts. Run a read-only comparison of the full change before issuing a verdict: 'gh pr diff ${PR}'"
-          if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ]; then
-            deny_self="${deny_self}, or 'gh api repos/${GITHUB_REPOSITORY}/compare/${BASE_SHA}...${HEAD_SHA}' (base ${BASE_SHA}, head ${HEAD_SHA})"
+          deny_self='This pull request was opened by Fro Bot: keep the verdict frontmatter and put any blocking issues in the review body; the action chooses the GitHub review event.'
+          self=false
+          if [ "${EVENT_AUTHOR:-}" = 'fro-bot' ]; then
+            self=true
+            # The checkout is the base, and the action's diff context lists only file
+            # names and counts. `gh` is withheld from a PR review run, so the reviewer
+            # reads the patch with local git; the fetch step below ensures both objects.
+            if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ]; then
+              deny_self="${deny_self} The checkout is the base commit ${BASE_SHA}, not the head ${HEAD_SHA}, and the action's diff context lists only file names and counts. The gh CLI is not available, so before issuing a verdict read the full patch with the read-only 'git diff ${BASE_SHA}...${HEAD_SHA}' (or 'git diff ${BASE_SHA} ${HEAD_SHA}' if there is no merge base). If the patch cannot be read, say so in the review body and do not issue a passing verdict."
+            fi
           fi
-          deny_self="${deny_self}."
           author=''
 
           decide() {
@@ -912,10 +922,10 @@ jobs:
             fi
           }
 
-          if decide; then
+          if [ "$self" = 'false' ] && decide; then
             { echo 'allowed=true'; echo "rule=${allow}"; } >> "$GITHUB_OUTPUT"
           else
-            if [ "$author" = 'fro-bot' ]; then deny=$deny_self; fi
+            if [ "$self" = 'true' ] || [ "$author" = 'fro-bot' ]; then deny=$deny_self; fi
             { echo 'allowed=false'; echo "rule=${deny}"; } >> "$GITHUB_OUTPUT"
           fi
 
@@ -933,6 +943,22 @@ jobs:
           token: ${{ secrets.FRO_BOT_PAT }}
           persist-credentials: false
 
+      # The base checkout holds the full history of the repository's branches, but not
+      # necessarily the head commit (a force-push or deleted branch). Fetch both objects
+      # by SHA so the reviewer's `git diff <base>...<head>` resolves. This only moves
+      # objects: it runs nothing from the pull request, and the checkout persists no
+      # credential, so the fetch is anonymous and relies on this repository being public.
+      # A failed fetch warns; the rule then has the reviewer report an unreadable patch.
+      - name: Fetch the Fro Bot pull request head for review
+        if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'fro-bot'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! git fetch --no-tags origin "$HEAD_SHA" "$BASE_SHA"; then
+            echo "::warning::Could not fetch the pull request head ${HEAD_SHA}; the review cannot read the patch."
+          fi
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
@@ -942,7 +968,7 @@ jobs:
 
       # For automatic reviews of Fro Bot's own PRs, the checkout and local
       # composite come from the base and no PR lifecycle scripts run on the
-      # runner. The reviewer reads the change through the read-only comparison the
+      # runner. The reviewer reads the change through the local git comparison the
       # approval rule names, because the action's diff context has no patch hunks.
       - name: Run Fro Bot
         uses: ./.github/actions/fro-bot-agent
