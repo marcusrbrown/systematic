@@ -1,7 +1,7 @@
 ---
 title: "feat: Repo-local trace audit skill"
 type: feat
-status: active
+status: completed
 date: 2026-11-27
 origin: docs/brainstorms/2026-11-27-trace-audit-skill-requirements.md
 ---
@@ -10,7 +10,7 @@ origin: docs/brainstorms/2026-11-27-trace-audit-skill-requirements.md
 
 ## Overview
 
-Add one repo-local skill, `trace-audit`, that teaches an agent to read the Langfuse and Tempo trace stores. It
+Add one repo-local skill, `auditing-agent-traces`, that teaches an agent to read the Langfuse and Tempo trace stores. It
 answers usage questions about Systematic's agents, skills and tools, and it sweeps a time window into ranked
 improvement candidates. The minimal change is a skill directory with query recipes and one README row. No
 TypeScript, no bundled content and no generated surface changes.
@@ -158,24 +158,24 @@ counts of tool spans. Cache read is tokens, summed as average times count over c
 
 ## Output Structure
 
-    .agents/skills/trace-audit/
+    .agents/skills/auditing-agent-traces/
       SKILL.md
       references/
         queries.md
 
 ## Implementation Units
 
-- [ ] **Unit 1: Write the skill**
+- [x] **Unit 1: Write the skill**
 
-**Goal:** A loadable `trace-audit` skill with both modes, the disclosure rules and tested query recipes.
+**Goal:** A loadable `auditing-agent-traces` skill with both modes, the disclosure rules and tested query recipes.
 
 **Requirements:** R1 to R16.
 
 **Dependencies:** None.
 
 **Files:**
-- Create: `.agents/skills/trace-audit/SKILL.md`
-- Create: `.agents/skills/trace-audit/references/queries.md`
+- Create: `.agents/skills/auditing-agent-traces/SKILL.md`
+- Create: `.agents/skills/auditing-agent-traces/references/queries.md`
 - Modify: `.agents/skills/README.md`
 
 **Approach:**
@@ -198,7 +198,7 @@ counts of tool spans. Cache read is tokens, summed as average times count over c
 - markdownlint passes on both files.
 - Every query in `references/queries.md` returns a result when run as written.
 
-- [ ] **Unit 2: Prove it and run the first sweep**
+- [x] **Unit 2: Prove it and run the first sweep**
 
 **Goal:** Show the skill reproduces the hand-built figures and turns the known leads into candidates or open leads.
 
@@ -207,7 +207,7 @@ counts of tool spans. Cache read is tokens, summed as average times count over c
 **Dependencies:** Unit 1.
 
 **Files:**
-- Modify: `.agents/skills/trace-audit/references/queries.md` (only if a recipe proves wrong)
+- Modify: `.agents/skills/auditing-agent-traces/references/queries.md` (only if a recipe proves wrong)
 
 **Approach:**
 - A fresh agent loads the skill and answers "which tools did each subagent call, how often did they fail, and what
@@ -220,7 +220,8 @@ counts of tool spans. Cache read is tokens, summed as average times count over c
 **Test scenarios:**
 - Happy path: the ask-mode answer matches 7,584 tool calls and 242 failures for the window, within any drift from
   late-arriving spans, and states that tool spans start on 2026-11-25.
-- Edge case: a seven-day window reports the four days with no tool spans as not covered, not as zero.
+- Edge case: a seven-day window reports the two days with no tool spans as empty and the two with only a few
+  smoke-test spans as such, not as zero.
 - Edge case: cache-read totals are labelled partial and give the share of spans without the attribute.
 - Happy path: each of the five leads ends as a candidate with trace identifiers or as an open lead with an owner.
 - Error path: a recipe that returns an error or an empty result is reported, not silently dropped.
