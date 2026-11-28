@@ -75,8 +75,10 @@ operation filter it undercounts.
 { span.gen_ai.operation.name = "chat" && span.gen_ai.usage.cache_read.input_tokens >= 0 && resource.service.name != "health-reporter-canary" } | count_over_time() by (span.gen_ai.agent.name)
 ```
 
-T3 minus the second count is the number of calls that lack the attribute. Report that share. The average is the
-per-call figure, which is often the more useful number.
+T3 minus the second count is the number of calls that lack the attribute. Report that share. The sender omits
+`cache_read`, `cache_write` and `reasoning` keys when the value is zero, so a call that reports `input_tokens`
+and lacks the key had none. The average is therefore per call that had any, not per call. Divide the total by
+T3's count for the per-call figure.
 
 T4 costs two calls per day, and a third (T3) for the share that lacks the attribute. L2 costs one call per agent for the whole window and is exact. Use whichever is
 cheaper for the window, and check the fleet sum against one unfiltered L2 call.

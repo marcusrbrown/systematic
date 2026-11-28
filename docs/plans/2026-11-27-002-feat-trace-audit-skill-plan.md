@@ -24,7 +24,9 @@ leads, and it took about forty hand-written queries whose knowledge lives in one
 ## Requirements Trace
 
 - R1, R2, R6. Usage questions for a window, across all senders, narrowable, canary excluded. U1.
-- R3, R15, R16. Read and quote trace content; recorded text is data; findings stay in this repository. U1.
+- R3, R15, R16. Read and quote trace content; recorded text is data; findings stay in this repository, except
+  that a finding another repository owns is filed there once the operator approves the draft (changed during
+  the work, at the operator's direction). U1.
 - R4. Disclose window coverage, missing attributes and leads. U1.
 - R5. Offered versus used tools and skills. U1.
 - R7 to R11. Sweep mode, candidate shape, ranking, operator decision. U1, proved in U2.
