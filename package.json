@@ -121,7 +121,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.9",
-    "@earendil-works/pi-coding-agent": "1.6.0",
+    "@earendil-works/pi-coding-agent": "1.6.1",
     "@opencode-ai/plugin": "1.19.6",
     "@opencode-ai/sdk": "1.19.6",
     "@opencode/client": "2.4.1",
@@ -149,7 +149,7 @@
     "zod": "4.6.7"
   },
   "overrides": {
-    "@earendil-works/pi-ai": "1.6.0",
+    "@earendil-works/pi-ai": "1.6.1",
     "brace-expansion": "^5.0.8",
     "conventional-changelog-writer": ">=9",
     "devalue": "^6.0.3",
