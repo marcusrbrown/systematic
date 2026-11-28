@@ -352,15 +352,19 @@ describe('closed values block', () => {
     expect(block).toMatch(/`owner`[^.]*\.\s*never[^.]*`pr_author`/i)
   })
 
-  test('evidence is an array of 1 to 5 strings of at most 500 characters, never one string', () => {
+  test('evidence is an array of 1 to 5 entries, a string or the overflow form, never one string', () => {
     const evidence = asRecord(findingProps.evidence)
-    const item = asRecord(
-      (evidence.items as { anyOf: unknown[] }).anyOf[0] as JsonRecord,
-    )
+    const branches = (evidence.items as { anyOf: unknown[] }).anyOf
+    const text = asRecord(branches[0] as JsonRecord)
+    const overflow = asRecord(branches[1] as JsonRecord)
+    const excerpt = asRecord(asRecord(overflow.properties).excerpt)
     const block = normalize(blockText(TEMPLATE) ?? '')
 
+    expect(branches).toHaveLength(2)
+    expect(overflow.required).toEqual(['overflow', 'excerpt'])
+    expect(excerpt.maxLength).toBe(text.maxLength)
     expect(block).toContain(
-      `\`evidence\`: a JSON array of ${evidence.minItems} to ${evidence.maxItems} strings, each at most ${item.maxLength} characters. Never one string.`,
+      `\`evidence\`: a JSON array of ${evidence.minItems} to ${evidence.maxItems} entries. Each entry is a string of at most ${text.maxLength} characters, or \`{ "overflow": true, "excerpt": "..." }\` with an excerpt of at most ${excerpt.maxLength} characters when the evidence does not fit. Never one bare string in place of the array.`,
     )
   })
 

@@ -68,7 +68,7 @@ Closed values. Use these exactly. Any other value fails validation and the whole
 - `autofix_class`: exactly one of `safe_auto`, `gated_auto`, `manual`, `advisory`. Never `safe`. The decision guide in the Rules says what each class means.
 - `owner`: the default next actor for the finding, exactly one of `review-fixer`, `downstream-resolver`, `human`, `release`. Never a role such as `pr_author`, `docs`, or `author`.
 - Allowed pairings of `autofix_class` with `owner`, as the parent routes them: `safe_auto` with `review-fixer`; `gated_auto` or `manual` with `downstream-resolver` or `human`; `advisory` with `human` or `release`.
-- `evidence`: a JSON array of 1 to 5 strings, each at most 500 characters. Never one string. The evidence rule in the Rules covers overflow.
+- `evidence`: a JSON array of 1 to 5 entries. Each entry is a string of at most 500 characters, or `{ "overflow": true, "excerpt": "..." }` with an excerpt of at most 500 characters when the evidence does not fit. Never one bare string in place of the array.
 
 Confidence rubric (0.0-1.0 scale):
 - 0.00-0.29: Not confident / likely false positive. Do not report.
