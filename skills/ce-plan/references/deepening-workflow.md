@@ -227,6 +227,8 @@ Strengthen only the selected sections. Keep the plan coherent and preserve its o
 
 **In interactive mode:** Only integrate findings the user accepted in 5.3.6b. If some findings from different agents touch the same section, reconcile them coherently but do not reintroduce rejected findings.
 
+**Admission test.** Admit a hazard only if it bites at the current pin and no existing backstop covers it; otherwise decline it and name the backstop. This applies to proposed hazard mitigations anywhere in the list below. Use this test in auto mode. In interactive mode, honor the user's final Accept or Reject in 5.3.6b, subject to the existing edit limits. Record each hazard declined here in Risks & Dependencies as `Declined — covered by <backstop>` or `Declined — not established at the current pin`.
+
 Allowed changes:
 - Clarify or strengthen decision rationale
 - Tighten requirements trace or origin fidelity

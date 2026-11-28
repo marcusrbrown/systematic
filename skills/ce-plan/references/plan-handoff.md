@@ -14,7 +14,7 @@ If document-review returns findings that were auto-applied, note them briefly wh
 
 When document-review returns "Review complete", proceed to Final Checks.
 
-**Pipeline mode:** If invoked from an automated workflow such as LFG or any `disable-model-invocation` context, run `document-review` with `mode:headless` and the plan path. Headless mode applies auto-fixes silently and returns structured findings without interactive prompts. Address any P0/P1 findings before returning control to the caller.
+**Pipeline mode:** If invoked from an automated workflow such as LFG or any `disable-model-invocation` context, run `document-review` with `mode:headless` and the plan path. Headless mode applies auto-fixes silently and returns structured findings without interactive prompts. Before returning control to the caller, address P0/P1 items in Proposed fixes and Decisions only; do not act on Declined or FYI observations.
 
 ## 5.3.9 Final Checks and Cleanup
 

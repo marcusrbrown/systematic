@@ -346,6 +346,8 @@ If artifact-backed mode was used:
 - synthesize in one pass
 - do not create a separate judge, merge, or quality-review phase unless the user explicitly asks for another pass
 
+**Admission test.** Admit a hazard only if it bites at the current pin and no existing backstop covers it; otherwise decline it and name the backstop. This applies to proposed hazard mitigations anywhere in the list below. Record each hazard declined here in Risks & Dependencies as `Declined — covered by <backstop>` or `Declined — not established at the current pin`.
+
 Allowed changes:
 - Clarify or strengthen decision rationale
 - Tighten requirements trace or origin fidelity
