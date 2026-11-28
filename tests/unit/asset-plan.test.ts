@@ -709,3 +709,57 @@ Fixture prompt.
     expect(folded?.external_directory).toEqual({ '*': 'allow' })
   })
 })
+
+describe('buildAssetPlan: an overlay rule for a tool the shipped reviewer block names', () => {
+  /** The last whole-tool rule that matches `tool`: last match wins. */
+  function outcome(
+    rules: readonly PermissionRuleTriple[],
+    tool: string,
+  ): PermissionRuleTriple['setting'] | undefined {
+    return rules.findLast(
+      (rule) =>
+        rule.pattern === '*' &&
+        (rule.permission === '*' || rule.permission === tool),
+    )?.setting
+  }
+
+  const SHIPPED_REVIEWER = fs.readFileSync(
+    path.join(import.meta.dir, '../../agents/review/correctness-reviewer.md'),
+    'utf8',
+  )
+
+  beforeEach(() => {
+    writeTree(fixture.bundledRoot, {
+      'agents/review/correctness-reviewer.md': SHIPPED_REVIEWER,
+    })
+  })
+
+  test('with no wildcard overlay, an agent allow brings the tool back', () => {
+    const plan = planWith({
+      agents: {
+        'correctness-reviewer': { permission: { systematic_skill: 'allow' } },
+      },
+    })
+    const rules = managedRules(plan, 'correctness-reviewer')
+
+    expect(outcome(rules, 'systematic_skill')).toBe('allow')
+    expect(outcome(rules, 'task')).toBe('deny')
+  })
+
+  // The block seeds each named tool before any overlay, and a later rule for
+  // that tool is set in place. A wildcard written by an overlay comes after it.
+  test("under an overlay '*': deny, an allow for a tool the block names stays hidden", () => {
+    const plan = planWith({
+      categories: { review: { permission: { '*': 'deny' } } },
+      agents: {
+        'correctness-reviewer': {
+          permission: { systematic_skill: 'allow', read: 'allow' },
+        },
+      },
+    })
+    const rules = managedRules(plan, 'correctness-reviewer')
+
+    expect(outcome(rules, 'systematic_skill')).toBe('deny')
+    expect(outcome(rules, 'read')).toBe('allow')
+  })
+})

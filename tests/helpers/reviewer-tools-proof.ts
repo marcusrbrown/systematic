@@ -662,6 +662,8 @@ export interface ReadOutcome {
   returned: boolean
   /** The host asked for permission (a headless run prints the request and rejects it). */
   permissionRequested: boolean
+  /** The child's result is the host's permission-denied error. */
+  permissionDenied: boolean
   /**
    * The child got a tool result back. A headless run that auto-rejects a
    * permission request ends the child before it gets one.
@@ -669,6 +671,21 @@ export interface ReadOutcome {
   resultReceived: boolean
   /** The child's result text, or a note that it received none. */
   result: string
+}
+
+/** The error a host returns for a tool call a permission rule denies. */
+const PERMISSION_DENIED_RESULT = /Permission denied: \w+/
+
+/**
+ * Whether a read ended in a way the proof can compare: the planted file came
+ * back, or the host asked for permission, or it returned its permission-denied
+ * error. Any other result, including an error about the call itself, says
+ * nothing about the permission rules.
+ */
+function isRecognizedReadOutcome(outcome: ReadOutcome): boolean {
+  return (
+    outcome.returned || outcome.permissionRequested || outcome.permissionDenied
+  )
 }
 
 /** What the child's read call did, judged by whether the planted `marker` came back. */
@@ -680,6 +697,7 @@ export function readOutcome(
   return {
     returned: result.includes(marker),
     permissionRequested: /permission requested/.test(run.stderr),
+    permissionDenied: PERMISSION_DENIED_RESULT.test(result),
     resultReceived: run.childCallResult !== undefined,
     result,
   }
@@ -695,9 +713,10 @@ export function describeReadOutcome(outcome: ReadOutcome): string {
  * Reasons the reviewer's read ended differently from the control agent's read
  * of the same kind of file, or an empty list when the outcomes match. The
  * reviewer's block sets nothing for `read` or `external_directory`, so the
- * host's own rules decide both reads the same way for both agents. A control
- * read that neither returned the file, nor was asked about, nor got a result
- * shows nothing, so it fails.
+ * host's own rules decide both reads the same way for both agents. Each run's
+ * read must also end in a recognized outcome (the planted file came back, or a
+ * permission request or denial); two runs that end in the same unrelated error
+ * agree on nothing, so each one fails and is named.
  */
 export function readParityFailures(
   reviewer: ReviewerOfferRun,
@@ -708,13 +727,17 @@ export function readParityFailures(
   if (failures.length > 0) return failures
   const reviewerOutcome = readOutcome(reviewer, marker)
   const controlOutcome = readOutcome(control, marker)
-  if (
-    !controlOutcome.returned &&
-    !controlOutcome.permissionRequested &&
-    !controlOutcome.resultReceived
-  ) {
-    return ['the control read shows nothing: no file, no ask, no result']
+  for (const [name, outcome] of [
+    ['reviewer', reviewerOutcome],
+    ['control', controlOutcome],
+  ] as const) {
+    if (!isRecognizedReadOutcome(outcome)) {
+      failures.push(
+        `the ${name}'s read ended in neither the planted file nor a permission outcome: ${describeReadOutcome(outcome)}`,
+      )
+    }
   }
+  if (failures.length > 0) return failures
   if (
     reviewerOutcome.returned !== controlOutcome.returned ||
     reviewerOutcome.permissionRequested !==
