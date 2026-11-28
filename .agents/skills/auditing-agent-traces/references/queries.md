@@ -77,8 +77,10 @@ operation filter it undercounts.
 
 T3 minus the second count is the number of calls that lack the attribute. Report that share. The sender omits
 `cache_read`, `cache_write` and `reasoning` keys when the value is zero, so a call that reports `input_tokens`
-and lacks the key had none. The average is therefore per call that had any, not per call. Divide the total by
-T3's count for the per-call figure.
+and lacks the key had none. The average is therefore per call that had any, not per call. For the per-call figure,
+divide the total by the number of calls that report usage: the second query with
+`span.gen_ai.usage.input_tokens >= 0` in place of the cache-read condition. T3 minus that number is the calls
+with no usage reported. Give it as the unknown share and leave those calls out of the average.
 
 T4 costs two calls per day, and a third (T3) for the share that lacks the attribute. L2 costs one call per agent for the whole window and is exact. Use whichever is
 cheaper for the window, and check the fleet sum against one unfiltered L2 call.
@@ -155,7 +157,7 @@ get the figures per day, which shows which slice a gap is in:
 Rows come back as `input`, `output`, `input_cached_tokens`, `input_cache_creation`, `output_reasoning_tokens` and
 `total`. `input_cached_tokens` is cache read. `total` already includes the other rows, so never add it to them.
 Drop the metadata filter for the fleet total. The fleet total minus the per-agent totals you ran is usage
-*outside the queried agents*. Call it usage with no agent name only when you queried every agent T3 lists. L2 sums what was reported. It can't show how many calls reported nothing; T4's two counts can.
+*outside the queried agents*. Do not call it usage with no agent name. L2 sums what was reported. It can't show how many calls reported nothing; T4's two counts can.
 
 ```json
 {
