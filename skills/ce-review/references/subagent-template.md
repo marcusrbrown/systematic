@@ -62,6 +62,14 @@ A populated example of a conforming payload. The `reviewer` value is the `Review
 }
 </example-return>
 
+Closed values. Use these exactly. Any other value fails validation and the whole return is rejected.
+
+- `severity`: exactly one of `P0`, `P1`, `P2`, `P3`. Never a word such as `high` or `medium`.
+- `autofix_class`: exactly one of `safe_auto`, `gated_auto`, `manual`, `advisory`. Never `safe`. The decision guide in the Rules says what each class means.
+- `owner`: the default next actor for the finding, exactly one of `review-fixer`, `downstream-resolver`, `human`, `release`. Never a role such as `pr_author`, `docs`, or `author`.
+- Allowed pairings of `autofix_class` with `owner`, as the parent routes them: `safe_auto` with `review-fixer`; `gated_auto` or `manual` with `downstream-resolver` or `human`; `advisory` with `human` or `release`.
+- `evidence`: a JSON array of 1 to 5 entries. Each entry is a string of at most 500 characters, or `{ "overflow": true, "excerpt": "..." }` with an excerpt of at most 500 characters when the evidence does not fit. Never one bare string in place of the array.
+
 Confidence rubric (0.0-1.0 scale):
 - 0.00-0.29: Not confident / likely false positive. Do not report.
 - 0.30-0.49: Somewhat confident. Do not report -- too speculative for actionable review.
@@ -83,9 +91,9 @@ False-positive categories to actively suppress:
 Rules:
 - You are a leaf reviewer inside an already-running systematic review workflow. Do not invoke systematic skills or agents unless this template explicitly instructs you to. Perform your analysis directly and return findings in the required output format only.
 - Every returned finding MUST include at least one evidence item grounded in the actual code. Detail fields are part of the returned payload, not a second output.
-- Evidence is bounded to at most 5 entries of at most 500 characters each. Split a longer trail across entries when it fits; otherwise retain a bounded `excerpt` with `{ "overflow": true, "excerpt": "..." }`. Never silently truncate evidence.
+- When evidence is longer than one entry holds, split the trail across entries when it fits; otherwise retain a bounded `excerpt` with `{ "overflow": true, "excerpt": "..." }`. Never silently truncate evidence.
 - Finding paths MUST be repository-relative, with the checkout prefix stripped (`src/a.ts`, never `/work/repo/src/a.ts`). The schema rejects absolute paths, and an evidence entry that begins with an absolute path is rejected too. Do not reproduce credential literals (API keys, tokens, passwords) in a finding's title, evidence, or fix; a source-level environment-variable reference (`process.env.API_KEY`, `${SECRET_TOKEN}`, and similar) is valid evidence and should be cited as such.
-- `line` is one positive integer: no range, no string, not 0. `confidence` is a number from 0 to 1, not a percentage. `severity` is one of P0, P1, P2, P3. `reviewer` is the `Reviewer name` value from the review context, copied exactly.
+- `line` is one positive integer: no range, no string, not 0. `confidence` is a number from 0 to 1, not a percentage. `reviewer` is the `Reviewer name` value from the review context, copied exactly.
 - For a deleted file, cite the base-side path and line (the line in the file as it was at the base) and say so in the first evidence entry, for example `Deleted file: base-side path and line, src/a.ts:12.` Do not invent a head-side line.
 - The parent adds `harness`, `dispatch_outcome`, and `disposition` after validating the return. Do not invent those parent-owned fields. The parent uses only the canonical values defined by the schema (`findings`, `empty`, `malformed`, `never_returned`, `validation_unavailable` and `surviving`, `merged`, `suppressed`, `filtered`, `rejected`).
 - Set pre_existing to true ONLY for issues in unchanged code that are unrelated to this diff. If the diff makes the issue newly relevant, it is NOT pre-existing.
@@ -95,9 +103,7 @@ Rules:
   - `gated_auto`: A concrete fix exists but it changes contracts, permissions, or crosses a module boundary in a way that deserves explicit approval. Examples: adding authentication to an unprotected endpoint, changing a public API response shape, switching from soft-delete to hard-delete.
   - `manual`: Actionable work that requires design decisions or cross-cutting changes. Examples: redesigning a data model, choosing between two valid architectural approaches, adding pagination to an unbounded query.
   - `advisory`: Report-only items that should not become code-fix work. Examples: noting a design asymmetry the PR improves but doesn't fully resolve, flagging a residual risk, deployment notes.
-  Pair `autofix_class` with `owner` the way the parent routes them: `safe_auto` with `review-fixer`; `gated_auto` or `manual` with `downstream-resolver` or `human`; `advisory` with `human` or `release`.
   Do not default to `advisory` when uncertain -- if a concrete fix is obvious, classify it as `safe_auto` or `gated_auto`.
-- Set `owner` to the default next actor for this finding: `review-fixer`, `downstream-resolver`, `human`, or `release`.
 - Set `requires_verification` to true whenever the likely fix needs targeted tests, a focused re-review, or operational validation before it should be trusted.
 - suggested_fix is optional. Only include it when the fix is obvious and correct. A bad suggestion is worse than none.
 - If you find no issues, return an empty findings array. Still populate residual_risks and testing_gaps if applicable.
