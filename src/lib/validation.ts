@@ -6,6 +6,13 @@ export type AgentMode = 'subagent' | 'primary' | 'all'
 
 export type PermissionSetting = 'ask' | 'allow' | 'deny'
 
+type PermissionValue = PermissionSetting | Record<string, PermissionSetting>
+
+/**
+ * A frontmatter permission block. The eight named keys may carry a value
+ * checked for their own shape (`bash` also takes a pattern map). Any other key,
+ * `'*'` included, holds a bare setting. Keys are in file order.
+ */
 export interface PermissionConfig {
   edit?: PermissionSetting
   bash?: PermissionSetting | Record<string, PermissionSetting>
@@ -15,6 +22,7 @@ export interface PermissionConfig {
   external_directory?: PermissionSetting
   task?: PermissionSetting
   skill?: PermissionSetting
+  [tool: string]: PermissionValue | undefined
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -36,25 +44,10 @@ export function isAgentMode(value: unknown): value is AgentMode {
   return value === 'subagent' || value === 'primary' || value === 'all'
 }
 
-function extractSimplePermission(
-  data: Record<string, unknown>,
-  key: keyof PermissionConfig,
-): PermissionSetting | null | undefined {
-  if (!(key in data)) return undefined
-  const value = data[key]
-  return isPermissionSetting(value) ? value : null
-}
-
-function extractBashPermission(
-  data: Record<string, unknown>,
-): PermissionConfig['bash'] | null | undefined {
-  if (!('bash' in data)) return undefined
-
-  const bash = data.bash
-  if (isPermissionSetting(bash)) return bash
-
-  if (isRecord(bash)) {
-    const entries = Object.entries(bash)
+function extractBashPermission(value: unknown): PermissionValue | null {
+  if (isPermissionSetting(value)) return value
+  if (isRecord(value)) {
+    const entries = Object.entries(value)
     if (entries.every(([, setting]) => isPermissionSetting(setting))) {
       return Object.fromEntries(entries) as Record<string, PermissionSetting>
     }
@@ -62,70 +55,46 @@ function extractBashPermission(
   return null
 }
 
-function buildPermissionObject(
-  edit: PermissionSetting | null | undefined,
-  bash: PermissionConfig['bash'] | null | undefined,
-  webfetch: PermissionSetting | null | undefined,
-  websearch: PermissionSetting | null | undefined,
-  doom_loop: PermissionSetting | null | undefined,
-  external_directory: PermissionSetting | null | undefined,
-  task: PermissionSetting | null | undefined,
-  skill: PermissionSetting | null | undefined,
-): PermissionConfig | undefined {
-  const permission: PermissionConfig = {}
-  if (edit) permission.edit = edit
-  if (bash) permission.bash = bash
-  if (webfetch) permission.webfetch = webfetch
-  if (websearch) permission.websearch = websearch
-  if (doom_loop) permission.doom_loop = doom_loop
-  if (external_directory) permission.external_directory = external_directory
-  if (task) permission.task = task
-  if (skill) permission.skill = skill
-  return Object.keys(permission).length > 0 ? permission : undefined
+const NAMED_PERMISSION_KEYS: ReadonlySet<string> = new Set([
+  'edit',
+  'bash',
+  'webfetch',
+  'websearch',
+  'doom_loop',
+  'external_directory',
+  'task',
+  'skill',
+])
+
+function checkNamedPermission(
+  key: string,
+  setting: unknown,
+): PermissionValue | null {
+  if (key === 'bash') return extractBashPermission(setting)
+  return isPermissionSetting(setting) ? setting : null
 }
 
+/**
+ * Keeps a frontmatter permission block in file order. A named key with a bad
+ * value drops the whole block. Any other key is kept when its value is a bare
+ * setting and ignored otherwise. A block with no kept key is `undefined`.
+ */
 export function normalizePermission(
   value: unknown,
 ): PermissionConfig | undefined {
   if (!isRecord(value)) return undefined
 
-  const bash = extractBashPermission(value)
-  if (bash === null) return undefined
-
-  const edit = extractSimplePermission(value, 'edit')
-  if (edit === null) return undefined
-
-  const webfetch = extractSimplePermission(value, 'webfetch')
-  if (webfetch === null) return undefined
-
-  const websearch = extractSimplePermission(value, 'websearch')
-  if (websearch === null) return undefined
-
-  const doom_loop = extractSimplePermission(value, 'doom_loop')
-  if (doom_loop === null) return undefined
-
-  const external_directory = extractSimplePermission(
-    value,
-    'external_directory',
-  )
-  if (external_directory === null) return undefined
-
-  const task = extractSimplePermission(value, 'task')
-  if (task === null) return undefined
-
-  const skill = extractSimplePermission(value, 'skill')
-  if (skill === null) return undefined
-
-  return buildPermissionObject(
-    edit,
-    bash,
-    webfetch,
-    websearch,
-    doom_loop,
-    external_directory,
-    task,
-    skill,
-  )
+  const entries: [string, PermissionValue][] = []
+  for (const [key, setting] of Object.entries(value)) {
+    if (NAMED_PERMISSION_KEYS.has(key)) {
+      const checked = checkNamedPermission(key, setting)
+      if (checked === null) return undefined
+      entries.push([key, checked])
+    } else if (isPermissionSetting(setting)) {
+      entries.push([key, setting])
+    }
+  }
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined
 }
 
 /**

@@ -86,16 +86,11 @@ describe('OpenCode loaders', () => {
     ])
   })
 
-  test('a v2 rule keyed shell: in frontmatter is dropped before it becomes a rule', () => {
-    // The v1 name is `bash`. A definition that spelled the v2 name would lose
-    // the deny without any error, so the definition must use `bash`.
-    const spelledForV2 = definition.replace('  bash: deny', '  shell: deny')
-    expect(spelledForV2).not.toBe(definition)
-
-    const permission = extractAgentFrontmatter(spelledForV2).permission
-
-    expect(permission).not.toHaveProperty('shell')
-    expect(permission).not.toHaveProperty('bash')
+  test('the definition spells the shell deny with the v1 name bash, not the v2 name shell', () => {
+    // The parser keeps any tool-name key, so a `shell:` line would not be
+    // dropped: it would reach v2 as a rule and leave v1 without a bash deny.
+    expect(parsed.permission).toHaveProperty('bash', 'deny')
+    expect(parsed.permission).not.toHaveProperty('shell')
   })
 })
 

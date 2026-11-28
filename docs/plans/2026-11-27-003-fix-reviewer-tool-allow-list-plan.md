@@ -132,10 +132,16 @@ offered write or dispatch tools.
   config schema does not change because of this parser.
 - Names are written once in the v1 vocabulary (`bash`) and renamed for v2 by the existing table. A name a host lacks
   is harmless.
-- `'*': deny` also matches `external_directory`. The plan keeps today's effective behaviour for it. U0 records what a
-  reviewer gets today on each host and decides whether the block needs an `external_directory` line. A test pins it.
-- Decided by U0: whether v1 accepts `'*'` as a top-level key, as a bare setting and as the rule map the managed fold
-  emits. If not, U1 changes the fold to emit a bare setting when the only pattern is `*`.
+- `'*': deny` also matches `external_directory`, so the block carries `external_directory: allow`. U0 found today's
+  value is `ask` on v1 and `allow` on v2, both host defaults. The line keeps v2 as it is and removes the prompt on v1.
+  A user's top-level `external_directory` setting no longer reaches a reviewer; an overlay on the reviewer does.
+- U0 found v1 accepts `'*'` as a top-level key, as a bare setting and as the rule map the managed fold emits. The
+  fold does not change.
+- U0 found v2 2.4.1 still offers a reviewer the host's own `skill` tool and refuses the call. The host's browser
+  plugin appends `skill browser deny` after every agent rule, and 2.4.1 hides a tool only when its last matching rule
+  covers every resource. No agent block can change that. v2 2.4.2 hides `skill`. The v2 test allows `skill` in the
+  offered list and asserts that a call to it is refused when it is offered.
+- U0 found v1 has no `execute` tool, and v1 gives no child `task` or `todowrite`.
 
 ## Implementation Units
 
@@ -224,8 +230,8 @@ All units ship in one pull request.
 
 **Approach:**
 - Add one `permission:` block, in this literal form: `'*': deny` first, then `read`, `grep`, `glob`, `bash`,
-  `webfetch`, `systematic_search` and `execute` each `allow`, plus an `external_directory` line if U0 showed the block
-  needs one. Leave `tools:` and the prompt alone.
+  `webfetch`, `systematic_search`, `execute` and `external_directory` each `allow`. Leave `tools:` and the prompt
+  alone.
 - The Claude Code build copies agent frontmatter as written (`scripts/build-claude-code-plugin.ts`), so each built
   reviewer gains the field, as `connections-researcher` already does. Pi reads `tools:` and the body, not `permission:`.
 - The contract test parses the real YAML of each shipped file through the real frontmatter parser. It asserts
@@ -271,12 +277,14 @@ with a control agent that stays unrestricted.
 **Test scenarios:**
 - Happy path (v1 and v2): the child's tools are all on the decided list, and it is offered read, grep, glob and the
   shell tool (`bash` on v1, `shell` on v2).
-- Edge case: the child is not offered dispatch (`task` or `subagent`), `systematic_skill`, `skill` or write/edit/patch,
-  each of which the parent is offered in the same run.
-- Edge case: a control agent with no block is offered the same tools as the parent on both hosts.
+- Edge case: the child is not offered dispatch (`task` or `subagent`), `systematic_skill` or write/edit/patch, each
+  of which the parent is offered in the same run. On v1 it is not offered `skill` either. On v2 `skill` may be
+  offered, and a call to it is refused.
+- Edge case: a control agent with no block is offered the parent's tools on v2, and the parent's minus `task` and
+  `todowrite` on v1.
 - Error path: with the block removed from the reviewer, the test fails and names the extra tools.
 - Integration: a reviewer under a user overlay that sets `bash: deny` is not offered shell on either host.
-- Integration: the reviewer's `external_directory` behaviour equals the U0 baseline on both hosts.
+- Integration: a reviewer reads a file outside the project on both hosts.
 
 **Verification:**
 - GREEN on both host majors at their pins against U0's RED, the docs say offering only, and no opencode process is
@@ -306,18 +314,18 @@ with a control agent that stays unrestricted.
 
 ## Stop rule
 
-The host behaviour was read from source, not run. If U3's GREEN run shows that either host still offers a reviewer a
-tool whose last matching rule is a whole deny, stop and return to the operator. Do not open the pull request.
+If U3's GREEN run shows that either host offers a reviewer a tool off the decided list, other than `skill` on v2,
+stop and return to the operator. Do not open the pull request.
 
 ## Risks & Dependencies
 
 | Risk | Mitigation |
 |------|------------|
-| Host behaviour was read from source, not run | U0 and U3 assert the offered list on both hosts. If U3's GREEN run shows a host still offers a reviewer a tool whose last matching rule is a whole deny, stop and return to the operator; do not open the pull request |
+| A host offers a reviewer a denied tool | U0 ran the mechanism on both hosts. v2 2.4.1 offers `skill` and refuses the call; 2.4.2 hides it. If U3's GREEN run shows any other tool off the decided list, stop and return to the operator; do not open the pull request |
 | A reviewer needs a dropped tool | U4 reads failed calls. Add the line to all 18 blocks and to the contract test's decided list, since the blocks are identical. One user can add it for themselves with an overlay |
 | A user overlay or same-name host key changes the list | With a `systematic.json` overlay a user can deny one listed tool or add one unlisted tool, but not turn everything off with `'*': deny`. A same-name agent in the host's own config is kept as is and gets no block |
 | A misspelt setting on the `'*'` line leaves a reviewer unrestricted | The U2 contract test parses every shipped block |
-| `'*': deny` changes `external_directory` for reviewers | U0 records today's effective value and U3 pins it |
+| `'*': deny` changes `external_directory` for reviewers | The block carries `external_directory: allow`, and U3 pins an outside read on both hosts |
 | Declined — covered by a same-name host config entry replacing the whole agent: making an overlay wildcard override the block's allows | The ordering is unchanged |
 | Declined — covered by the plan's claim, which is what is offered and not enforcement: a v2 session-level allow re-offering a tool | No enforcement is claimed |
 | Declined — covered by the reviewer template's read-only rule and CI: a reviewer still changing files through `shell` | Out of scope and unchanged by this plan |
