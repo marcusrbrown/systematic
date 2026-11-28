@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, it, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -146,7 +146,7 @@ describe('Fro Bot workflow contracts', () => {
     expect(schedule).toEqual([{ cron: '30 3 * * *' }])
   })
 
-  test('offers a dedicated release-notes mode and defaults to autoheal', () => {
+  it('offers a dedicated release-notes mode and defaults to autoheal', () => {
     const { workflow } = readWorkflow()
     const triggers = asRecord(workflow.on, 'workflow triggers')
     const dispatch = asRecord(triggers.workflow_dispatch, 'workflow_dispatch')
@@ -266,7 +266,7 @@ describe('Fro Bot workflow contracts', () => {
     expect(checkoutWith['persist-credentials']).toBe(false)
   })
 
-  test('does not persist credentials in local event-driven workflow checkouts', () => {
+  it('does not persist credentials in local event-driven workflow checkouts', () => {
     const workflowDirectory = path.dirname(WORKFLOW_PATH)
     const checkoutSteps: string[] = []
     for (const filename of fs.readdirSync(workflowDirectory)) {
@@ -371,7 +371,7 @@ describe('Fro Bot workflow contracts', () => {
     )
   })
 
-  test('routes dispatches to branch-pr except for release notes', () => {
+  it('routes dispatches to branch-pr except for release notes', () => {
     const { workflow } = readWorkflow()
     const jobs = asRecord(workflow.jobs, 'jobs')
     const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
@@ -432,7 +432,32 @@ describe('Fro Bot workflow contracts', () => {
     }
   })
 
-  test('model tiers fall back to the base without crossing into another tier', () => {
+  it('validates the required inputs for review and release-notes dispatches', () => {
+    const step = stepNamed('Validate dispatch inputs')
+    const resolve = compileExpression(asString(step.if, 'validate if'))
+    const script = asString(step.run, 'validate run')
+    const github = { event_name: 'workflow_dispatch', schedule: '' }
+
+    expect(resolve(github, { mode: 'autoheal' })).toBe('false')
+    expect(
+      resolve({ ...github, event_name: 'schedule' }, { mode: 'review' }),
+    ).toBe('false')
+    for (const [mode, prompt, correlation, exitCode] of [
+      ['review', '', '', 1],
+      ['review', 'Review this', '', 0],
+      ['release-notes', '', 'abc-123', 1],
+      ['release-notes', 'Narrate v1.2.3', '', 1],
+      ['release-notes', 'Narrate v1.2.3', 'abc-123', 0],
+    ] as const) {
+      expect(resolve(github, { mode })).toBe('true')
+      const result = Bun.spawnSync(['bash', '-e', '-c', script], {
+        env: { MODE: mode, PROMPT: prompt, CORRELATION_ID: correlation },
+      })
+      expect(result.exitCode).toBe(exitCode)
+    }
+  })
+
+  it('model tiers fall back to the base without crossing into another tier', () => {
     const withOptions = asRecord(stepNamed('Run Fro Bot').with, 'agent with')
     const resolve = compileExpression(
       asString(withOptions.model, 'agent model'),
@@ -461,7 +486,7 @@ describe('Fro Bot workflow contracts', () => {
     }
   })
 
-  test('admits Fro Bot user PRs without checking out their executable workflow files', () => {
+  it('admits Fro Bot user PRs without checking out their executable workflow files', () => {
     const { workflow } = readWorkflow()
     const job = asRecord(asRecord(workflow.jobs, 'jobs')['fro-bot'], 'job')
     const condition = asString(job.if, 'job if')
@@ -475,8 +500,11 @@ describe('Fro Bot workflow contracts', () => {
       stepNamed('Checkout repository').with,
       'checkout with',
     )
-    expect(asString(checkout.ref, 'checkout ref')).toContain(
-      "github.event_name == 'pull_request' && github.event.pull_request.user.login == 'fro-bot' && github.event.pull_request.base.sha",
+    expect(asString(checkout.ref, 'checkout ref')).toMatch(
+      /^\$\{\{\s*\(github\.event_name == 'pull_request' && github\.event\.pull_request\.user\.login == 'fro-bot' && github\.event\.pull_request\.base\.sha\)/,
+    )
+    expect(stepNamed('Install dependencies').if).toBe(
+      "github.event_name != 'pull_request' || github.event.pull_request.user.login != 'fro-bot'",
     )
   })
 
@@ -816,7 +844,7 @@ esac
       expect(result.outputs.get('rule')).toBe(DENIED_RULE)
     })
 
-    test('requires a comment review on a Fro Bot-authored PR', () => {
+    it('requires a comment review on a Fro Bot-authored PR', () => {
       const box = sandbox({ pr: { user: { login: 'fro-bot' } } })
       const result = runStep(APPROVAL_RULE_STEP, box)
       expect(result.exitCode).toBe(0)

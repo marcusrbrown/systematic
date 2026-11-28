@@ -41,7 +41,12 @@ case "$SUBCOMMAND" in
       # Capture the correlation-id argument if MOCK_GH_WORKFLOW_RUN_CORRELATION is set.
       # Captures are independent so scenarios can verify that the dispatch
       # forwards each field.
+      previous=''
       for arg in "$@"; do
+        if [[ "$previous" != '-f' && "$previous" != '--raw-field' ]]; then
+          previous="$arg"
+          continue
+        fi
         if [[ -n "${MOCK_GH_WORKFLOW_RUN_PROMPT:-}" && "$arg" == prompt=* ]]; then
           printf '%s' "${arg#prompt=}" > "$MOCK_GH_WORKFLOW_RUN_PROMPT"
         elif [[ -n "${MOCK_GH_WORKFLOW_RUN_CORRELATION:-}" && "$arg" == correlation-id=* ]]; then
@@ -49,6 +54,7 @@ case "$SUBCOMMAND" in
         elif [[ -n "${MOCK_GH_WORKFLOW_RUN_MODE:-}" && "$arg" == mode=* ]]; then
           printf '%s' "${arg#mode=}" > "$MOCK_GH_WORKFLOW_RUN_MODE"
         fi
+        previous="$arg"
       done
       if [[ -n "${MOCK_GH_WORKFLOW_RUN_EXIT:-}" && "$MOCK_GH_WORKFLOW_RUN_EXIT" != "0" ]]; then
         echo "mock-gh: workflow dispatch failed" >&2
