@@ -24,6 +24,7 @@ Each skill is a directory containing a `SKILL.md` file with YAML frontmatter. Op
 
 | Skill | Description |
 |-------|-------------|
+| `auditing-agent-traces` | Answer usage questions about Systematic's agents, skills and tools from the Langfuse and Tempo trace stores, and sweep a time window for ranked improvement candidates |
 | `generating-project-docs` | Create, refresh, or update project-level docs (`README.md`, `ARCHITECTURE.md`, `STRUCTURE.md`) — derives all facts from the live repo |
 | `importing-upstream-content` | Bring skills, agents or references from an upstream project into the bundle: a new import, a refresh to a newer upstream release, or a merge into a diverged skill. Covers attribution, adaptation, the checks the gates miss, and a releasing title |
 | `release-notes-narrative` | Rewrite terse bucket bullets or spurious `closes [URL-fragment]` autolinks in a semantic-release GitHub release into proper narrative drawn from commit bodies and PR descriptions |
