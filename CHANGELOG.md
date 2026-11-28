@@ -4,6 +4,26 @@ All notable changes to `@fro.bot/systematic` are listed here, newest first. Entr
 
 <!-- release-entries -->
 
+## [3.38.5](https://github.com/marcusrbrown/systematic/compare/v3.38.4...v3.38.5) (2026-11-28)
+
+### Bug Fixes
+
+* **skills:** admit a lane hazard into a plan only if it bites at the current pin ([#1548](https://github.com/marcusrbrown/systematic/issues/1548)) ([62b1dac](https://github.com/marcusrbrown/systematic/commit/62b1daca712662c510646aa4ffba8f0c2d88c496))
+
+### Documentation
+
+* admit a plan hazard only if it bites at the current pin ([#1547](https://github.com/marcusrbrown/systematic/issues/1547)) ([a75c237](https://github.com/marcusrbrown/systematic/commit/a75c237f15e275b920a429ebef6962a7e16f7903))
+
+### Continuous Integration
+
+* **fro-bot:** route dispatched prompts to a branch and pull request ([#1543](https://github.com/marcusrbrown/systematic/issues/1543)) ([219e213](https://github.com/marcusrbrown/systematic/commit/219e21340bbd15f5d8a9eff41feced285ae8dd16))
+
+### Miscellaneous Chores
+
+* **deps:** update bfra-me/.github to v4.43.1 ([#1550](https://github.com/marcusrbrown/systematic/issues/1550)) ([eeaca9f](https://github.com/marcusrbrown/systematic/commit/eeaca9f083fdabbb1266bd9689956123d857813c))
+* **deps:** update dependency @biomejs/biome to v2.6.9 ([#1546](https://github.com/marcusrbrown/systematic/issues/1546)) ([5cbed7a](https://github.com/marcusrbrown/systematic/commit/5cbed7ad8871bd145b28a3554821452ff695c3b4))
+* **deps:** update fro-bot/agent to v0.151.0 ([#1545](https://github.com/marcusrbrown/systematic/issues/1545)) ([3485f2a](https://github.com/marcusrbrown/systematic/commit/3485f2af4203907ba43cc060b54ba229a31af1b5))
+
 ## [3.38.4](https://github.com/marcusrbrown/systematic/compare/v3.38.3...v3.38.4) (2026-11-27)
 
 ### Bug Fixes
