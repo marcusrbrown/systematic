@@ -15,6 +15,26 @@ everything, then allow the seven tools a reviewer uses. Both OpenCode hosts are 
 model request; U3 checks that. The work is a baseline run, one parser change, one block in 18 files, and proof of the
 offered list on both hosts.
 
+## Changed after review: a deny list
+
+The units below were built as written, with an allow list. Code review then found that an allow list overrides the
+user's own rules. Both hosts apply the last matching rule, and an agent's rules come after the host's defaults and
+the user's top-level rules. After `'*': deny`, each allowed tool needs a whole-tool allow, and that allow wins over a
+host-wide `bash: deny` and over the host's default ask on `.env` reads. The operator chose to replace it.
+
+- The block in the 18 files now denies tools by name: `edit`, `task`, `skill`, `systematic_skill`, `websearch`,
+  `question`, `todowrite`, `generate_image`, `generate_video` and four session tools. It has no `'*'` key, no allow
+  and no `external_directory` line.
+- R1 becomes: a dispatched reviewer is not offered the denied tools, and otherwise gets what an agent with no block
+  gets. A tool the block does not name stays offered. R3's block is the deny list.
+- The v1 change to reads outside the project, the limit on an overlay `'*': deny` and the loss of a top-level
+  `external_directory` setting no longer apply.
+- The parser change (U1) stays: `systematic_skill` and `question` are tool-name keys. It still accepts `'*'`, and
+  the docs say not to ship an allow list in a bundled agent.
+- Tests added: a host-config shell deny still removes a reviewer's shell, and a reviewer's `.env` read and outside
+  read have the same outcome as an agent with no block.
+- U4 reads the withheld tools from a trace instead of an exact list.
+
 ## Problem Frame
 
 A reviewer is offered up to 18 tools per model call (OpenCode v2 traces, 2026-11-25 to 2026-11-27). Their definitions

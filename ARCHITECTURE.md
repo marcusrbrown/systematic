@@ -436,6 +436,19 @@ The researcher may not run commands, write, edit or fetch. Each host enforces th
 No host path-scopes the read tools, and session MCP tools are not denied. A digest can therefore
 carry content from reads outside the allowed projects; this is a documented limit, not a sandbox.
 
+### What keeps tools from the code-review agents
+
+The 18 agents under `agents/review/` each carry one frontmatter `permission:` block that denies the
+tools a reviewer should not have: the write tools, dispatch, both skill tools, web search, the
+question tool and a few others. `normalizePermission` keeps the block's keys in file order, the asset
+plan carries them as ordered triples, and both OpenCode adapters emit them, so the host leaves those
+tools out of a reviewer's model request. The block is a deny list on purpose: an agent's rules come
+after the host's defaults and the user's top-level rules, so an allow in a bundled agent would
+override the user's own deny or ask for that tool. Nothing guards the calls: this narrows what is
+offered and is not enforcement. `tests/unit/reviewer-tool-deny-list-contract.test.ts` parses each
+shipped file and holds the 18 blocks equal. The per-host result and its limits are in `HARNESSES.md`
+(RT-1, RT-2). Pi and Claude Code read the `tools:` line instead.
+
 ## Skill Discovery and Fallbacks
 
 Skill discovery is harness-owned and does not depend on the bootstrap prompt carrying a catalog:

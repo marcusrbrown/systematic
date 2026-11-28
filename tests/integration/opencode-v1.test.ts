@@ -415,7 +415,7 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
                 mode: 'primary',
                 skills: ['git-worktree'],
               },
-              'correctness-reviewer': { mode: 'primary' },
+              'learnings-researcher': { mode: 'primary' },
             },
           }),
         )
@@ -438,7 +438,7 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
         const sibling = await callToolOnHost(fixture, pluginUrl, {
           tool: 'systematic_skill',
           args: { name: 'git-clean-gone-branches' },
-          agent: 'correctness-reviewer',
+          agent: 'learnings-researcher',
         })
 
         expect(allowed).toContain(
@@ -467,6 +467,7 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
               'correctness-reviewer': {
                 mode: 'primary',
                 permission: {
+                  systematic_skill: 'allow',
                   skill: {
                     'systematic:git-worktree': 'deny',
                     'git-worktree': 'allow',

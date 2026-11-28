@@ -1,7 +1,7 @@
 ---
 title: The same tools frontmatter is permissive on OpenCode and restrictive on Pi
 date: 2026-08-16
-last_updated: 2026-11-09
+last_updated: 2026-11-27
 category: integration-issues
 module: agent-resolution
 problem_type: integration_issue
@@ -43,7 +43,7 @@ OpenCode and Pi parse that identical line into opposite outcomes. OpenCode disca
 - `src/lib/agent-resolver.ts:151-158` maps `Read`, `Grep`, `Glob`, and `Bash` to Pi's `read`, `grep`, `find`, and `bash`.
 - `resolveToolAllowlist` fails closed on anything unrecognized (`src/lib/agent-resolver.ts:203-228`).
 
-Every persona under `agents/review/` declares the string form. All of them are unrestricted on OpenCode and write-incapable on Pi.
+Every persona under `agents/review/` declares the string form. When this was written, all of them were unrestricted on OpenCode and write-incapable on Pi. The string still does nothing on OpenCode. Since 2026-11-27 each of those files also carries a `permission:` block that denies the tools a reviewer should not have (the write tools, dispatch, the skill tools and a few others), and that block is what narrows the tools OpenCode offers them.
 
 ## What Didn't Work
 
@@ -77,7 +77,7 @@ It also sidesteps the divergence rather than depending on it. Any design that re
 
 ## Prevention
 
-- Do not treat `tools:` frontmatter as an enforced grant on OpenCode. Verify the parsed value is a boolean map before assuming any restriction applies.
+- Do not treat `tools:` frontmatter as an enforced grant on OpenCode. Verify the parsed value is a boolean map before assuming any restriction applies. To narrow what OpenCode offers a bundled agent, deny the unwanted tools by name in a `permission:` block. Do not write `'*': deny` followed by allows there: an agent's rules come after the user's, so each allow overrides the user's own deny or ask for that tool. `HARNESSES.md` ("Code-review agents — withheld tools") records what each host then withholds.
 - When a workflow requires a capability, confirm every target harness can actually provide it. Check `OPENCODE_TO_PI_TOOL` in `src/lib/agent-resolver.ts` before assuming a tool is reachable on Pi.
 - Prefer designs where the orchestrator holds the capability. The parent has one well-understood permission set; sub-agents have as many as there are harnesses.
 - Treat "this instruction is unsatisfiable on one harness" as a contract bug, not a runtime edge case. It produces silence, not errors.
