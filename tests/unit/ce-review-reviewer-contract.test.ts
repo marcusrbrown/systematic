@@ -258,9 +258,8 @@ describe('traps the schema enforces', () => {
     expect(text).toMatch(/`line` is one positive integer/i)
   })
 
-  test('confidence is 0 to 1 and severity is P0 to P3', () => {
+  test('confidence is 0 to 1', () => {
     expect(text).toMatch(/`confidence` is a number from 0 to 1/i)
-    expect(text).toMatch(/`severity` is one of P0, P1, P2, P3/i)
   })
 
   test('reviewer echoes the Reviewer name value exactly', () => {
@@ -273,5 +272,128 @@ describe('traps the schema enforces', () => {
     expect(text).toMatch(/`safe_auto`[^.]*`review-fixer`/)
     expect(text).toMatch(/`advisory`[^.]*`human`[^.]*`release`/)
     expect(text).toMatch(/`gated_auto`[^.]*`downstream-resolver`[^.]*`human`/)
+  })
+})
+
+describe('closed values block', () => {
+  const view = asRecord(JSON.parse(fs.readFileSync(VIEW_PATH, 'utf8')))
+  const findingProps = asRecord(
+    asRecord(asRecord(view.definitions).subAgentFinding).properties,
+  )
+
+  function schemaEnum(field: string): string[] {
+    const values = asRecord(findingProps[field]).enum
+    if (!Array.isArray(values)) throw new Error(`${field} has no enum`)
+    return values.map(String)
+  }
+
+  const CLOSED_FIELDS = ['severity', 'autofix_class', 'owner'] as const
+
+  const EXAMPLE_END = '</example-return>'
+  const RUBRIC_START = 'Confidence rubric'
+
+  /** The text between the example and the confidence rubric, or null when it is not there in that order. */
+  function blockText(template: string): string | null {
+    const exampleEnd = template.indexOf(EXAMPLE_END)
+    const rubricStart = template.indexOf(RUBRIC_START)
+    if (exampleEnd === -1 || rubricStart === -1 || rubricStart < exampleEnd) {
+      return null
+    }
+    const between = template.slice(exampleEnd + EXAMPLE_END.length, rubricStart)
+    return /Closed values/.test(between) ? between : null
+  }
+
+  function backtickTokens(text: string): string[] {
+    return [...text.matchAll(/`([^`]+)`/g)].map((m) => m[1] ?? '')
+  }
+
+  /** The allowed-value list a field's bullet states, i.e. the tokens before the first "Never". */
+  function listedValues(block: string, field: string): string[] {
+    const line = block
+      .split('\n')
+      .find((l) => l.trimStart().startsWith(`- \`${field}\``))
+    if (!line) throw new Error(`closed values block has no ${field} bullet`)
+    const afterField = line.slice(
+      line.indexOf(`\`${field}\``) + field.length + 2,
+    )
+    const beforeNever = afterField.split(/\bNever\b/)[0] ?? ''
+    return backtickTokens(beforeNever)
+  }
+
+  test('sits between the example and the confidence rubric', () => {
+    const block = blockText(TEMPLATE)
+
+    expect(block).not.toBeNull()
+  })
+
+  test('says any other value fails validation and rejects the whole return', () => {
+    const block = normalize(blockText(TEMPLATE) ?? '')
+
+    expect(block).toMatch(
+      /any other value fails validation and the whole return is rejected/i,
+    )
+  })
+
+  for (const field of CLOSED_FIELDS) {
+    test(`${field} lists exactly the schema's allowed values`, () => {
+      const block = blockText(TEMPLATE) ?? ''
+
+      expect(listedValues(block, field).sort()).toEqual(
+        schemaEnum(field).sort(),
+      )
+    })
+  }
+
+  test('names the wrong values production reviewers returned', () => {
+    const block = normalize(blockText(TEMPLATE) ?? '')
+
+    expect(block).toMatch(/`severity`[^.]*\.\s*never[^.]*`high`/i)
+    expect(block).toMatch(/`autofix_class`[^.]*\.\s*never[^.]*`safe`/i)
+    expect(block).toMatch(/`owner`[^.]*\.\s*never[^.]*`pr_author`/i)
+  })
+
+  test('evidence is an array of 1 to 5 strings of at most 500 characters, never one string', () => {
+    const evidence = asRecord(findingProps.evidence)
+    const item = asRecord(
+      (evidence.items as { anyOf: unknown[] }).anyOf[0] as JsonRecord,
+    )
+    const block = normalize(blockText(TEMPLATE) ?? '')
+
+    expect(block).toContain(
+      `\`evidence\`: a JSON array of ${evidence.minItems} to ${evidence.maxItems} strings, each at most ${item.maxLength} characters. Never one string.`,
+    )
+  })
+
+  test('states the autofix_class to owner pairings', () => {
+    const block = normalize(blockText(TEMPLATE) ?? '')
+
+    expect(block).toContain(
+      '`safe_auto` with `review-fixer`; `gated_auto` or `manual` with `downstream-resolver` or `human`; `advisory` with `human` or `release`.',
+    )
+  })
+
+  test('each closed-value list appears once: no second list outside the block and the example', () => {
+    const block = blockText(TEMPLATE) ?? ''
+    const outside = TEMPLATE.replace(block, '').replace(
+      /<example-return>[\s\S]*?<\/example-return>/,
+      '',
+    )
+    const allowedByField = CLOSED_FIELDS.map(
+      (field) => [field, schemaEnum(field)] as const,
+    )
+
+    for (const line of outside.split('\n')) {
+      const tokens = new Set(backtickTokens(line))
+      const bare = new Set(line.match(/\bP[0-3]\b/g) ?? [])
+      for (const [field, values] of allowedByField) {
+        // Naming some values is guidance ("classify it as `safe_auto` or
+        // `gated_auto`"); naming all of them is a second copy of the list.
+        const named = values.filter((v) => tokens.has(v) || bare.has(v))
+        expect(
+          named.length,
+          `${field} list restated outside the block: ${line.trim()}`,
+        ).toBeLessThan(values.length)
+      }
+    }
   })
 })
