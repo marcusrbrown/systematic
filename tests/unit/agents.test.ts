@@ -193,6 +193,70 @@ Prompt`
       const result = extractAgentFrontmatter(content)
       expect(result.permission).toEqual({ edit: 'allow' })
     })
+
+    test("extracts a quoted '*' deny followed by tool-name allows, in file order", () => {
+      const content = `---
+permission:
+  '*': deny
+  read: allow
+  bash: allow
+  external_directory: allow
+  systematic_search: allow
+---
+Prompt`
+      const result = extractAgentFrontmatter(content)
+      expect(result.permission).toEqual({
+        '*': 'deny',
+        read: 'allow',
+        bash: 'allow',
+        external_directory: 'allow',
+        systematic_search: 'allow',
+      })
+      expect(Object.keys(result.permission ?? {})).toEqual([
+        '*',
+        'read',
+        'bash',
+        'external_directory',
+        'systematic_search',
+      ])
+    })
+
+    test('a double-quoted * key reads the same as a single-quoted one', () => {
+      const content =
+        '---\npermission:\n  "*": deny\n  read: allow\n---\nPrompt'
+      const result = extractAgentFrontmatter(content)
+      expect(Object.entries(result.permission ?? {})).toEqual([
+        ['*', 'deny'],
+        ['read', 'allow'],
+      ])
+    })
+
+    test('an unquoted * key is a YAML alias, so the whole frontmatter and its permission block are lost', () => {
+      const content = `---
+name: starred
+permission:
+  *: deny
+  read: allow
+---
+Prompt`
+      const result = extractAgentFrontmatter(content)
+      expect(result.permission).toBeUndefined()
+      expect(result.name).toBe('')
+    })
+
+    test('a misspelt setting on a tool line is ignored and the other lines stay', () => {
+      const content =
+        "---\npermission:\n  '*': deny\n  read: maybe\n  grep: allow\n---\nPrompt"
+      const result = extractAgentFrontmatter(content)
+      expect(result.permission).toEqual({ '*': 'deny', grep: 'allow' })
+    })
+
+    test('a misspelt setting on an old key still drops the whole block', () => {
+      const content =
+        "---\npermission:\n  '*': deny\n  read: allow\n  bash: maybe\n---\nPrompt"
+      const result = extractAgentFrontmatter(content)
+      expect(result.permission).toBeUndefined()
+    })
   })
 })
 

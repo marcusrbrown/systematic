@@ -13,6 +13,7 @@ import path from 'node:path'
 import type { Plugin } from '@opencode/plugin'
 
 import SystematicPlugin from '../../src/index.js'
+import { extractAgentFrontmatter } from '../../src/lib/agents.js'
 import type { PlannedAgent } from '../../src/lib/asset-plan.js'
 import {
   applyPlannedAgent,
@@ -1166,6 +1167,60 @@ describe('applyPlannedAgent', () => {
       resource: '*',
       effect: 'deny',
     })
+  })
+
+  test("an unmanaged agent with a '*' deny and tool allows keeps the block's order, with bash as shell", () => {
+    const editor = createHostEditor()
+    const { permission } = extractAgentFrontmatter(`---
+permission:
+  '*': deny
+  read: allow
+  grep: allow
+  bash: allow
+  systematic_search: allow
+  external_directory: allow
+---
+p`)
+
+    applyPlannedAgent(editor, planned({ prompt: 'p', permission }))
+
+    expect(editor.agents.get('probe-agent')?.permissions).toEqual([
+      ...skeleton('x').permissions,
+      { action: '*', resource: '*', effect: 'deny' },
+      { action: 'read', resource: '*', effect: 'allow' },
+      { action: 'grep', resource: '*', effect: 'allow' },
+      { action: 'shell', resource: '*', effect: 'allow' },
+      { action: 'systematic_search', resource: '*', effect: 'allow' },
+      { action: 'external_directory', resource: '*', effect: 'allow' },
+    ])
+  })
+
+  test('a managed list with a wildcard deny, an allow, an overlay deny and a later allow keeps list order', () => {
+    const editor = createHostEditor()
+
+    applyPlannedAgent(
+      editor,
+      planned(
+        { prompt: 'p' },
+        {
+          kind: 'managed',
+          rules: [
+            { permission: '*', pattern: '*', setting: 'deny' },
+            { permission: 'read', pattern: '*', setting: 'allow' },
+            { permission: 'bash', pattern: '*', setting: 'deny' },
+            { permission: 'systematic_skill', pattern: '*', setting: 'allow' },
+          ],
+        },
+      ),
+    )
+
+    expect(editor.agents.get('probe-agent')?.permissions).toEqual([
+      ...skeleton('x').permissions,
+      { action: '*', resource: '*', effect: 'deny' },
+      { action: 'read', resource: '*', effect: 'allow' },
+      { action: 'shell', resource: '*', effect: 'deny' },
+      { action: 'systematic_skill', resource: '*', effect: 'allow' },
+    ])
   })
 
   test('an unmanaged agent without permissions keeps the host default list as it is', () => {

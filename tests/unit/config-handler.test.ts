@@ -1370,6 +1370,106 @@ model: gpt-4
       expect(config.agent?.['security-reviewer']?.temperature).toBe(0.25)
     })
 
+    describe('an ordered allow list in frontmatter', () => {
+      const LISTED_TOOLS = [
+        'read',
+        'grep',
+        'glob',
+        'bash',
+        'webfetch',
+        'systematic_search',
+        'execute',
+      ]
+      const BLOCK_ORDER = ['*', ...LISTED_TOOLS, 'external_directory']
+
+      function writeAllowListReviewer(): void {
+        createCategorizedAgent('review', 'correctness-reviewer', {
+          name: 'correctness-reviewer',
+          description: 'Reads with an ordered allow list',
+          permission: {
+            '*': 'deny',
+            ...Object.fromEntries(LISTED_TOOLS.map((tool) => [tool, 'allow'])),
+            external_directory: 'allow',
+          },
+        })
+      }
+
+      async function emittedPermission(): Promise<
+        Record<string, unknown> | undefined
+      > {
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+        const config: Config = {}
+        await handler(config)
+        return readEmittedAgentPermission(
+          config.agent?.['correctness-reviewer'],
+        )
+      }
+
+      test('without an overlay the block is emitted as written, in order, with external_directory after the wildcard', async () => {
+        writeAllowListReviewer()
+
+        const permission = await emittedPermission()
+
+        expect(Object.entries(permission ?? {})).toEqual(
+          BLOCK_ORDER.map((tool) => [tool, tool === '*' ? 'deny' : 'allow']),
+        )
+      })
+
+      test('an overlay bash: deny leaves bash denied, as the rule map for that tool', async () => {
+        writeAllowListReviewer()
+        writeCustomSystematicConfig({
+          agents: { 'correctness-reviewer': { permission: { bash: 'deny' } } },
+        })
+
+        const permission = await emittedPermission()
+
+        expect(Object.keys(permission ?? {})).toEqual(BLOCK_ORDER)
+        expect(permission?.bash).toEqual({ '*': 'deny' })
+        expect(permission?.read).toEqual({ '*': 'allow' })
+        expect(permission?.['*']).toEqual({ '*': 'deny' })
+        expect(permission?.external_directory).toEqual({ '*': 'allow' })
+      })
+
+      test('an overlay systematic_skill: allow is emitted after every rule of the block', async () => {
+        writeAllowListReviewer()
+        writeCustomSystematicConfig({
+          agents: {
+            'correctness-reviewer': {
+              permission: { systematic_skill: 'allow' },
+            },
+          },
+        })
+
+        const permission = await emittedPermission()
+
+        expect(Object.keys(permission ?? {})).toEqual([
+          ...BLOCK_ORDER,
+          'systematic_skill',
+        ])
+        expect(permission?.systematic_skill).toEqual({ '*': 'allow' })
+      })
+
+      test("an overlay '*': deny leaves the listed allows in effect (current behaviour)", async () => {
+        writeAllowListReviewer()
+        writeCustomSystematicConfig({
+          agents: { 'correctness-reviewer': { permission: { '*': 'deny' } } },
+        })
+
+        const permission = await emittedPermission()
+
+        expect(Object.keys(permission ?? {})).toEqual(BLOCK_ORDER)
+        expect(permission?.['*']).toEqual({ '*': 'deny' })
+        for (const tool of [...LISTED_TOOLS, 'external_directory']) {
+          expect(permission?.[tool]).toEqual({ '*': 'allow' })
+        }
+      })
+    })
+
     test('managed skills shortcut emits ordered deny-all then allow-selected rules', async () => {
       createSkill(path.join(bundledDir, 'skills'), 'ce:review', 'Review skill')
       createCategorizedAgent('review', 'correctness-reviewer', {
@@ -3407,7 +3507,9 @@ Discovered body for hidden.`,
         prompt: frontmatter.prompt,
         mode: frontmatter.mode,
         temperature: frontmatter.temperature,
+        permission: frontmatter.permission,
       })
+      expect(frontmatter.permission).toBeDefined()
       expect(agent.model).toBeUndefined()
       expect(agent.variant).toBeUndefined()
       expect(agent.top_p).toBeUndefined()
@@ -3416,7 +3518,6 @@ Discovered body for hidden.`,
       expect(agent.color).toBeUndefined()
       expect(agent.steps).toBeUndefined()
       expect(agent.hidden).toBeUndefined()
-      expect(agent.permission).toBeUndefined()
     })
   })
 

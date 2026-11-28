@@ -64,6 +64,27 @@ import {
   toolNamesOf,
 } from '../helpers/delegated-search-proof.js'
 import {
+  CONTROL_AGENT,
+  controlOfferFailures,
+  ENV_FILE_MARKER,
+  EXTERNAL_NOTE_MARKER,
+  externalReadFailures,
+  hostShellDenyConfig,
+  PLANTED_SKILL_ID,
+  PLANTED_SKILL_MARKER,
+  REVIEWER_AGENT,
+  readOutcome,
+  readParityFailures,
+  reviewerOfferFailures,
+  runReviewerOffer,
+  shippedAgentMarker,
+  skillCallFailures,
+  THROWAWAY_AGENT,
+  THROWAWAY_MARKER,
+  throwawayAgentConfig,
+  withoutTolerated,
+} from '../helpers/reviewer-tools-proof.js'
+import {
   buildIsolatedOpencodeEnv,
   buildOpencodeRunArgv,
   cleanupPackedTarball,
@@ -801,7 +822,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
                 mode: 'primary',
                 skills: ['git-worktree'],
               },
-              'correctness-reviewer': { mode: 'primary' },
+              'learnings-researcher': { mode: 'primary' },
             },
           }),
         )
@@ -837,7 +858,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           expect(allowedForManaged).toContain('BODY-OF-git-worktree')
 
           const loadedByUnmanaged = await run(
-            'correctness-reviewer',
+            'learnings-researcher',
             'denied-probe',
           )
           expect(loadedByUnmanaged).toContain('BODY-OF-denied-probe')
@@ -1953,7 +1974,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
                 mode: 'primary',
                 skills: ['git-worktree'],
               },
-              'correctness-reviewer': { mode: 'primary' },
+              'learnings-researcher': { mode: 'primary' },
             },
           }),
         )
@@ -1973,7 +1994,7 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
           const sibling = await callTool(host, toolModel, {
             tool: 'systematic_skill',
             args: { name: 'systematic:git-clean-gone-branches' },
-            agent: 'correctness-reviewer',
+            agent: 'learnings-researcher',
           })
 
           expect(denied).not.toContain('<skill_content')
@@ -3413,5 +3434,303 @@ describe.skipIf(!isOpencodeAvailable(HOST) || process.platform === 'win32')(
       },
       TIMEOUT_MS,
     )
+
+    // The review agents ship a deny list: it names the tools a reviewer should
+    // not have and sets nothing for `read`, `bash` or `external_directory`, so
+    // the user's own rules and the host's defaults still decide those. The
+    // reviewer tests compare a reviewer child with a control child of an agent
+    // that has no permission block; `skill` is the host's own tool, which a
+    // host may offer and refuse, so it is tolerated on both sides. The
+    // throwaway agent tests write ordered rules straight into the host config.
+    describe('a dispatched review agent', () => {
+      const ALLOW_FOUR = [
+        ['read', 'allow'],
+        ['grep', 'allow'],
+        ['glob', 'allow'],
+        ['bash', 'allow'],
+      ] as const
+
+      /** What the parent has that the child must lack, so a denial is never a typo. */
+      const PARENT_ONLY = [
+        'subagent',
+        'systematic_skill',
+        'write',
+        'edit',
+        'systematic_search',
+        'webfetch',
+        'execute',
+      ]
+
+      function dispatch(
+        agent: string,
+        options: Partial<Parameters<typeof runReviewerOffer>[2]> = {},
+      ) {
+        return runReviewerOffer(HOST, fixture, {
+          agent,
+          marker: shippedAgentMarker(agent),
+          ...options,
+        })
+      }
+
+      /** Runs the reviewer, then the control agent, each in a fresh fixture. */
+      async function reviewerAndControl(
+        options: Partial<Parameters<typeof runReviewerOffer>[2]> = {},
+      ) {
+        const reviewer = await dispatch(REVIEWER_AGENT, options)
+        destroyIsolatedFixture(fixture)
+        fixture = createIsolatedFixture()
+        const control = await dispatch(CONTROL_AGENT, options)
+        return { reviewer, control }
+      }
+
+      test(
+        'is offered what a control agent is, less the withheld tools',
+        async () => {
+          const { reviewer, control } = await reviewerAndControl()
+
+          expect(reviewer.exitCode).toBe(0)
+          expect(control.exitCode).toBe(0)
+          expect(reviewerOfferFailures(HOST, reviewer, control)).toEqual([])
+        },
+        TIMEOUT_MS * 2,
+      )
+
+      test(
+        'reads a file outside the project as a control agent does',
+        async () => {
+          const { reviewer, control } = await reviewerAndControl()
+
+          expect(reviewer.exitCode).toBe(0)
+          expect(
+            readParityFailures(reviewer, control, EXTERNAL_NOTE_MARKER),
+          ).toEqual([])
+          if (!readOutcome(control, EXTERNAL_NOTE_MARKER).returned) {
+            expect(readOutcome(reviewer, EXTERNAL_NOTE_MARKER).returned).toBe(
+              false,
+            )
+          }
+        },
+        TIMEOUT_MS * 2,
+      )
+
+      test(
+        'reads a project .env file as a control agent does',
+        async () => {
+          const { reviewer, control } = await reviewerAndControl({
+            childRead: 'project-env',
+          })
+
+          expect(reviewer.exitCode).toBe(0)
+          expect(
+            readParityFailures(reviewer, control, ENV_FILE_MARKER),
+          ).toEqual([])
+          if (!readOutcome(control, ENV_FILE_MARKER).returned) {
+            expect(readOutcome(reviewer, ENV_FILE_MARKER).returned).toBe(false)
+          }
+        },
+        TIMEOUT_MS * 2,
+      )
+
+      test(
+        "under the user's host-wide shell deny, neither the reviewer nor a control agent is offered the shell tool",
+        async () => {
+          const { reviewer, control } = await reviewerAndControl({
+            hostConfig: hostShellDenyConfig(HOST),
+          })
+
+          expect(reviewer.exitCode).toBe(0)
+          expect(reviewer.childIsAgent).toBe(true)
+          expect(control.childIsAgent).toBe(true)
+          expect(reviewer.childOffered).toContain('read')
+          expect(reviewer.childOffered).not.toContain('shell')
+          expect(control.childOffered).toContain('read')
+          expect(control.childOffered).not.toContain('shell')
+        },
+        TIMEOUT_MS * 2,
+      )
+
+      test(
+        'under a user overlay of systematic_skill: allow is offered that tool again',
+        async () => {
+          const run = await dispatch(REVIEWER_AGENT, {
+            systematicConfig: {
+              agents: {
+                [REVIEWER_AGENT]: { permission: { systematic_skill: 'allow' } },
+              },
+            },
+          })
+
+          expect(run.exitCode).toBe(0)
+          expect(run.childIsAgent).toBe(true)
+          expect(run.parentOffered).toContain('systematic_skill')
+          expect(run.childOffered).toContain('systematic_skill')
+          expect(run.childOffered).not.toContain('write')
+        },
+        TIMEOUT_MS,
+      )
+
+      test(
+        'a skill call for a planted skill does not return its body, while a control agent loads it',
+        async () => {
+          const childCall = {
+            tool: 'skill',
+            arguments: { id: PLANTED_SKILL_ID },
+          }
+          const reviewer = await runReviewerOffer(HOST, fixture, {
+            agent: REVIEWER_AGENT,
+            marker: shippedAgentMarker(REVIEWER_AGENT),
+            childCall,
+            plantSkill: true,
+          })
+          expect(reviewer.exitCode).toBe(0)
+          expect(skillCallFailures(reviewer)).toEqual([])
+
+          destroyIsolatedFixture(fixture)
+          fixture = createIsolatedFixture()
+          const control = await runReviewerOffer(HOST, fixture, {
+            agent: CONTROL_AGENT,
+            marker: shippedAgentMarker(CONTROL_AGENT),
+            childCall,
+            plantSkill: true,
+          })
+          expect(control.childCallResult).toContain(PLANTED_SKILL_MARKER)
+        },
+        TIMEOUT_MS * 2,
+      )
+
+      test(
+        'under a user overlay of bash: deny is not offered the shell tool',
+        async () => {
+          const run = await runReviewerOffer(HOST, fixture, {
+            agent: REVIEWER_AGENT,
+            marker: shippedAgentMarker(REVIEWER_AGENT),
+            systematicConfig: {
+              agents: { [REVIEWER_AGENT]: { permission: { bash: 'deny' } } },
+            },
+          })
+
+          expect(run.exitCode).toBe(0)
+          expect(run.childIsAgent).toBe(true)
+          expect(run.parentOffered).toContain('shell')
+          expect(run.childOffered).toContain('read')
+          expect(run.childOffered).not.toContain('shell')
+        },
+        TIMEOUT_MS,
+      )
+
+      test(
+        'a control agent with no permission block is offered what the parent is',
+        async () => {
+          const run = await runReviewerOffer(HOST, fixture, {
+            agent: CONTROL_AGENT,
+            marker: shippedAgentMarker(CONTROL_AGENT),
+          })
+
+          expect(run.exitCode).toBe(0)
+          expect(controlOfferFailures(HOST, run)).toEqual([])
+          expect(run.childOffered).toEqual(
+            expect.arrayContaining([
+              'read',
+              'shell',
+              'write',
+              'systematic_skill',
+            ]),
+          )
+        },
+        TIMEOUT_MS,
+      )
+
+      test(
+        "a throwaway agent whose rules start with '*': deny is offered only the allowed tools",
+        async () => {
+          const run = await runReviewerOffer(HOST, fixture, {
+            agent: THROWAWAY_AGENT,
+            marker: THROWAWAY_MARKER,
+            hostConfig: throwawayAgentConfig(HOST, {
+              entries: [['*', 'deny'], ...ALLOW_FOUR],
+            }),
+          })
+
+          expect(run.exitCode).toBe(0)
+          expect(run.childIsAgent).toBe(true)
+          for (const name of PARENT_ONLY) {
+            expect(run.parentOffered, `parent is offered ${name}`).toContain(
+              name,
+            )
+          }
+          expect(withoutTolerated(HOST, run.childOffered).sort()).toEqual([
+            'glob',
+            'grep',
+            'read',
+            'shell',
+          ])
+        },
+        TIMEOUT_MS,
+      )
+
+      test(
+        'allows after a leading deny bring back web fetch, Code Mode and a plugin tool',
+        async () => {
+          const run = await runReviewerOffer(HOST, fixture, {
+            agent: THROWAWAY_AGENT,
+            marker: THROWAWAY_MARKER,
+            hostConfig: throwawayAgentConfig(HOST, {
+              entries: [
+                ['*', 'deny'],
+                ...ALLOW_FOUR,
+                ['webfetch', 'allow'],
+                ['systematic_search', 'allow'],
+                ['execute', 'allow'],
+              ],
+            }),
+          })
+
+          expect(run.childIsAgent).toBe(true)
+          expect(withoutTolerated(HOST, run.childOffered).sort()).toEqual([
+            'execute',
+            'glob',
+            'grep',
+            'read',
+            'shell',
+            'systematic_search',
+            'webfetch',
+          ])
+        },
+        TIMEOUT_MS,
+      )
+
+      test(
+        "a leading '*': deny also denies a read outside the project, and an external_directory: allow line permits it",
+        async () => {
+          const denied = await runReviewerOffer(HOST, fixture, {
+            agent: THROWAWAY_AGENT,
+            marker: THROWAWAY_MARKER,
+            hostConfig: throwawayAgentConfig(HOST, {
+              entries: [['*', 'deny'], ...ALLOW_FOUR],
+            }),
+          })
+          expect(denied.childCallResult).toContain(
+            'Permission denied: external_directory',
+          )
+          expect(denied.childCallResult).not.toContain(EXTERNAL_NOTE_MARKER)
+
+          destroyIsolatedFixture(fixture)
+          fixture = createIsolatedFixture()
+          const allowed = await runReviewerOffer(HOST, fixture, {
+            agent: THROWAWAY_AGENT,
+            marker: THROWAWAY_MARKER,
+            hostConfig: throwawayAgentConfig(HOST, {
+              entries: [
+                ['*', 'deny'],
+                ...ALLOW_FOUR,
+                ['external_directory', 'allow'],
+              ],
+            }),
+          })
+          expect(externalReadFailures(allowed)).toEqual([])
+        },
+        TIMEOUT_MS * 2,
+      )
+    })
   },
 )

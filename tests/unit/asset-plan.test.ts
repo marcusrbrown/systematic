@@ -545,3 +545,221 @@ describe('buildAssetPlan: purity', () => {
     expect(isRecord(first.agents)).toBe(true)
   })
 })
+
+describe('buildAssetPlan: an ordered allow list in frontmatter', () => {
+  const LISTED_TOOLS = [
+    'read',
+    'grep',
+    'glob',
+    'bash',
+    'webfetch',
+    'systematic_search',
+    'execute',
+  ] as const
+
+  const BLOCK_ORDER = [
+    '*',
+    ...LISTED_TOOLS,
+    'external_directory',
+  ] as const satisfies readonly string[]
+
+  const ALLOW_LIST_AGENT = `---
+name: correctness-reviewer
+description: Reads with an ordered allow list
+mode: subagent
+permission:
+  '*': deny
+${LISTED_TOOLS.map((tool) => `  ${tool}: allow`).join('\n')}
+  external_directory: allow
+---
+# Correctness Reviewer
+
+Fixture prompt.
+`
+
+  const blockTriples: PermissionRuleTriple[] = BLOCK_ORDER.map(
+    (permission) => ({
+      permission,
+      pattern: '*',
+      setting: permission === '*' ? 'deny' : 'allow',
+    }),
+  )
+
+  // Overlay targets must be bundled agent names, so the fixture reviewer's
+  // file is replaced by one that carries the block.
+  beforeEach(() => {
+    writeTree(fixture.bundledRoot, {
+      'agents/review/correctness-reviewer.md': ALLOW_LIST_AGENT,
+    })
+  })
+
+  /** The last rule that matches `tool`, or nothing: last match wins. */
+  function outcome(
+    rules: readonly PermissionRuleTriple[],
+    tool: string,
+  ): PermissionRuleTriple['setting'] | undefined {
+    return rules.findLast(
+      (rule) => rule.permission === '*' || rule.permission === tool,
+    )?.setting
+  }
+
+  test('without an overlay the agent keeps the block as written, in order', () => {
+    const agent = agentNamed(planWith(undefined), 'correctness-reviewer')
+
+    expect(agent.permission).toEqual({ kind: 'unmanaged' })
+    expect(Object.entries(agent.config.permission ?? {})).toEqual(
+      blockTriples.map(({ permission, setting }) => [permission, setting]),
+    )
+  })
+
+  test('without an overlay the v1 agent config carries the block in order', () => {
+    const folded = toV1AgentConfig(
+      agentNamed(planWith(undefined), 'correctness-reviewer'),
+    )
+
+    expect(Object.keys(folded.permission ?? {})).toEqual([...BLOCK_ORDER])
+    expect(folded.permission).toEqual(
+      Object.fromEntries(
+        blockTriples.map(({ permission, setting }) => [permission, setting]),
+      ),
+    )
+  })
+
+  test('an overlay that sets another permission keeps the block first, in order, as triples', () => {
+    const plan = planWith({
+      agents: { 'correctness-reviewer': { permission: { edit: 'ask' } } },
+    })
+
+    expect(managedRules(plan, 'correctness-reviewer')).toEqual([
+      ...blockTriples,
+      { permission: 'edit', pattern: '*', setting: 'ask' },
+    ])
+  })
+
+  test('an overlay bash: deny makes deny the last rule for bash, in the block place', () => {
+    const plan = planWith({
+      agents: { 'correctness-reviewer': { permission: { bash: 'deny' } } },
+    })
+    const rules = managedRules(plan, 'correctness-reviewer')
+
+    expect(rules).toEqual(
+      blockTriples.map((rule) =>
+        rule.permission === 'bash' ? { ...rule, setting: 'deny' } : rule,
+      ),
+    )
+    expect(outcome(rules, 'bash')).toBe('deny')
+    expect(outcome(rules, 'read')).toBe('allow')
+    expect(foldPermissionRulesToV1Map(rules)?.bash).toEqual({ '*': 'deny' })
+  })
+
+  test('an overlay systematic_skill: allow comes after every rule of the block', () => {
+    const plan = planWith({
+      agents: {
+        'correctness-reviewer': { permission: { systematic_skill: 'allow' } },
+      },
+    })
+    const rules = managedRules(plan, 'correctness-reviewer')
+
+    expect(rules).toEqual([
+      ...blockTriples,
+      { permission: 'systematic_skill', pattern: '*', setting: 'allow' },
+    ])
+    expect(outcome(rules, 'systematic_skill')).toBe('allow')
+    expect(outcome(rules, 'write')).toBe('deny')
+  })
+
+  test("an overlay '*': deny does not turn the listed allows off (current behaviour)", () => {
+    const plan = planWith({
+      agents: { 'correctness-reviewer': { permission: { '*': 'deny' } } },
+    })
+    const rules = managedRules(plan, 'correctness-reviewer')
+
+    expect(rules).toEqual(blockTriples)
+    for (const tool of [...LISTED_TOOLS, 'external_directory']) {
+      expect(outcome(rules, tool)).toBe('allow')
+    }
+    expect(outcome(rules, 'write')).toBe('deny')
+  })
+
+  test("an overlay '*': ask moves the wildcard group in place and leaves the listed allows in force", () => {
+    const plan = planWith({
+      agents: { 'correctness-reviewer': { permission: { '*': 'ask' } } },
+    })
+    const rules = managedRules(plan, 'correctness-reviewer')
+
+    expect(rules).toEqual(
+      blockTriples.map((rule) =>
+        rule.permission === '*' ? { ...rule, setting: 'ask' } : rule,
+      ),
+    )
+    expect(outcome(rules, 'read')).toBe('allow')
+    expect(outcome(rules, 'write')).toBe('ask')
+  })
+
+  test('external_directory: allow after the wildcard survives in order through the fold', () => {
+    const plan = planWith({
+      agents: { 'correctness-reviewer': { permission: { edit: 'ask' } } },
+    })
+    const folded = foldPermissionRulesToV1Map(
+      managedRules(plan, 'correctness-reviewer'),
+    )
+
+    expect(Object.keys(folded ?? {})).toEqual([...BLOCK_ORDER, 'edit'])
+    expect(folded?.['*']).toEqual({ '*': 'deny' })
+    expect(folded?.external_directory).toEqual({ '*': 'allow' })
+  })
+})
+
+describe('buildAssetPlan: an overlay rule for a tool the shipped reviewer block names', () => {
+  /** The last whole-tool rule that matches `tool`: last match wins. */
+  function outcome(
+    rules: readonly PermissionRuleTriple[],
+    tool: string,
+  ): PermissionRuleTriple['setting'] | undefined {
+    return rules.findLast(
+      (rule) =>
+        rule.pattern === '*' &&
+        (rule.permission === '*' || rule.permission === tool),
+    )?.setting
+  }
+
+  const SHIPPED_REVIEWER = fs.readFileSync(
+    path.join(import.meta.dir, '../../agents/review/correctness-reviewer.md'),
+    'utf8',
+  )
+
+  beforeEach(() => {
+    writeTree(fixture.bundledRoot, {
+      'agents/review/correctness-reviewer.md': SHIPPED_REVIEWER,
+    })
+  })
+
+  test('with no wildcard overlay, an agent allow brings the tool back', () => {
+    const plan = planWith({
+      agents: {
+        'correctness-reviewer': { permission: { systematic_skill: 'allow' } },
+      },
+    })
+    const rules = managedRules(plan, 'correctness-reviewer')
+
+    expect(outcome(rules, 'systematic_skill')).toBe('allow')
+    expect(outcome(rules, 'task')).toBe('deny')
+  })
+
+  // The block seeds each named tool before any overlay, and a later rule for
+  // that tool is set in place. A wildcard written by an overlay comes after it.
+  test("under an overlay '*': deny, an allow for a tool the block names stays hidden", () => {
+    const plan = planWith({
+      categories: { review: { permission: { '*': 'deny' } } },
+      agents: {
+        'correctness-reviewer': {
+          permission: { systematic_skill: 'allow', read: 'allow' },
+        },
+      },
+    })
+    const rules = managedRules(plan, 'correctness-reviewer')
+
+    expect(outcome(rules, 'systematic_skill')).toBe('deny')
+    expect(outcome(rules, 'read')).toBe('allow')
+  })
+})

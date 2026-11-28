@@ -1,6 +1,7 @@
 ---
 title: On OpenCode v2 a session-level allow overrides an agent's deny, so a read-only subagent needs an execute.before allowlist
 date: 2026-11-09
+last_updated: 2026-11-27
 category: integration-issues
 module: opencode-v2-adapter
 problem_type: integration_issue
@@ -35,15 +36,15 @@ A plugin-bundled subagent that must stay read-only declared `permission:` denies
 - The negative control `without the guard a session-level allow lifts the definition denies and the breach reproduces` (`tests/integration/opencode-v2.test.ts:1710-1735`, the control under the `runConnectIsolation` call) wrote the shell marker file, reached the fetch server and added a git worktree, with the agent's deny entries intact. The proof verdict was `isolation-breach`.
 - A child with only `bash`, `edit` and `webfetch` denied was still offered `websearch` and `subagent`. In server mode an unanswered `websearch` ask waited about 60 seconds for its own timeout (observed once while probing the host, not re-checked). `subagent` would let the child start an agent that has a shell.
 - Denying `execute` alone changed nothing: the host-native tools then appeared directly, as `opencode_worktree_create`, `opencode_session_move` and `opencode_session_rename`. Denying those three by name left the other `opencode_*` tools.
-- The frontmatter key for the shell tool is `bash:`. The v2 translator renames it to `shell` (`src/lib/opencode-v2-permissions.ts:26-29`, `RENAMED_ACTIONS`). A literal `shell:` key is not a known permission key, so the loader drops it without an error.
-- Before the fix, `normalizePermission` (`src/lib/validation.ts:87-129`) had no `websearch` key, so a `websearch: deny` line was dropped the same way.
+- The frontmatter key for the shell tool is `bash:`. The v2 translator renames it to `shell` (`src/lib/opencode-v2-permissions.ts:26-29`, `RENAMED_ACTIONS`). When this was written, a literal `shell:` key was not a known permission key and the loader dropped it without an error. Since 2026-11-27 the loader keeps any tool-name key whose value is `allow`, `ask` or `deny`, so a `shell:` line reaches v2 as a rule and leaves v1 with no `bash` rule.
+- Before the fix, `normalizePermission` (`src/lib/validation.ts`) had no `websearch` key, so a `websearch: deny` line was dropped the same way.
 
 ## What Didn't Work
 
 - **Writing the deny list from an assumed tool set.** The first list named `bash`, `edit` and `webfetch`. The list was incomplete until the child's real tool list was read on the host: `websearch`, `subagent` and `execute` were all missing.
-- **Spelling the v2 name in frontmatter.** `shell:` does not survive the loader. The definition has to say `bash:`.
+- **Spelling the v2 name in frontmatter.** `shell:` did not survive the loader then. It does now, but v1 knows the tool only as `bash`, so the definition still has to say `bash:`.
 - **Denying individual tools.** Denying `execute`, or the three obvious `opencode_*` tools, leaves either the Code Mode route or the other host-native tools open. The `opencode_*` namespace is not something a deny list can enumerate for a future host.
-- **Expressing an allowlist in frontmatter.** The robust shape is `*: deny` plus a short allow list, but `normalizePermission` keeps only a fixed set of keys. Accepting `*` and arbitrary action names would be a design change to the shared loader, and it would still be ordinary rules that a session allow overrides.
+- **Expressing an allowlist in frontmatter.** The robust shape is `*: deny` plus a short allow list, but `normalizePermission` then kept only a fixed set of keys. Since 2026-11-27 it accepts a quoted `'*'` and tool-name keys in file order. No bundled agent uses the wildcard shape: an agent's rules come after the user's top-level rules, so the allows that must follow `'*': deny` would override the user's own deny or ask for those tools. The code-review agents deny unwanted tools by name instead. Either way these are ordinary rules that a session allow overrides, so the guard below remains the enforcement for a read-only agent.
 
 ## Solution
 
@@ -79,7 +80,7 @@ The failure came from treating a rule list as a boundary. Rules are ordered, use
 - Do not call a v2 subagent "denied by definition". If it must be read-only, give it a guard keyed on its exact name and say so where the support claim is made.
 - Read the child's actual tool list on the host before finishing a deny list. Do not stop at the list you assumed.
 - Keep a negative control that reproduces the breach with the same session allows, using an agent the guard does not name. In this repo the control is the test cited above, and its guarded twins are `a session-level allow does not lift the guarded researcher when it runs directly` (`tests/integration/opencode-v2.test.ts:1738-1754`, the `runConnectIsolation` call with `mode: 'direct'`) and `a session-level allow does not lift the guarded researcher when a parent with that rule dispatches it` (`tests/integration/opencode-v2.test.ts:1756-1778`, which asserts `run.packaged` is the committed definition).
-- Pin the translation: the unit test asserts a `shell` deny and a `subagent` deny appear in the translated rules and that no `bash` action remains (`tests/unit/connect-host-isolation.test.ts:63-87`), and that a `shell:` frontmatter key is dropped (`tests/unit/connect-host-isolation.test.ts:89-99`).
+- Pin the translation: the unit test asserts a `shell` deny and a `subagent` deny appear in the translated rules and that no `bash` action remains (`tests/unit/connect-host-isolation.test.ts:63-87`), and that the shipped definition spells the deny `bash` and carries no `shell` key (`tests/unit/connect-host-isolation.test.ts:89-94`).
 - Do not carry a result across majors; see [host support evidence](../best-practices/support-a-host-only-after-an-observed-deny-2026-11-09.md). On v1 the `permission:` map restricts a plugin agent, and a blanket allow in the user's host config does not lift it (`tests/integration/opencode-v1-isolation.test.ts:308-318`, the `hostPermission` test). On v2 the same denies are only a first layer.
 - The hook covers only the named agent, including a user agent with the same name, and cannot stop a tool from being offered. A scripted model made the calls, so the proofs show what the host enforces, not what a live model would choose.
 

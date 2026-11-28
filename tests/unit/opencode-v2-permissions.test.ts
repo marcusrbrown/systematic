@@ -302,6 +302,7 @@ interface FakeAgent {
 /** The agents `setup` registers, keyed by id, over a skeleton like the host's default. */
 async function registeredAgents(
   systematicConfig: unknown,
+  extraFiles: Readonly<Record<string, string>> = {},
 ): Promise<Record<string, FakeAgent>> {
   const root = tempDirs.track(
     fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'oc-v2-corpus-')),
@@ -309,7 +310,7 @@ async function registeredAgents(
   const packageRoot = path.join(root, 'pkg')
   const homeDir = path.join(root, 'home')
   const projectDir = path.join(root, 'project')
-  writeTree(packageRoot, GOLDEN_ASSET_FILES)
+  writeTree(packageRoot, { ...GOLDEN_ASSET_FILES, ...extraFiles })
   fs.mkdirSync(path.join(homeDir, '.config/opencode'), { recursive: true })
   fs.mkdirSync(projectDir, { recursive: true })
   // Overlay fields that grant or restrict tools are user-level only.
@@ -455,5 +456,103 @@ describe('v1 golden corpus replayed on v2', () => {
     expect(evaluateV2(rules, 'skill', 'fixture-beta')).toBe('deny')
     // The edit overlay still denies.
     expect(evaluateV2(rules, 'edit', 'anything')).toBe('deny')
+  })
+})
+
+describe('an ordered allow list in frontmatter, through setup', () => {
+  const LISTED_TOOLS = [
+    'read',
+    'grep',
+    'glob',
+    'bash',
+    'webfetch',
+    'systematic_search',
+    'execute',
+  ]
+  const AGENT_FILES = {
+    'agents/review/correctness-reviewer.md': `---
+name: correctness-reviewer
+description: Reads with an ordered allow list
+mode: subagent
+permission:
+  '*': deny
+${LISTED_TOOLS.map((tool) => `  ${tool}: allow`).join('\n')}
+  external_directory: allow
+---
+# Correctness Reviewer
+
+Fixture prompt.
+`,
+  }
+
+  /** v2 names for the block, in order: bash is renamed to shell. */
+  const BLOCK_RULES: V2PermissionRule[] = [
+    { action: '*', resource: '*', effect: 'deny' },
+    ...LISTED_TOOLS.map(
+      (tool): V2PermissionRule => ({
+        action: tool === 'bash' ? 'shell' : tool,
+        resource: '*',
+        effect: 'allow',
+      }),
+    ),
+    { action: 'external_directory', resource: '*', effect: 'allow' },
+  ]
+
+  async function reviewerRules(
+    systematicConfig: unknown,
+  ): Promise<V2PermissionRule[] | undefined> {
+    const agents = await registeredAgents(systematicConfig, AGENT_FILES)
+    return agents['correctness-reviewer']?.permissions
+  }
+
+  test("no overlay: the agent gets the '*' deny first, then each allow in order, with bash as shell", async () => {
+    expect(await reviewerRules({})).toEqual(BLOCK_RULES)
+  })
+
+  test('an overlay bash: deny leaves shell denied and the other allows in place', async () => {
+    const rules = await reviewerRules({
+      agents: { 'correctness-reviewer': { permission: { bash: 'deny' } } },
+    })
+
+    expect(rules).toEqual(
+      BLOCK_RULES.map((rule) =>
+        rule.action === 'shell' ? { ...rule, effect: 'deny' } : rule,
+      ),
+    )
+    expect(evaluateV2(rules ?? [], 'shell', 'ls')).toBe('deny')
+    expect(evaluateV2(rules ?? [], 'read', 'a.ts')).toBe('allow')
+  })
+
+  test('an overlay systematic_skill: allow is last, so the tool is allowed and write stays denied', async () => {
+    const rules = await reviewerRules({
+      agents: {
+        'correctness-reviewer': { permission: { systematic_skill: 'allow' } },
+      },
+    })
+
+    expect(rules).toEqual([
+      ...BLOCK_RULES,
+      { action: 'systematic_skill', resource: '*', effect: 'allow' },
+    ])
+    expect(evaluateV2(rules ?? [], 'systematic_skill', '*')).toBe('allow')
+    expect(evaluateV2(rules ?? [], 'write', 'a.ts')).toBe('deny')
+  })
+
+  test("an overlay '*': deny leaves the listed allows in effect (current behaviour)", async () => {
+    const rules = await reviewerRules({
+      agents: { 'correctness-reviewer': { permission: { '*': 'deny' } } },
+    })
+
+    expect(rules).toEqual(BLOCK_RULES)
+    for (const tool of [
+      'read',
+      'grep',
+      'glob',
+      'shell',
+      'external_directory',
+    ]) {
+      expect(evaluateV2(rules ?? [], tool, 'x')).toBe('allow')
+    }
+    expect(evaluateV2(rules ?? [], 'write', 'x')).toBe('deny')
   })
 })

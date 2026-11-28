@@ -9,6 +9,7 @@ import {
   isRecord,
   isToolsMap,
   normalizePermission,
+  type PermissionConfig,
 } from '../../src/lib/validation.ts'
 
 // ---------------------------------------------------------------------------
@@ -234,6 +235,139 @@ describe('normalizePermission', () => {
 
   test('returns undefined when websearch has a malformed value', () => {
     expect(normalizePermission({ websearch: 'nope' })).toBeUndefined()
+  })
+})
+
+describe('normalizePermission: an ordered allow list of tool names', () => {
+  test("keeps '*' and tool names in file order, mixed with the old keys", () => {
+    const permission = normalizePermission({
+      '*': 'deny',
+      read: 'allow',
+      bash: 'allow',
+      external_directory: 'allow',
+      systematic_search: 'allow',
+    })
+
+    expect(permission).toEqual({
+      '*': 'deny',
+      read: 'allow',
+      bash: 'allow',
+      external_directory: 'allow',
+      systematic_search: 'allow',
+    })
+    expect(Object.keys(permission ?? {})).toEqual([
+      '*',
+      'read',
+      'bash',
+      'external_directory',
+      'systematic_search',
+    ])
+  })
+
+  test('the order is the input order, not alphabetical and not the old fixed-key order', () => {
+    const permission = normalizePermission({
+      webfetch: 'allow',
+      '*': 'deny',
+      zeta: 'allow',
+      alpha: 'ask',
+      edit: 'deny',
+    })
+
+    expect(Object.keys(permission ?? {})).toEqual([
+      'webfetch',
+      '*',
+      'zeta',
+      'alpha',
+      'edit',
+    ])
+  })
+
+  test('a block of only the eight old keys parses as before', () => {
+    const input: PermissionConfig = {
+      edit: 'allow',
+      bash: { 'ls *': 'allow', 'rm *': 'deny' },
+      webfetch: 'ask',
+      websearch: 'deny',
+      doom_loop: 'allow',
+      external_directory: 'deny',
+      task: 'ask',
+      skill: 'allow',
+    }
+
+    expect(normalizePermission(input)).toEqual(input)
+  })
+
+  test('accepts each bare setting for a new key', () => {
+    expect(
+      normalizePermission({ one: 'allow', two: 'ask', three: 'deny' }),
+    ).toEqual({ one: 'allow', two: 'ask', three: 'deny' })
+  })
+
+  test('a new key with an invalid setting is ignored and the rest of the block is kept', () => {
+    const permission = normalizePermission({
+      '*': 'deny',
+      read: 'maybe',
+      grep: 'allow',
+    })
+
+    expect(permission).toEqual({ '*': 'deny', grep: 'allow' })
+    expect(Object.keys(permission ?? {})).toEqual(['*', 'grep'])
+  })
+
+  test('a new key with a non-string value is ignored, including a pattern map and null', () => {
+    expect(
+      normalizePermission({
+        '*': 'deny',
+        read: { '*.md': 'allow' },
+        grep: null,
+        glob: 7,
+        webfetch_x: ['allow'],
+        shell: undefined,
+        write: 'allow',
+      }),
+    ).toEqual({ '*': 'deny', write: 'allow' })
+  })
+
+  test('an old key with a bad value still drops the whole map, even beside new keys', () => {
+    expect(
+      normalizePermission({ '*': 'deny', read: 'allow', bash: 'maybe' }),
+    ).toBeUndefined()
+    expect(
+      normalizePermission({ '*': 'deny', bash: { 'ls *': 'maybe' } }),
+    ).toBeUndefined()
+    expect(
+      normalizePermission({ '*': 'deny', edit: 7, read: 'allow' }),
+    ).toBeUndefined()
+    expect(
+      normalizePermission({ read: 'allow', external_directory: 'maybe' }),
+    ).toBeUndefined()
+  })
+
+  test.each([
+    'edit',
+    'bash',
+    'webfetch',
+    'websearch',
+    'doom_loop',
+    'external_directory',
+    'task',
+    'skill',
+  ])('a bad value on the old key %s drops the whole map', (key) => {
+    expect(
+      normalizePermission({ '*': 'deny', read: 'allow', [key]: 'maybe' }),
+    ).toBeUndefined()
+  })
+
+  test('a block whose new keys are all invalid yields no permission', () => {
+    expect(normalizePermission({ read: 'maybe', grep: {} })).toBeUndefined()
+  })
+
+  test('a key named __proto__ stays an ordinary own key and does not change the prototype', () => {
+    const input = JSON.parse('{"*":"deny","__proto__":"allow","read":"allow"}')
+    const permission = normalizePermission(input)
+
+    expect(Object.keys(permission ?? {})).toEqual(['*', '__proto__', 'read'])
+    expect(Object.getPrototypeOf(permission)).toBe(Object.prototype)
   })
 })
 
