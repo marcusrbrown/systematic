@@ -2,6 +2,20 @@
 name: pattern-recognition-specialist
 description: "Analyzes code for design patterns, anti-patterns, naming conventions, and duplication. Use when checking codebase consistency or verifying new code follows established patterns. Dispatched by deepen-plan, ce:plan's deepening workflow, and ce:compound, not by ce:review."
 tools: Read, Grep, Glob, Bash
+permission:
+  edit: deny
+  task: deny
+  skill: deny
+  systematic_skill: deny
+  websearch: deny
+  question: deny
+  todowrite: deny
+  generate_image: deny
+  generate_video: deny
+  session_list: deny
+  session_info: deny
+  session_search: deny
+  session_read: deny
 mode: subagent
 temperature: 0.6
 ---

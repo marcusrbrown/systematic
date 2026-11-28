@@ -3507,7 +3507,9 @@ Discovered body for hidden.`,
         prompt: frontmatter.prompt,
         mode: frontmatter.mode,
         temperature: frontmatter.temperature,
+        permission: frontmatter.permission,
       })
+      expect(frontmatter.permission).toBeDefined()
       expect(agent.model).toBeUndefined()
       expect(agent.variant).toBeUndefined()
       expect(agent.top_p).toBeUndefined()
@@ -3516,7 +3518,6 @@ Discovered body for hidden.`,
       expect(agent.color).toBeUndefined()
       expect(agent.steps).toBeUndefined()
       expect(agent.hidden).toBeUndefined()
-      expect(agent.permission).toBeUndefined()
     })
   })
 

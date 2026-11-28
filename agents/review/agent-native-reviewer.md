@@ -3,6 +3,20 @@ name: agent-native-reviewer
 description: "Reviews code to ensure agent-native parity -- any action a user can take, an agent can also take. Use after adding UI features, agent tools, or system prompts."
 color: info
 tools: Read, Grep, Glob, Bash
+permission:
+  edit: deny
+  task: deny
+  skill: deny
+  systematic_skill: deny
+  websearch: deny
+  question: deny
+  todowrite: deny
+  generate_image: deny
+  generate_video: deny
+  session_list: deny
+  session_info: deny
+  session_search: deny
+  session_read: deny
 mode: subagent
 temperature: 0.1
 ---

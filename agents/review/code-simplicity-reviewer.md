@@ -2,6 +2,20 @@
 name: code-simplicity-reviewer
 description: "Final review pass to ensure code is as simple and minimal as possible. Use after implementation is complete to identify YAGNI violations and simplification opportunities. Dispatched by ce:compound for code-heavy issues, not by ce:review."
 tools: Read, Grep, Glob, Bash
+permission:
+  edit: deny
+  task: deny
+  skill: deny
+  systematic_skill: deny
+  websearch: deny
+  question: deny
+  todowrite: deny
+  generate_image: deny
+  generate_video: deny
+  session_list: deny
+  session_info: deny
+  session_search: deny
+  session_read: deny
 mode: subagent
 temperature: 0.1
 ---

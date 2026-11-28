@@ -2,6 +2,20 @@
 name: deployment-verification-agent
 description: "Produces Go/No-Go deployment checklists with SQL verification queries, rollback procedures, and monitoring plans. Use when PRs touch production data, migrations, or risky data changes."
 tools: Read, Grep, Glob, Bash
+permission:
+  edit: deny
+  task: deny
+  skill: deny
+  systematic_skill: deny
+  websearch: deny
+  question: deny
+  todowrite: deny
+  generate_image: deny
+  generate_video: deny
+  session_list: deny
+  session_info: deny
+  session_search: deny
+  session_read: deny
 mode: subagent
 temperature: 0.1
 ---

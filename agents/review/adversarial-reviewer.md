@@ -2,6 +2,20 @@
 name: adversarial-reviewer
 description: Conditional code-review persona, selected when the diff is large (>=50 changed lines) or touches high-risk domains like auth, payments, data mutations, or external APIs. Actively constructs failure scenarios to break the implementation rather than checking against known patterns.
 tools: Read, Grep, Glob, Bash
+permission:
+  edit: deny
+  task: deny
+  skill: deny
+  systematic_skill: deny
+  websearch: deny
+  question: deny
+  todowrite: deny
+  generate_image: deny
+  generate_video: deny
+  session_list: deny
+  session_info: deny
+  session_search: deny
+  session_read: deny
 color: error
 mode: subagent
 temperature: 0.1
