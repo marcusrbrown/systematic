@@ -158,6 +158,19 @@ describe('Fro Bot workflow contracts', () => {
     expect(mode.options).not.toContain('maintenance')
   })
 
+  it('documents that a review dispatch with a prompt can publish changes through a pull request', () => {
+    const { workflow } = readWorkflow()
+    const triggers = asRecord(workflow.on, 'workflow triggers')
+    const dispatch = asRecord(triggers.workflow_dispatch, 'workflow_dispatch')
+    const inputs = asRecord(dispatch.inputs, 'workflow_dispatch inputs')
+    const mode = asRecord(inputs.mode, 'workflow_dispatch mode')
+    const description = asString(mode.description, 'mode description')
+
+    expect(description).toContain('mode=review')
+    expect(description).toContain('pull request')
+    expect(description).toContain('release-notes')
+  })
+
   test('declares correlation-id for workflow_dispatch and workflow_call', () => {
     const { workflow } = readWorkflow()
     const triggers = asRecord(workflow.on, 'workflow triggers')
@@ -844,15 +857,66 @@ esac
       expect(result.outputs.get('rule')).toBe(DENIED_RULE)
     })
 
-    it('requires a comment review on a Fro Bot-authored PR', () => {
-      const box = sandbox({ pr: { user: { login: 'fro-bot' } } })
-      const result = runStep(APPROVAL_RULE_STEP, box)
-      expect(result.exitCode).toBe(0)
-      expect(result.outputs.get('allowed')).toBe('false')
-      expect(result.outputs.get('rule')).toContain(
-        'submit a COMMENT review only',
-      )
-      expect(calls(box)).toHaveLength(1)
+    describe('Fro Bot-authored PR', () => {
+      const BASE = 'a'.repeat(40)
+      const HEAD = 'b'.repeat(40)
+      const selfRule = (extraEnv: Record<string, string> = {}) => {
+        const box = sandbox({ pr: { user: { login: 'fro-bot' } } })
+        const result = runStep(APPROVAL_RULE_STEP, box, {
+          PR: '42',
+          ...extraEnv,
+        })
+        expect(result.exitCode).toBe(0)
+        expect(result.outputs.get('allowed')).toBe('false')
+        expect(calls(box)).toHaveLength(1)
+        return result.outputs.get('rule') ?? ''
+      }
+
+      it('keeps the verdict frontmatter and leaves the review event to the action', () => {
+        const rule = selfRule({ BASE_SHA: BASE, HEAD_SHA: HEAD })
+        expect(rule).toContain('opened by Fro Bot')
+        expect(rule).toContain('keep the verdict frontmatter')
+        expect(rule).toContain('blocking issues in the review body')
+        expect(rule).toContain('the action chooses the GitHub review event')
+        // A bare COMMENT instruction conflicts with the action's verdict contract.
+        expect(rule).not.toContain('submit a COMMENT review')
+        expect(rule).not.toContain('REQUEST_CHANGES')
+        expect(rule).not.toContain('never APPROVE')
+      })
+
+      it('names the exact base and head and asks for a read-only comparison before a verdict', () => {
+        const rule = selfRule({ BASE_SHA: BASE, HEAD_SHA: HEAD })
+        expect(rule).toContain(`base ${BASE}`)
+        expect(rule).toContain(`head ${HEAD}`)
+        expect(rule).toContain('read-only comparison')
+        expect(rule).toContain('gh pr diff 42')
+        expect(rule).toContain(
+          `repos/marcusrbrown/systematic/compare/${BASE}...${HEAD}`,
+        )
+        expect(rule).toContain('before issuing a verdict')
+        expect(rule).toContain('checkout is the base')
+      })
+
+      it('still asks for the comparison when the event carries no SHAs', () => {
+        const rule = selfRule()
+        expect(rule).toContain('read-only comparison')
+        expect(rule).toContain('gh pr diff 42')
+        expect(rule).not.toContain('/compare/')
+        expect(rule).not.toMatch(/(?:base|head) [0-9a-f]{40}/)
+      })
+
+      it('passes the event base and head SHAs into the rule step', () => {
+        const env = asRecord(
+          findStep(froBotSteps(), APPROVAL_RULE_STEP).env,
+          'approval-rule env',
+        )
+        expect(env.BASE_SHA).toBe(
+          `${EXPRESSION_PREFIX}{{ github.event.pull_request.base.sha }}`,
+        )
+        expect(env.HEAD_SHA).toBe(
+          `${EXPRESSION_PREFIX}{{ github.event.pull_request.head.sha }}`,
+        )
+      })
     })
 
     test('fails closed when gh exits non-zero', () => {

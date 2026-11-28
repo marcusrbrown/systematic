@@ -25,7 +25,11 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Operation mode
+        description: >-
+          Operation mode. Dispatches in `review` and `autoheal` modes can
+          deliver file changes through a branch and pull request, including
+          `mode=review` with a prompt. `release-notes` edits the published
+          release directly and stays comment-only.
         type: choice
         options:
           - review
@@ -874,13 +878,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         # `shell: bash` runs with pipefail; the default shell does not, and a failed
         # `gh` inside a pipeline would read as an empty (allowing) result.
         shell: bash
         run: |
           allow='Approval is permitted for this pull request if your review finds no blocking issues.'
           deny='Approval is NOT permitted for this pull request: submit a COMMENT or REQUEST_CHANGES review, never APPROVE.'
-          deny_self='This pull request was opened by Fro Bot: submit a COMMENT review only, and state any blocking issues in its body.'
+          # The agent action rejects a pull request review without a verdict, and posts
+          # either verdict as a COMMENT review on a PR the posting account authored.
+          # The prompt keeps the verdict frontmatter and leaves the review event to the action.
+          # The checkout is the base and the action's diff context lists only file names
+          # and counts, so the reviewer must read the change itself, read-only.
+          deny_self="This pull request was opened by Fro Bot: keep the verdict frontmatter and put any blocking issues in the review body; the action chooses the GitHub review event. The checkout is the base, not the head, and the action's diff context lists only file names and counts. Run a read-only comparison of the full change before issuing a verdict: 'gh pr diff ${PR}'"
+          if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ]; then
+            deny_self="${deny_self}, or 'gh api repos/${GITHUB_REPOSITORY}/compare/${BASE_SHA}...${HEAD_SHA}' (base ${BASE_SHA}, head ${HEAD_SHA})"
+          fi
+          deny_self="${deny_self}."
           author=''
 
           decide() {
@@ -927,7 +942,8 @@ jobs:
 
       # For automatic reviews of Fro Bot's own PRs, the checkout and local
       # composite come from the base and no PR lifecycle scripts run on the
-      # runner. The agent action gets the PR diff from GitHub.
+      # runner. The reviewer reads the change through the read-only comparison the
+      # approval rule names, because the action's diff context has no patch hunks.
       - name: Run Fro Bot
         uses: ./.github/actions/fro-bot-agent
         env:
