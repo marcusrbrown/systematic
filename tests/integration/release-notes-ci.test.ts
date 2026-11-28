@@ -87,6 +87,7 @@ interface ScenarioEnv {
   MOCK_GH_WORKFLOW_RUN_EXIT?: string
   MOCK_GH_WORKFLOW_RUN_PROMPT?: string
   MOCK_GH_WORKFLOW_RUN_CORRELATION?: string
+  MOCK_GH_WORKFLOW_RUN_MODE?: string
   RELEASE_NOTES_TEST_POLL_BUDGET_SECS?: string
   RELEASE_NOTES_TEST_POLL_INTERVAL_SECS?: string
   RELEASE_NOTES_TEST_WATCH_TIMEOUT_SECS?: string
@@ -245,6 +246,9 @@ function runSuccessCmd(
   if (env.MOCK_GH_WORKFLOW_RUN_CORRELATION !== undefined) {
     childEnv.MOCK_GH_WORKFLOW_RUN_CORRELATION =
       env.MOCK_GH_WORKFLOW_RUN_CORRELATION
+  }
+  if (env.MOCK_GH_WORKFLOW_RUN_MODE !== undefined) {
+    childEnv.MOCK_GH_WORKFLOW_RUN_MODE = env.MOCK_GH_WORKFLOW_RUN_MODE
   }
 
   // The script receives RELEASE_VERSION as its first positional argument.
@@ -968,9 +972,10 @@ describe('release-notes-ci dispatch script smoke tests', () => {
   // 19. Integration — prompt construction includes correlation token, target tag, repo name
   // -------------------------------------------------------------------------
   it(
-    'prompt and correlation-id are forwarded to gh workflow run as separate -f fields',
+    'release-notes mode, prompt and correlation-id are passed to gh workflow run',
     () => {
       const promptCapturePath = path.join(testTempDir, 'captured-prompt.txt')
+      const modeCapturePath = path.join(testTempDir, 'captured-mode.txt')
       const correlationCapturePath = path.join(
         testTempDir,
         'captured-correlation.txt',
@@ -983,6 +988,7 @@ describe('release-notes-ci dispatch script smoke tests', () => {
         GITHUB_REPOSITORY: 'marcusrbrown/systematic',
         RELEASE_NOTES_TEST_CORRELATION_ID: knownCorrelationId,
         MOCK_GH_WORKFLOW_RUN_PROMPT: promptCapturePath,
+        MOCK_GH_WORKFLOW_RUN_MODE: modeCapturePath,
         MOCK_GH_WORKFLOW_RUN_CORRELATION: correlationCapturePath,
         MOCK_GH_RUN_VIEW_CONCLUSION: 'success',
       })
@@ -990,6 +996,8 @@ describe('release-notes-ci dispatch script smoke tests', () => {
       // The dispatch must have fired
       const combined = result.stdout + result.stderr
       expect(combined).toContain('workflow_dispatch event')
+      expect(fs.existsSync(modeCapturePath)).toBe(true)
+      expect(fs.readFileSync(modeCapturePath, 'utf8')).toBe('release-notes')
 
       // The captured prompt file must exist with the embedded correlation token
       expect(fs.existsSync(promptCapturePath)).toBe(true)

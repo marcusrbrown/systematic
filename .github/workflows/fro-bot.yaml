@@ -25,29 +25,31 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Operation mode
+        description: >-
+          Operation mode. Dispatches in `review` and `autoheal` modes can
+          deliver file changes through a branch and pull request, including
+          `mode=review` with a prompt. `release-notes` edits the published
+          release directly and stays comment-only.
         type: choice
         options:
           - review
           - autoheal
+          - release-notes
         default: autoheal
       prompt:
         description: >-
           Custom prompt for the Fro Bot agent. When non-empty, this prompt is
           used verbatim regardless of `mode` (this is the path used by the
-          release-notes-narrative automation). Required when `mode=review`.
-          Ignored only when empty AND `mode` is set to `autoheal` (then the
-          corresponding env prompt is used).
+          release-notes-narrative automation). Required in review and
+          release-notes modes. An empty autoheal prompt runs the daily pass.
         required: false
         default: ""
       correlation-id:
         description: >-
           Optional UUID for callers that need to identify their dispatched run by
-          scanning early log output. The release-notes-narrative automation uses
-          this to match its dispatch against gh run list output. Unused by all
-          other entry points; the value is informational only and Fro Bot does
-          not act on it directly. A prompt dispatch that carries one stays
-          comment-only; without one, it is delivered as a branch and pull request.
+          matching its run title. The release-notes-narrative automation requires
+          this to match its dispatch against gh run list output. The value is
+          informational only and does not select the delivery mode.
         required: false
   workflow_call:
     inputs:
@@ -755,6 +757,7 @@ jobs:
       (
         github.event.pull_request == null ||
         (
+          github.event.pull_request.head.repo.full_name == github.repository &&
           !github.event.pull_request.head.repo.fork &&
           !endsWith(github.event.pull_request.user.login || '', '[bot]')
         )
@@ -768,7 +771,6 @@ jobs:
         (
           github.event_name == 'pull_request' &&
           !endsWith(github.event.pull_request.user.login || '', '[bot]') &&
-          (github.event.pull_request.user.login || '') != 'fro-bot' &&
           (
             github.event.action != 'review_requested' ||
             (github.event.requested_reviewer.login || '') == 'fro-bot'
@@ -849,18 +851,29 @@ jobs:
           fi
           echo "RUN_CONTEXT=RUN CONTEXT (computed by the workflow, authoritative): TODAY_UTC=${today} IS_SUNDAY_UTC=${sunday}" >> "$GITHUB_ENV"
 
-      - name: Validate review mode inputs
-        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'review'
+      - name: Validate dispatch inputs
+        if: github.event_name == 'workflow_dispatch' && (inputs.mode == 'review' || inputs.mode == 'release-notes')
         env:
+          MODE: ${{ inputs.mode }}
           PROMPT: ${{ inputs.prompt }}
+          CORRELATION_ID: ${{ inputs.correlation-id }}
         run: |
           if [ -z "$PROMPT" ]; then
-            echo "::error::Review mode requires a custom prompt. Provide one via the 'prompt' input, or choose a different mode."
+            echo "::error::${MODE} mode requires a custom prompt."
+            exit 1
+          fi
+          if [ "$MODE" = 'release-notes' ] && [ -z "$CORRELATION_ID" ]; then
+            echo "::error::release-notes mode requires a correlation-id."
             exit 1
           fi
 
       # R23: Fro Bot may APPROVE only marcusrbrown's PRs with no fro-bot commit.
       # Any API error yields allowed=false (fail closed).
+      #
+      # On an automatic pull_request review the event author, which also selects the
+      # base checkout below, decides the self-review rule, so a failed author lookup
+      # cannot drop the diff guidance. A fro-bot event author never reaches the
+      # lookup and is never allowed approval.
       - name: Decide whether Fro Bot may approve
         id: approval-rule
         if: >-
@@ -870,15 +883,33 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EVENT_AUTHOR: ${{ github.event_name == 'pull_request' && github.event.pull_request.user.login || '' }}
         # `shell: bash` runs with pipefail; the default shell does not, and a failed
         # `gh` inside a pipeline would read as an empty (allowing) result.
         shell: bash
         run: |
           allow='Approval is permitted for this pull request if your review finds no blocking issues.'
           deny='Approval is NOT permitted for this pull request: submit a COMMENT or REQUEST_CHANGES review, never APPROVE.'
+          # The agent action rejects a pull request review without a verdict, and posts
+          # either verdict as a COMMENT review on a PR the posting account authored.
+          # The prompt keeps the verdict frontmatter and leaves the review event to the action.
+          deny_self='This pull request was opened by Fro Bot: keep the verdict frontmatter and put any blocking issues in the review body; the action chooses the GitHub review event.'
+          self=false
+          if [ "${EVENT_AUTHOR:-}" = 'fro-bot' ]; then
+            self=true
+            # The checkout is the base, and the action's diff context lists only file
+            # names and counts. `gh` is withheld from a PR review run, so the reviewer
+            # reads the patch with local git; the fetch step below ensures both objects.
+            if [ -n "${BASE_SHA:-}" ] && [ -n "${HEAD_SHA:-}" ]; then
+              deny_self="${deny_self} The checkout is the base commit ${BASE_SHA}, not the head ${HEAD_SHA}, and the action's diff context lists only file names and counts. The gh CLI is not available, so before issuing a verdict read the full patch with the read-only 'git diff ${BASE_SHA}...${HEAD_SHA}' (or 'git diff ${BASE_SHA} ${HEAD_SHA}' if there is no merge base). If the patch cannot be read, say so in the review body and do not issue a passing verdict."
+            fi
+          fi
+          author=''
 
           decide() {
-            local pr_json author commits_json logins
+            local pr_json commits_json logins
             pr_json=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}") || return 1
             author=$(printf '%s' "$pr_json" | jq -er '.user.login' | tr '[:upper:]' '[:lower:]') || return 1
             [ "$author" = "marcusrbrown" ] || return 1
@@ -891,9 +922,10 @@ jobs:
             fi
           }
 
-          if decide; then
+          if [ "$self" = 'false' ] && decide; then
             { echo 'allowed=true'; echo "rule=${allow}"; } >> "$GITHUB_OUTPUT"
           else
+            if [ "$self" = 'true' ] || [ "$author" = 'fro-bot' ]; then deny=$deny_self; fi
             { echo 'allowed=false'; echo "rule=${deny}"; } >> "$GITHUB_OUTPUT"
           fi
 
@@ -903,21 +935,41 @@ jobs:
           fetch-depth: 0
           ref: >-
             ${{
-              steps.prehead.outputs.sha
+              (github.event_name == 'pull_request' && github.event.pull_request.user.login == 'fro-bot' && github.event.pull_request.base.sha)
+              || steps.prehead.outputs.sha
               || github.event.pull_request.head.sha
               || ''
             }}
           token: ${{ secrets.FRO_BOT_PAT }}
           persist-credentials: false
 
+      # The base checkout holds the full history of the repository's branches, but not
+      # necessarily the head commit (a force-push or deleted branch). Fetch both objects
+      # by SHA so the reviewer's `git diff <base>...<head>` resolves. This only moves
+      # objects: it runs nothing from the pull request, and the checkout persists no
+      # credential, so the fetch is anonymous and relies on this repository being public.
+      # A failed fetch warns; the rule then has the reviewer report an unreadable patch.
+      - name: Fetch the Fro Bot pull request head for review
+        if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'fro-bot'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! git fetch --no-tags origin "$HEAD_SHA" "$BASE_SHA"; then
+            echo "::warning::Could not fetch the pull request head ${HEAD_SHA}; the review cannot read the patch."
+          fi
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Install dependencies
+        if: github.event_name != 'pull_request' || github.event.pull_request.user.login != 'fro-bot'
         run: bun install --frozen-lockfile
 
-      # The composite is read from the checkout above, which is the PR head for
-      # PR runs: the job already runs `bun install` on that head.
+      # For automatic reviews of Fro Bot's own PRs, the checkout and local
+      # composite come from the base and no PR lifecycle scripts run on the
+      # runner. The reviewer reads the change through the local git comparison the
+      # approval rule names, because the action's diff context has no patch hunks.
       - name: Run Fro Bot
         uses: ./.github/actions/fro-bot-agent
         env:
@@ -936,9 +988,8 @@ jobs:
           # PR_REVIEW_PROMPT ends in a newline, so the approval rule lands on its own line.
           # AUTOHEAL_PROMPT does too, so RUN_CONTEXT lands on its own line.
           # When editing this ternary, walk every event_name × mode × cron
-          # combination explicitly. The validate-review-mode-inputs step
-          # above only protects against `mode=review` with empty prompt;
-          # all other invalid combinations rely entirely on this ordering.
+          # combination explicitly. Validate dispatch inputs rejects missing
+          # prompts for review and release-notes before reaching this step.
           PROMPT: >-
             ${{
               (github.event_name == 'workflow_call' && inputs.prompt != '' && inputs.prompt)
@@ -952,6 +1003,9 @@ jobs:
             }}
         with:
           isolate-agent: "true"
+          # The pinned action checks association and same-repository head
+          # eligibility, and stages skills from the default branch.
+          repo-skills: "true"
           trace-endpoint: https://traces.fro.bot/marcusrbrown/v1/traces
           trace-headers: "Authorization: Bearer ${{ secrets.FRO_BOT_TRACE_TOKEN }}"
           auth-json: ${{ secrets.OPENCODE_AUTH_JSON }}
@@ -960,21 +1014,27 @@ jobs:
           # Default brokered-push paths are src/, packages/*/src/ and docs/.
           # .github, scripts, package.json and lockfiles stay denied by the action.
           brokered-push-extra-paths: skills,agents,tests,registry
-          model: ${{ vars.FRO_BOT_MODEL }}
+          model: >-
+            ${{
+              ((github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'review')) &&
+                (vars.FRO_BOT_MODEL_REVIEW || vars.FRO_BOT_MODEL))
+              || (github.event_name == 'issues' && (vars.FRO_BOT_MODEL_TRIAGE || vars.FRO_BOT_MODEL))
+              || (github.event_name != 'pull_request' && github.event_name != 'issues' &&
+                (github.event_name != 'workflow_dispatch' || inputs.mode != 'review') &&
+                (vars.FRO_BOT_MODEL_IMPLEMENTATION || vars.FRO_BOT_MODEL))
+              || ''
+            }}
           opencode-config: ${{ secrets.OPENCODE_CONFIG }}
-          # branch-pr for the daily autoheal schedule and autoheal-mode dispatch
-          # runs, so the agent's file changes land on a branch instead of being
-          # discarded. That includes an ordinary dispatched prompt (a program ask
-          # from Fro Bot's cross-repo dispatch, which sends `prompt` alone).
-          # A dispatch that carries a correlation-id stays comment-only: the
-          # release-notes-narrative automation (scripts/dispatch-release-notes.sh)
-          # always sends one with its prompt and must stay comment-only. The
-          # correlation-id is a declared input, not prompt prose, so this routing
-          # does not depend on the prompt text. review mode never matches. PR-review
-          # and comment-triggered runs never match either branch, so the ''
-          # fallback there is defensive only: the action consults output-mode
-          # solely on schedule/workflow_dispatch runs.
-          output-mode: ${{ ((github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'autoheal' && (inputs.prompt == '' || inputs.correlation-id == ''))) && 'branch-pr' || '' }}
+          # Release narration edits the published release directly and keeps
+          # comment-only delivery; all other dispatches can deliver file changes.
+          # The action consults output-mode only for schedule and dispatch runs.
+          output-mode: >-
+            ${{
+              (github.event_name == 'workflow_dispatch' && inputs.mode == 'release-notes' && 'working-dir')
+              || ((github.event_name == 'workflow_dispatch' ||
+                (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *')) && 'branch-pr')
+              || ''
+            }}
           prompt: ${{ env.PROMPT }}
 
   # Deterministic backstop for R23: whatever the agent did, a fro-bot APPROVED

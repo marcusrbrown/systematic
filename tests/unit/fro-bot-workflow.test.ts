@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, it, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -85,6 +85,7 @@ function compileExpression(
 ): (
   github: { event_name: string; schedule: string },
   inputs: Partial<RoutingInputs>,
+  vars?: Record<string, string>,
 ) => string {
   const body = expression
     .trim()
@@ -93,14 +94,13 @@ function compileExpression(
     .replace(/github\.event\.schedule/g, 'github.schedule')
     .replace(/inputs\.correlation-id/g, "inputs['correlation-id']")
     .replace(/([=!])=/g, '$1==')
-  const evaluate = new Function('github', 'inputs', `return (${body});`)
-  return (github, inputs) => {
-    const result: unknown = evaluate(github, {
-      mode: 'autoheal',
-      prompt: '',
-      'correlation-id': '',
-      ...inputs,
-    })
+  const evaluate = new Function('github', 'inputs', 'vars', `return (${body});`)
+  return (github, inputs, vars = {}) => {
+    const result: unknown = evaluate(
+      github,
+      { mode: 'autoheal', prompt: '', 'correlation-id': '', ...inputs },
+      vars,
+    )
     return typeof result === 'string' ? result : String(result)
   }
 }
@@ -146,16 +146,29 @@ describe('Fro Bot workflow contracts', () => {
     expect(schedule).toEqual([{ cron: '30 3 * * *' }])
   })
 
-  test('offers only review and autoheal dispatch modes with autoheal as default', () => {
+  it('offers a dedicated release-notes mode and defaults to autoheal', () => {
     const { workflow } = readWorkflow()
     const triggers = asRecord(workflow.on, 'workflow triggers')
     const dispatch = asRecord(triggers.workflow_dispatch, 'workflow_dispatch')
     const inputs = asRecord(dispatch.inputs, 'workflow_dispatch inputs')
     const mode = asRecord(inputs.mode, 'workflow_dispatch mode')
 
-    expect(mode.options).toEqual(['review', 'autoheal'])
+    expect(mode.options).toEqual(['review', 'autoheal', 'release-notes'])
     expect(mode.default).toBe('autoheal')
     expect(mode.options).not.toContain('maintenance')
+  })
+
+  it('documents that a review dispatch with a prompt can publish changes through a pull request', () => {
+    const { workflow } = readWorkflow()
+    const triggers = asRecord(workflow.on, 'workflow triggers')
+    const dispatch = asRecord(triggers.workflow_dispatch, 'workflow_dispatch')
+    const inputs = asRecord(dispatch.inputs, 'workflow_dispatch inputs')
+    const mode = asRecord(inputs.mode, 'workflow_dispatch mode')
+    const description = asString(mode.description, 'mode description')
+
+    expect(description).toContain('mode=review')
+    expect(description).toContain('pull request')
+    expect(description).toContain('release-notes')
   })
 
   test('declares correlation-id for workflow_dispatch and workflow_call', () => {
@@ -244,7 +257,7 @@ describe('Fro Bot workflow contracts', () => {
     const { source } = readWorkflow()
     const routing = promptRouting(source)
 
-    expect(source).toContain('the value is informational only')
+    expect(source).toContain('informational only and does not select')
     expect(routing).not.toContain('correlation-id')
     expect(source).not.toContain("cron: '0 9 * * 1'")
     expect(source).not.toContain('mode: maintenance')
@@ -264,6 +277,55 @@ describe('Fro Bot workflow contracts', () => {
       `${EXPRESSION_PREFIX}{{ secrets.FRO_BOT_PAT }}`,
     )
     expect(checkoutWith['persist-credentials']).toBe(false)
+  })
+
+  it('does not persist credentials in local event-driven workflow checkouts', () => {
+    const workflowDirectory = path.dirname(WORKFLOW_PATH)
+    const checkoutSteps: string[] = []
+    for (const filename of fs.readdirSync(workflowDirectory)) {
+      if (!/\.ya?ml$/.test(filename)) continue
+      const source = fs.readFileSync(
+        path.join(workflowDirectory, filename),
+        'utf8',
+      )
+      const workflow = asRecord(
+        yaml.load(source, { schema: yaml.JSON_SCHEMA }),
+        filename,
+      )
+      if (!isRecord(workflow.on)) continue
+      const relevantEvents = [
+        'pull_request',
+        'pull_request_target',
+        'issues',
+        'issue_comment',
+        'pull_request_review_comment',
+        'discussion_comment',
+      ]
+      if (
+        !relevantEvents.some((event) => event in asRecord(workflow.on, 'on'))
+      ) {
+        continue
+      }
+      for (const [jobName, job] of Object.entries(
+        asRecord(workflow.jobs, 'jobs'),
+      )) {
+        if (!isRecord(job) || !Array.isArray(job.steps)) continue
+        for (const step of job.steps as unknown[]) {
+          if (!isRecord(step) || typeof step.uses !== 'string') continue
+          if (!step.uses.startsWith('actions/checkout@')) continue
+          const label = `${filename}:${jobName}`
+          checkoutSteps.push(label)
+          expect({
+            checkout: label,
+            persist: isRecord(step.with) && step.with['persist-credentials'],
+          }).toEqual({
+            checkout: label,
+            persist: false,
+          })
+        }
+      }
+    }
+    expect(checkoutSteps).toContain('fro-bot.yaml:fro-bot')
   })
 
   test('serializes schedule and dispatch agent runs without cancelling them', () => {
@@ -307,7 +369,8 @@ describe('Fro Bot workflow contracts', () => {
     expect(step.uses).toBe('./.github/actions/fro-bot-agent')
     expect(source).not.toMatch(/uses:\s+fro-bot\/agent@/)
     expect(asRecord(step.with, 'with')).toMatchObject({
-      model: `${EXPRESSION_PREFIX}{{ vars.FRO_BOT_MODEL }}`,
+      'isolate-agent': 'true',
+      'repo-skills': 'true',
       'auth-json': `${EXPRESSION_PREFIX}{{ secrets.OPENCODE_AUTH_JSON }}`,
       'opencode-config': `${EXPRESSION_PREFIX}{{ secrets.OPENCODE_CONFIG }}`,
       'github-token': `${EXPRESSION_PREFIX}{{ secrets.FRO_BOT_PAT }}`,
@@ -321,7 +384,7 @@ describe('Fro Bot workflow contracts', () => {
     )
   })
 
-  test('routes output-mode by trigger, mode, prompt and correlation-id', () => {
+  it('routes dispatches to branch-pr except for release notes', () => {
     const { workflow } = readWorkflow()
     const jobs = asRecord(workflow.jobs, 'jobs')
     const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
@@ -334,28 +397,32 @@ describe('Fro Bot workflow contracts', () => {
     const dispatch = (inputs: Partial<RoutingInputs>): string =>
       resolve({ event_name: 'workflow_dispatch', schedule: '' }, inputs)
 
-    // Release-notes dispatch (scripts/dispatch-release-notes.sh): prompt plus
-    // correlation-id, mode left at its default. Must stay comment-only.
     expect(
-      dispatch({ prompt: 'narrate v1.2.3', 'correlation-id': 'abc-123' }),
-    ).toBe('')
+      dispatch({
+        mode: 'release-notes',
+        prompt: 'narrate v1.2.3',
+        'correlation-id': 'abc-123',
+      }),
+    ).toBe('working-dir')
 
-    // A Fro Bot program ask: prompt only, mode defaulted, no correlation-id.
     expect(dispatch({ prompt: 'do the program task' })).toBe('branch-pr')
+    expect(
+      dispatch({ prompt: 'do the program task', 'correlation-id': 'abc-123' }),
+    ).toBe('branch-pr')
 
-    // Existing contract: a prompt-less autoheal dispatch.
     expect(dispatch({})).toBe('branch-pr')
     expect(dispatch({ 'correlation-id': 'abc-123' })).toBe('branch-pr')
 
-    // Review mode is comment-only whether or not it carries a correlation-id.
-    expect(dispatch({ mode: 'review', prompt: 'review this' })).toBe('')
+    expect(dispatch({ mode: 'review', prompt: 'review this' })).toBe(
+      'branch-pr',
+    )
     expect(
       dispatch({
         mode: 'review',
         prompt: 'review this',
         'correlation-id': 'abc-123',
       }),
-    ).toBe('')
+    ).toBe('branch-pr')
 
     // Scheduled runs: only the daily autoheal cron.
     expect(
@@ -378,50 +445,80 @@ describe('Fro Bot workflow contracts', () => {
     }
   })
 
-  test('requests branch-pr output only for schedule and autoheal-mode dispatch runs', () => {
-    const { workflow } = readWorkflow()
-    const jobs = asRecord(workflow.jobs, 'jobs')
-    const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
-    const steps = asArray(froBot.steps, 'fro-bot steps')
-    const runFroBot = findStep(steps, 'Run Fro Bot')
-    const runFroBotWith = asRecord(runFroBot.with, 'Run Fro Bot with')
-    const outputMode = asString(
-      runFroBotWith['output-mode'],
-      'Run Fro Bot with.output-mode',
-    )
+  it('validates the required inputs for review and release-notes dispatches', () => {
+    const step = stepNamed('Validate dispatch inputs')
+    const resolve = compileExpression(asString(step.if, 'validate if'))
+    const script = asString(step.run, 'validate run')
+    const github = { event_name: 'workflow_dispatch', schedule: '' }
 
-    expect(outputMode).toContain('branch-pr')
-    expect(outputMode).toContain("github.event_name == 'schedule'")
-    expect(outputMode).toContain("inputs.mode == 'autoheal'")
-    expect(outputMode).toContain("|| ''")
-    expect(outputMode).toContain("inputs.prompt == ''")
-    expect(outputMode).toContain("inputs.correlation-id == ''")
-    expect(outputMode).toContain("github.event.schedule == '30 3 * * *'")
+    expect(resolve(github, { mode: 'autoheal' })).toBe('false')
+    expect(
+      resolve({ ...github, event_name: 'schedule' }, { mode: 'review' }),
+    ).toBe('false')
+    for (const [mode, prompt, correlation, exitCode] of [
+      ['review', '', '', 1],
+      ['review', 'Review this', '', 0],
+      ['release-notes', '', 'abc-123', 1],
+      ['release-notes', 'Narrate v1.2.3', '', 1],
+      ['release-notes', 'Narrate v1.2.3', 'abc-123', 0],
+    ] as const) {
+      expect(resolve(github, { mode })).toBe('true')
+      const result = Bun.spawnSync(['bash', '-e', '-c', script], {
+        env: { MODE: mode, PROMPT: prompt, CORRELATION_ID: correlation },
+      })
+      expect(result.exitCode).toBe(exitCode)
+    }
   })
 
-  test('keeps dispatches that carry a correlation-id comment-only, as the PROMPT ladder routes their prompt', () => {
-    const { workflow } = readWorkflow()
-    const jobs = asRecord(workflow.jobs, 'jobs')
-    const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
-    const steps = asArray(froBot.steps, 'fro-bot steps')
-    const runFroBot = findStep(steps, 'Run Fro Bot')
-    const runFroBotEnv = asRecord(runFroBot.env, 'Run Fro Bot env')
-    const runFroBotWith = asRecord(runFroBot.with, 'Run Fro Bot with')
-    const promptExpression = asString(
-      runFroBotEnv.PROMPT,
-      'Run Fro Bot env.PROMPT',
+  it('model tiers fall back to the base without crossing into another tier', () => {
+    const withOptions = asRecord(stepNamed('Run Fro Bot').with, 'agent with')
+    const resolve = compileExpression(
+      asString(withOptions.model, 'agent model'),
     )
-    const outputMode = asString(
-      runFroBotWith['output-mode'],
-      'Run Fro Bot with.output-mode',
-    )
+    const vars = {
+      FRO_BOT_MODEL: 'base',
+      FRO_BOT_MODEL_REVIEW: 'review',
+      FRO_BOT_MODEL_TRIAGE: 'triage',
+      FRO_BOT_MODEL_IMPLEMENTATION: 'implementation',
+    }
+    const cases = [
+      ['pull_request', {}, 'FRO_BOT_MODEL_REVIEW'],
+      ['workflow_dispatch', { mode: 'review' }, 'FRO_BOT_MODEL_REVIEW'],
+      ['issues', {}, 'FRO_BOT_MODEL_TRIAGE'],
+      ['workflow_dispatch', {}, 'FRO_BOT_MODEL_IMPLEMENTATION'],
+      ['schedule', {}, 'FRO_BOT_MODEL_IMPLEMENTATION'],
+      ['issue_comment', {}, 'FRO_BOT_MODEL_IMPLEMENTATION'],
+    ] as const
+    for (const [event_name, inputs, tier] of cases) {
+      const github = { event_name, schedule: '' }
+      expect(resolve(github, inputs, vars)).toBe(vars[tier])
+      expect(resolve(github, inputs, { ...vars, [tier]: '' })).toBe('base')
+      expect(
+        resolve(github, inputs, { ...vars, FRO_BOT_MODEL: '', [tier]: '' }),
+      ).toBe('')
+    }
+  })
 
-    expect(promptExpression).toContain("inputs.prompt != ''")
-    expect(outputMode).toContain("inputs.prompt == ''")
-    // The release-notes dispatcher always sends a correlation-id with its
-    // prompt; that input, not the prompt text, is what keeps it comment-only.
-    expect(outputMode).toContain("inputs.correlation-id == ''")
-    expect(outputMode).not.toContain('release')
+  it('admits Fro Bot user PRs without checking out their executable workflow files', () => {
+    const { workflow } = readWorkflow()
+    const job = asRecord(asRecord(workflow.jobs, 'jobs')['fro-bot'], 'job')
+    const condition = asString(job.if, 'job if')
+    expect(condition).not.toContain(
+      "(github.event.pull_request.user.login || '') != 'fro-bot'",
+    )
+    expect(condition).toContain(
+      'github.event.pull_request.head.repo.full_name == github.repository',
+    )
+    const checkout = asRecord(
+      stepNamed('Checkout repository').with,
+      'checkout with',
+    )
+    expect(asString(checkout.ref, 'checkout ref')).toMatch(
+      /^\$\{\{\s*\(github\.event_name == 'pull_request' && github\.event\.pull_request\.user\.login == 'fro-bot' && github\.event\.pull_request\.base\.sha\)/,
+    )
+    expect(stepNamed('Install dependencies').if).toBe(
+      "github.event_name != 'pull_request' || github.event.pull_request.user.login != 'fro-bot'",
+    )
   })
 
   test('retains the exact issue_comment pull_request fork guard', () => {
@@ -758,6 +855,207 @@ esac
       const result = runStep(APPROVAL_RULE_STEP, box)
       expect(result.outputs.get('allowed')).toBe('false')
       expect(result.outputs.get('rule')).toBe(DENIED_RULE)
+    })
+
+    describe('Fro Bot-authored PR', () => {
+      const BASE = 'a'.repeat(40)
+      const HEAD = 'b'.repeat(40)
+      const SHAS = { BASE_SHA: BASE, HEAD_SHA: HEAD }
+      const selfRule = (
+        extraEnv: Record<string, string> = {},
+        fixtures: { pr?: unknown; commits?: unknown } = {
+          pr: { user: { login: 'fro-bot' } },
+        },
+      ) => {
+        const box = sandbox(fixtures)
+        const result = runStep(APPROVAL_RULE_STEP, box, {
+          PR: '42',
+          ...extraEnv,
+        })
+        expect(result.exitCode).toBe(0)
+        expect(result.outputs.get('allowed')).toBe('false')
+        return { rule: result.outputs.get('rule') ?? '', box }
+      }
+
+      it('keeps the verdict frontmatter and leaves the review event to the action', () => {
+        const { rule } = selfRule({ EVENT_AUTHOR: 'fro-bot', ...SHAS })
+        expect(rule).toContain('opened by Fro Bot')
+        expect(rule).toContain('keep the verdict frontmatter')
+        expect(rule).toContain('blocking issues in the review body')
+        expect(rule).toContain('the action chooses the GitHub review event')
+        // A bare COMMENT instruction conflicts with the action's verdict contract.
+        expect(rule).not.toContain('submit a COMMENT review')
+        expect(rule).not.toContain('REQUEST_CHANGES')
+        expect(rule).not.toContain('never APPROVE')
+      })
+
+      it('points at the SHA-pinned local git comparison, never gh', () => {
+        const { rule } = selfRule({ EVENT_AUTHOR: 'fro-bot', ...SHAS })
+        expect(rule).toContain(`checkout is the base commit ${BASE}`)
+        expect(rule).toContain(`head ${HEAD}`)
+        expect(rule).toContain(`git diff ${BASE}...${HEAD}`)
+        expect(rule).toContain(`git diff ${BASE} ${HEAD}`)
+        expect(rule).toContain('no merge base')
+        expect(rule).toContain('before issuing a verdict')
+        expect(rule).toContain('read-only')
+        // The pinned action withholds gh from a PR review run.
+        expect(rule).not.toMatch(/gh (?:pr|api)\b/)
+        expect(rule).not.toContain('/compare/')
+      })
+
+      it('requires the review to say so and withholds a passing verdict when the patch cannot be read', () => {
+        const { rule } = selfRule({ EVENT_AUTHOR: 'fro-bot', ...SHAS })
+        expect(rule).toContain(
+          'If the patch cannot be read, say so in the review body',
+        )
+        expect(rule).toContain('do not issue a passing verdict')
+      })
+
+      it('selects the self-review rule from the event author when the author lookup fails', () => {
+        const { rule, box } = selfRule(
+          { EVENT_AUTHOR: 'fro-bot', GH_FAIL: '1', ...SHAS },
+          { pr: { user: { login: 'fro-bot' } } },
+        )
+        expect(rule).toContain(`git diff ${BASE}...${HEAD}`)
+        expect(calls(box).every((c) => !c.includes('/commits'))).toBe(true)
+      })
+
+      it('never allows approval for an event author of fro-bot, even if the API disagrees', () => {
+        const { rule } = selfRule(
+          { EVENT_AUTHOR: 'fro-bot', ...SHAS },
+          {
+            pr: { user: { login: 'marcusrbrown' } },
+            commits: [commit('marcusrbrown', 'marcusrbrown')],
+          },
+        )
+        expect(rule).toContain(`git diff ${BASE}...${HEAD}`)
+        expect(rule).not.toBe(ALLOWED_RULE)
+      })
+
+      it('keeps approval fail-closed with the generic rule when another event author lookup fails', () => {
+        const { rule } = selfRule(
+          { EVENT_AUTHOR: 'marcusrbrown', GH_FAIL: '1', ...SHAS },
+          { pr: { user: { login: 'marcusrbrown' } } },
+        )
+        expect(rule).toBe(DENIED_RULE)
+      })
+
+      it('gives frontmatter guidance without git instructions when no event author or SHAs are available', () => {
+        // issue_comment and review-comment runs: the checkout is the PR head.
+        const { rule } = selfRule({})
+        expect(rule).toContain('keep the verdict frontmatter')
+        expect(rule).not.toContain('git diff')
+        expect(rule).not.toMatch(/[0-9a-f]{40}/)
+      })
+
+      it('passes the event author and SHAs into the rule step', () => {
+        const env = asRecord(
+          findStep(froBotSteps(), APPROVAL_RULE_STEP).env,
+          'approval-rule env',
+        )
+        expect(env.BASE_SHA).toBe(
+          `${EXPRESSION_PREFIX}{{ github.event.pull_request.base.sha }}`,
+        )
+        expect(env.HEAD_SHA).toBe(
+          `${EXPRESSION_PREFIX}{{ github.event.pull_request.head.sha }}`,
+        )
+        expect(env.EVENT_AUTHOR).toBe(
+          `${EXPRESSION_PREFIX}{{ github.event_name == 'pull_request' && github.event.pull_request.user.login || '' }}`,
+        )
+      })
+
+      it('keys the base checkout and the rule on the same event author', () => {
+        const checkout = asRecord(
+          stepNamed('Checkout repository').with,
+          'checkout with',
+        )
+        expect(asString(checkout.ref, 'checkout ref')).toContain(
+          "github.event.pull_request.user.login == 'fro-bot'",
+        )
+        const env = asRecord(
+          findStep(froBotSteps(), APPROVAL_RULE_STEP).env,
+          'approval-rule env',
+        )
+        expect(String(env.EVENT_AUTHOR)).toContain(
+          'github.event.pull_request.user.login',
+        )
+      })
+    })
+
+    describe('head fetch for the Fro Bot-authored PR review', () => {
+      const FETCH_STEP = 'Fetch the Fro Bot pull request head for review'
+      const BASE = 'a'.repeat(40)
+      const HEAD = 'b'.repeat(40)
+
+      function runFetch(failFetch: boolean) {
+        const box = sandbox({})
+        const gitLog = path.join(box.dir, 'git.log')
+        fs.writeFileSync(
+          path.join(box.dir, 'bin', 'git'),
+          `#!/usr/bin/env bash
+echo "$*" >> "${gitLog}"
+[ -z "\${GIT_FAIL:-}" ] || exit 1
+`,
+          { mode: 0o755 },
+        )
+        const result = runStep(FETCH_STEP, box, {
+          BASE_SHA: BASE,
+          HEAD_SHA: HEAD,
+          ...(failFetch ? { GIT_FAIL: '1' } : {}),
+        })
+        const seen = fs.existsSync(gitLog)
+          ? fs.readFileSync(gitLog, 'utf8').split('\n').filter(Boolean)
+          : []
+        return { result, seen }
+      }
+
+      it('runs only for a Fro Bot-authored pull request, right after the base checkout', () => {
+        const steps = froBotSteps()
+        const step = findStep(steps, FETCH_STEP)
+        expect(step.if).toBe(
+          "github.event_name == 'pull_request' && github.event.pull_request.user.login == 'fro-bot'",
+        )
+        expect(stepIndex(steps, FETCH_STEP)).toBe(
+          stepIndex(steps, 'Checkout repository') + 1,
+        )
+        expect(stepIndex(steps, FETCH_STEP)).toBeLessThan(
+          stepIndex(steps, 'Install dependencies'),
+        )
+      })
+
+      it('takes the SHAs from the event and carries no credentials or PR code', () => {
+        const step = findStep(froBotSteps(), FETCH_STEP)
+        const env = asRecord(step.env, 'fetch env')
+        const run = asString(step.run, 'fetch run')
+        expect(env).toEqual({
+          BASE_SHA: `${EXPRESSION_PREFIX}{{ github.event.pull_request.base.sha }}`,
+          HEAD_SHA: `${EXPRESSION_PREFIX}{{ github.event.pull_request.head.sha }}`,
+        })
+        // SHAs come in through env, never interpolated into the script.
+        expect(run).not.toContain(`${EXPRESSION_PREFIX}{{`)
+        expect(JSON.stringify(step)).not.toMatch(/secrets\.|GH_TOKEN|token/i)
+        // The checkout persists no credential, so this fetch is anonymous and
+        // relies on the repository being public.
+        const checkout = asRecord(
+          findStep(froBotSteps(), 'Checkout repository').with,
+          'checkout with',
+        )
+        expect(checkout['persist-credentials']).toBe(false)
+        // Fetching and diffing run no checked-out code.
+        expect(run).not.toMatch(/\b(?:bun|npm|node|sh|make)\b/)
+      })
+
+      it('fetches the head and base objects by SHA without tags', () => {
+        const { result, seen } = runFetch(false)
+        expect(result.exitCode).toBe(0)
+        expect(seen).toEqual([`fetch --no-tags origin ${HEAD} ${BASE}`])
+      })
+
+      it('warns instead of failing the job when the fetch fails, leaving the rule to report an unreadable patch', () => {
+        const { result } = runFetch(true)
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).toContain('::warning::')
+      })
     })
 
     test('fails closed when gh exits non-zero', () => {
