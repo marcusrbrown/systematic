@@ -23,6 +23,7 @@
 #   MOCK_GH_WORKFLOW_RUN_EXIT      Non-zero exit code makes `gh workflow run` fail (dispatch failure)
 #   MOCK_GH_WORKFLOW_RUN_PROMPT       File path where the dispatched prompt is written
 #   MOCK_GH_WORKFLOW_RUN_CORRELATION  File path where the dispatched correlation-id is written
+#   MOCK_GH_WORKFLOW_RUN_MODE         File path where the dispatched mode is written
 #
 # Subcommand dispatch: $1 = top-level subcommand (workflow, run, release)
 
@@ -38,13 +39,15 @@ case "$SUBCOMMAND" in
     if [[ "$WORKFLOW_SUB" == "run" ]]; then
       # Capture the prompt argument if MOCK_GH_WORKFLOW_RUN_PROMPT is set.
       # Capture the correlation-id argument if MOCK_GH_WORKFLOW_RUN_CORRELATION is set.
-      # The two captures are independent so scenarios can verify the dispatch
-      # forwards both fields, not just the prompt.
+      # Captures are independent so scenarios can verify that the dispatch
+      # forwards each field.
       for arg in "$@"; do
         if [[ -n "${MOCK_GH_WORKFLOW_RUN_PROMPT:-}" && "$arg" == prompt=* ]]; then
           printf '%s' "${arg#prompt=}" > "$MOCK_GH_WORKFLOW_RUN_PROMPT"
         elif [[ -n "${MOCK_GH_WORKFLOW_RUN_CORRELATION:-}" && "$arg" == correlation-id=* ]]; then
           printf '%s' "${arg#correlation-id=}" > "$MOCK_GH_WORKFLOW_RUN_CORRELATION"
+        elif [[ -n "${MOCK_GH_WORKFLOW_RUN_MODE:-}" && "$arg" == mode=* ]]; then
+          printf '%s' "${arg#mode=}" > "$MOCK_GH_WORKFLOW_RUN_MODE"
         fi
       done
       if [[ -n "${MOCK_GH_WORKFLOW_RUN_EXIT:-}" && "$MOCK_GH_WORKFLOW_RUN_EXIT" != "0" ]]; then

@@ -140,6 +140,7 @@ PROMPT_EOF
 # time and title, not first-log time.
 DISPATCH_EPOCH=$(date +%s)
 if ! gh workflow run --ref main fro-bot.yaml \
+  -f mode=release-notes \
   -f "prompt=$PROMPT" \
   -f "correlation-id=$CORRELATION_ID"; then
   narrative_not_applied "Workflow dispatch failed (correlation=$CORRELATION_ID)"

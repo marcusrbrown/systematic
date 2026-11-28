@@ -582,7 +582,7 @@ describe('the shared fro-bot agent action', () => {
     )
   })
 
-  it('leaves repo-skills at its default on every consumer but the connect run, which turns it off', () => {
+  it('enables repo-skills for Fro Bot and disables it for the Connect sweep', () => {
     const consumers = [
       ...new Bun.Glob('.github/workflows/*.{yml,yaml}').scanSync({ cwd: ROOT }),
     ].flatMap((file) => {
@@ -613,7 +613,7 @@ describe('the shared fro-bot agent action', () => {
     ])
     for (const { file, given } of consumers) {
       if (file === '.github/workflows/fro-bot.yaml') {
-        expect(given).not.toHaveProperty('repo-skills')
+        expect(given['repo-skills']).toBe('true')
       } else {
         // A callee runs in a caller's repository; its default-branch skills
         // must never load into the sweep.
@@ -642,12 +642,9 @@ describe('the shared fro-bot agent action', () => {
     }
   })
 
-  it('runs the parent agent on the parent-model input here and on FRO_BOT_MODEL in the Fro Bot workflow', () => {
+  it('runs the Connect parent agent on the parent-model input', () => {
     expect(asRecord(connectStep().with, 'with').model).toBe(
       '${{ inputs.parent-model }}',
-    )
-    expect(asRecord(froBotAgentStep().with, 'with').model).toBe(
-      '${{ vars.FRO_BOT_MODEL }}',
     )
   })
 
